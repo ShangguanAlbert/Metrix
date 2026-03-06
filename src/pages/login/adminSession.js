@@ -1,18 +1,20 @@
-export const ADMIN_TOKEN_STORAGE_KEY = "educhat_admin_token";
+import {
+  LEGACY_ADMIN_TOKEN_STORAGE_KEY,
+  clearScopedAdminToken,
+  getScopedAdminToken,
+  setScopedAdminToken,
+} from "../../app/authStorage.js";
+
+export const ADMIN_TOKEN_STORAGE_KEY = LEGACY_ADMIN_TOKEN_STORAGE_KEY;
 
 export function getAdminToken() {
-  return String(localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "");
+  return getScopedAdminToken();
 }
 
 export function setAdminToken(token) {
-  const value = String(token || "").trim();
-  if (!value) {
-    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-    return;
-  }
-  localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, value);
+  setScopedAdminToken(token);
 }
 
 export function clearAdminToken() {
-  localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+  clearScopedAdminToken();
 }

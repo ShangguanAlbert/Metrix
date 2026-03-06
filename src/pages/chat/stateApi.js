@@ -1,5 +1,7 @@
+import { getUserToken } from "../../app/authStorage.js";
+
 function getToken() {
-  return String(localStorage.getItem("token") || "");
+  return getUserToken();
 }
 
 function authHeaders(extra = {}) {

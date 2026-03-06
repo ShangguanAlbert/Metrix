@@ -115,6 +115,43 @@
   box-shadow: 0 0 0 4px rgba(91, 156, 255, 0.18);
 }
 
+.login-portal-select .portal-select-trigger {
+  min-height: 46px;
+  border-radius: 14px;
+  border-color: #cfd6e2;
+  font-size: 16px;
+  padding: 11px 13px;
+}
+
+.login-portal-select .portal-select-trigger:hover {
+  border-color: #bcc7d9;
+}
+
+.login-portal-select .portal-select-trigger:focus-visible,
+.login-portal-select .portal-select-trigger.open {
+  border-color: var(--login-focus);
+  box-shadow: 0 0 0 4px rgba(91, 156, 255, 0.18);
+}
+
+.portal-select-menu.login-portal-select {
+  border-radius: 14px;
+  border-color: #d7dfeb;
+  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.16);
+}
+
+.portal-select-menu.login-portal-select .portal-select-item {
+  min-height: 42px;
+  font-size: 15px;
+  padding: 11px 12px;
+}
+
+.login-field-note {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
 .login-consent-row {
   margin-top: 10px;
   display: flex;

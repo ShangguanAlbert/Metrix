@@ -8,5 +8,8 @@ export const PRIVACY_POLICY_SECTIONS = [
 export const EMPTY_AUTH_STATUS = {
   hasAnyUser: false,
   hasAdmin: false,
-  adminUsername: "admin",
+  adminUsernames: [],
+  preloadedStudentCount: 0,
+  preloadedStudentTeacherScopeKey: "",
+  preloadedStudentTeacherScopeLabel: "",
 };

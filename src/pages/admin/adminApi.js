@@ -32,6 +32,13 @@ function readContentDispositionFilename(header) {
   return "";
 }
 
+function withTeacherScopeQuery(path, teacherScopeKey) {
+  const key = String(teacherScopeKey || "").trim();
+  if (!key) return path;
+  const joiner = path.includes("?") ? "&" : "?";
+  return `${path}${joiner}teacherScopeKey=${encodeURIComponent(key)}`;
+}
+
 async function request(path, adminToken, options = {}) {
   const resp = await fetch(path, {
     method: "GET",
@@ -65,12 +72,12 @@ export function exportAdminUsersTxt(adminToken) {
   return request("/api/auth/admin/export/users-txt", adminToken);
 }
 
-export function exportAdminChatsTxt(adminToken) {
-  return request("/api/auth/admin/export/chats-txt", adminToken);
+export function exportAdminChatsTxt(adminToken, teacherScopeKey) {
+  return request(withTeacherScopeQuery("/api/auth/admin/export/chats-txt", teacherScopeKey), adminToken);
 }
 
-export async function exportAdminChatsZip(adminToken) {
-  const resp = await fetch("/api/auth/admin/export/chats-zip", {
+export async function exportAdminChatsZip(adminToken, teacherScopeKey) {
+  const resp = await fetch(withTeacherScopeQuery("/api/auth/admin/export/chats-zip", teacherScopeKey), {
     headers: authHeader(adminToken),
   });
 
@@ -97,8 +104,8 @@ export async function exportAdminChatsZip(adminToken) {
   return { blob, filename };
 }
 
-export function deleteAllUserChats(adminToken) {
-  return request("/api/auth/admin/chats", adminToken, {
+export function deleteAllUserChats(adminToken, teacherScopeKey) {
+  return request(withTeacherScopeQuery("/api/auth/admin/chats", teacherScopeKey), adminToken, {
     method: "DELETE",
   });
 }

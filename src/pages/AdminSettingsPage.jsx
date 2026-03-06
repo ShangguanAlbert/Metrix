@@ -2,8 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import {
   ArrowLeft,
-  Check,
-  ChevronDown,
   CircleAlert,
   Download,
   Info,
@@ -11,9 +9,10 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import MessageInput from "../components/MessageInput.jsx";
 import MessageList from "../components/MessageList.jsx";
+import PortalSelect from "../components/PortalSelect.jsx";
 import {
   deleteAllUserChats,
   exportAdminChatsTxt,
@@ -30,6 +29,12 @@ import {
   saveAdminAgentESettings,
 } from "./admin/agentEApi.js";
 import { clearAdminToken, getAdminToken } from "./login/adminSession.js";
+import { resolveActiveAuthSlot, withAuthSlot } from "../app/authStorage.js";
+import {
+  DEFAULT_TEACHER_SCOPE_KEY,
+  TEACHER_SCOPE_OPTIONS,
+  getTeacherScopeLabel,
+} from "../../shared/teacherScopes.js";
 import {
   AGENT_IDS,
   ALIYUN_MINIMAX_FIXED_TOP_P,
@@ -536,131 +541,6 @@ function InfoHint({ text }) {
   );
 }
 
-function AdminPortalSelect({
-  value,
-  options,
-  onChange,
-  disabled = false,
-  compact = false,
-  className = "",
-}) {
-  const triggerRef = useRef(null);
-  const menuRef = useRef(null);
-  const [open, setOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 0 });
-
-  const normalizedOptions = Array.isArray(options) ? options : [];
-  const selected = normalizedOptions.find((item) => item.value === value) || normalizedOptions[0];
-
-  const updateMenuPosition = useCallback(() => {
-    const node = triggerRef.current;
-    if (!node) return;
-    const rect = node.getBoundingClientRect();
-    const menuHeight = Math.min(300, Math.max(48, normalizedOptions.length * 42 + 12));
-    const gap = 6;
-    const openUpward =
-      window.innerHeight - rect.bottom < menuHeight + gap &&
-      rect.top > menuHeight + gap;
-
-    setMenuPos({
-      top: openUpward ? rect.top - menuHeight - gap : rect.bottom + gap,
-      left: rect.left,
-      width: rect.width,
-    });
-  }, [normalizedOptions.length]);
-
-  useEffect(() => {
-    if (!open) return;
-    updateMenuPosition();
-
-    function onDocMouseDown(event) {
-      const target = event.target;
-      if (triggerRef.current && triggerRef.current.contains(target)) return;
-      if (menuRef.current && menuRef.current.contains(target)) return;
-      setOpen(false);
-    }
-
-    function onDocKeyDown(event) {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    }
-
-    function onViewChanged() {
-      updateMenuPosition();
-    }
-
-    document.addEventListener("mousedown", onDocMouseDown);
-    document.addEventListener("keydown", onDocKeyDown);
-    window.addEventListener("resize", onViewChanged);
-    window.addEventListener("scroll", onViewChanged, true);
-    return () => {
-      document.removeEventListener("mousedown", onDocMouseDown);
-      document.removeEventListener("keydown", onDocKeyDown);
-      window.removeEventListener("resize", onViewChanged);
-      window.removeEventListener("scroll", onViewChanged, true);
-    };
-  }, [open, updateMenuPosition]);
-
-  const rootClassName = `admin-reasoning-select ${className}`.trim();
-  const triggerClassName = `admin-reasoning-trigger ${compact ? "compact" : ""} ${open ? "open" : ""}`.trim();
-
-  return (
-    <div className={rootClassName}>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={triggerClassName}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        onClick={() => {
-          if (disabled) return;
-          setOpen((prev) => !prev);
-        }}
-        disabled={disabled}
-      >
-        <span>{selected?.label || ""}</span>
-        <ChevronDown size={15} className="admin-reasoning-caret" />
-      </button>
-
-      {open &&
-        createPortal(
-          <div
-            ref={menuRef}
-            className="admin-reasoning-menu"
-            style={{
-              top: `${menuPos.top}px`,
-              left: `${menuPos.left}px`,
-              width: `${menuPos.width}px`,
-            }}
-            role="listbox"
-          >
-            {normalizedOptions.map((item) => {
-              const active = item.value === selected?.value;
-              return (
-                <button
-                  key={item.value}
-                  type="button"
-                  className={`admin-reasoning-item ${active ? "active" : ""}`}
-                  role="option"
-                  aria-selected={active}
-                  onClick={() => {
-                    onChange(item.value);
-                    setOpen(false);
-                  }}
-                >
-                  <span>{item.label}</span>
-                  {active ? <Check size={15} /> : <span className="admin-reasoning-empty" />}
-                </button>
-              );
-            })}
-          </div>,
-          document.body,
-        )}
-    </div>
-  );
-}
-
 function NumberRuntimeInput({
   id,
   value,
@@ -748,6 +628,8 @@ function NumberRuntimeInput({
 
 export default function AdminSettingsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const activeSlot = resolveActiveAuthSlot(location.search);
   const menuRef = useRef(null);
   const draftRef = useRef({
     prompts: { A: "", B: "", C: "", D: "" },
@@ -786,6 +668,9 @@ export default function AdminSettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteNotice, setDeleteNotice] = useState("");
+  const [selectedTeacherScopeKey, setSelectedTeacherScopeKey] = useState(
+    DEFAULT_TEACHER_SCOPE_KEY,
+  );
 
   const [debugByAgent, setDebugByAgent] = useState(createEmptyDebugState);
   const [debugLoading, setDebugLoading] = useState(false);
@@ -902,6 +787,10 @@ export default function AdminSettingsPage() {
   const isCoreAgentSelected = AGENT_IDS.includes(selectedAgent);
   const selectedPrompt = isAgentESelected ? "" : prompts[selectedAgent] || "";
   const selectedAgentName = AGENT_META[selectedAgent]?.name || `智能体 ${selectedAgent}`;
+  const selectedTeacherScopeLabel = useMemo(
+    () => getTeacherScopeLabel(selectedTeacherScopeKey),
+    [selectedTeacherScopeKey],
+  );
   const previewMessages = debugByAgent[selectedAgent] || [];
   const agentOptions = useMemo(
     () =>
@@ -935,17 +824,17 @@ export default function AdminSettingsPage() {
       if (!shouldRelogin(error)) return false;
       clearAdminToken();
       setAdminToken("");
-      navigate("/login", { replace: true });
+      navigate(withAuthSlot("/login", activeSlot), { replace: true });
       return true;
     },
-    [navigate],
+    [activeSlot, navigate],
   );
 
   const persistSettings = useCallback(
     async () => {
       if (!adminToken) {
         clearAdminToken();
-        navigate("/login", { replace: true });
+        navigate(withAuthSlot("/login", activeSlot), { replace: true });
         return false;
       }
 
@@ -1020,12 +909,12 @@ export default function AdminSettingsPage() {
         setSaving(false);
       }
     },
-    [adminToken, handleAuthError, navigate],
+    [activeSlot, adminToken, handleAuthError, navigate],
   );
 
   useEffect(() => {
     if (!adminToken) {
-      navigate("/login", { replace: true });
+      navigate(withAuthSlot("/login", activeSlot), { replace: true });
       return;
     }
 
@@ -1098,7 +987,7 @@ export default function AdminSettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [adminToken, handleAuthError, navigate]);
+  }, [activeSlot, adminToken, handleAuthError, navigate]);
 
   useEffect(() => {
     draftRef.current = {
@@ -1121,6 +1010,7 @@ export default function AdminSettingsPage() {
     function onDocMouseDown(event) {
       if (!showExportMenu) return;
       const target = event.target;
+      if (target instanceof Element && target.closest("[data-portal-select-menu='true']")) return;
       if (menuRef.current && menuRef.current.contains(target)) return;
       setShowExportMenu(false);
     }
@@ -1418,7 +1308,7 @@ export default function AdminSettingsPage() {
   function onLogoutAdmin() {
     clearAdminToken();
     setAdminToken("");
-    navigate("/login", { replace: true });
+    navigate(withAuthSlot("/login", activeSlot), { replace: true });
   }
 
   async function onExportUsers() {
@@ -1444,7 +1334,7 @@ export default function AdminSettingsPage() {
     setDeleteNotice("");
     setExportLoading("chats");
     try {
-      const data = await exportAdminChatsTxt(adminToken);
+      const data = await exportAdminChatsTxt(adminToken, selectedTeacherScopeKey);
       downloadTxt(data.filename || "educhat-chats.txt", String(data.content || ""));
       setShowExportMenu(false);
     } catch (error) {
@@ -1461,7 +1351,7 @@ export default function AdminSettingsPage() {
     setDeleteNotice("");
     setExportLoading("zip");
     try {
-      const data = await exportAdminChatsZip(adminToken);
+      const data = await exportAdminChatsZip(adminToken, selectedTeacherScopeKey);
       downloadBlob(data.filename || "educhat-chats-by-user.zip", data.blob);
       setShowExportMenu(false);
     } catch (error) {
@@ -1479,9 +1369,9 @@ export default function AdminSettingsPage() {
     setDeleteNotice("");
 
     try {
-      const data = await deleteAllUserChats(adminToken);
+      const data = await deleteAllUserChats(adminToken, selectedTeacherScopeKey);
       setDeleteNotice(
-        `已删除 ${Number(data?.deletedCount || 0)} 条用户对话状态数据。`,
+        `已清空“${selectedTeacherScopeLabel}”授课教师下 ${Number(data?.deletedCount || 0)} 条用户对话状态数据。`,
       );
       setShowDeleteConfirm(false);
     } catch (error) {
@@ -2104,7 +1994,7 @@ export default function AdminSettingsPage() {
                 <span className="admin-agent-select-icon" aria-hidden="true">
                   <ShieldAlert size={14} />
                 </span>
-                <AdminPortalSelect
+                <PortalSelect
                   value={selectedAgent}
                   options={agentOptions}
                   onChange={onSwitchAgent}
@@ -2147,6 +2037,29 @@ export default function AdminSettingsPage() {
 
               {showExportMenu && (
                 <div className="admin-export-menu">
+                  <div className="admin-export-filter">
+                    <label
+                      className="admin-export-filter-label"
+                    >
+                      授课教师
+                    </label>
+                    <PortalSelect
+                      className="admin-export-filter-dropdown"
+                      value={selectedTeacherScopeKey}
+                      ariaLabel="导出授课教师"
+                      options={TEACHER_SCOPE_OPTIONS.map((item) => ({
+                        value: item.key,
+                        label:
+                          item.key === DEFAULT_TEACHER_SCOPE_KEY
+                            ? `${item.label}（历史数据）`
+                            : item.label,
+                      }))}
+                      onChange={setSelectedTeacherScopeKey}
+                      disabled={!!exportLoading || deleteLoading}
+                      compact
+                    />
+                  </div>
+                  <div className="admin-export-divider" />
                   <button
                     type="button"
                     className="admin-export-item"
@@ -2179,7 +2092,7 @@ export default function AdminSettingsPage() {
                     disabled={!!exportLoading || deleteLoading}
                   >
                     <Trash2 size={15} />
-                    <span>删除所有用户的对话数据</span>
+                    <span>删除当前授课教师的对话数据</span>
                   </button>
                 </div>
               )}
@@ -2567,7 +2480,7 @@ export default function AdminSettingsPage() {
             <div className="admin-field-grid">
               <div className="admin-field-row split">
                 <span>服务商</span>
-                <AdminPortalSelect
+                <PortalSelect
                   value={selectedProvider}
                   options={PROVIDER_OPTIONS}
                   onChange={(next) => updateRuntimeField("provider", next)}
@@ -2913,7 +2826,7 @@ export default function AdminSettingsPage() {
                           }
                         />
                       </span>
-                      <AdminPortalSelect
+                      <PortalSelect
                         value={aliyunProtocol}
                         options={aliyunProtocolOptions}
                         onChange={(next) => updateRuntimeField("protocol", next)}
@@ -2928,7 +2841,7 @@ export default function AdminSettingsPage() {
                         文件处理模式
                         <InfoHint text="仅 DashScope 原生接口生效。兼容模式会先本地解析再注入文本；调试模式会优先下发 OSS 文件 URL。" />
                       </span>
-                      <AdminPortalSelect
+                      <PortalSelect
                         value={selectedRuntime.aliyunFileProcessMode}
                         options={ALIYUN_FILE_PROCESS_MODE_OPTIONS}
                         onChange={(next) => updateRuntimeField("aliyunFileProcessMode", next)}
@@ -3087,7 +3000,7 @@ export default function AdminSettingsPage() {
 
                       <div className="admin-field-row split">
                         <span>搜索策略</span>
-                        <AdminPortalSelect
+                        <PortalSelect
                           value={selectedRuntime.aliyunSearchStrategy}
                           options={ALIYUN_SEARCH_STRATEGY_OPTIONS}
                           onChange={(next) => updateRuntimeField("aliyunSearchStrategy", next)}
@@ -3132,7 +3045,7 @@ export default function AdminSettingsPage() {
 
                       <div className="admin-field-row split">
                         <span>角标格式</span>
-                        <AdminPortalSelect
+                        <PortalSelect
                           value={selectedRuntime.aliyunSearchCitationFormat}
                           options={ALIYUN_SEARCH_CITATION_FORMAT_OPTIONS}
                           onChange={(next) =>
@@ -3191,7 +3104,7 @@ export default function AdminSettingsPage() {
 
                       <div className="admin-field-row split">
                         <span>搜索时效</span>
-                        <AdminPortalSelect
+                        <PortalSelect
                           value={selectedRuntime.aliyunSearchFreshness}
                           options={ALIYUN_SEARCH_FRESHNESS_OPTIONS}
                           onChange={(next) => updateRuntimeField("aliyunSearchFreshness", next)}
@@ -3321,7 +3234,7 @@ export default function AdminSettingsPage() {
                           PDF 引擎
                           <InfoHint text="对应 file-parser 插件的 pdf.engine。auto 为不显式下发，交由 OpenRouter 自动选择。" />
                         </span>
-                        <AdminPortalSelect
+                        <PortalSelect
                           value={selectedRuntime.openrouterPdfEngine}
                           options={OPENROUTER_PDF_ENGINE_OPTIONS}
                           onChange={(next) => updateRuntimeField("openrouterPdfEngine", next)}
@@ -3456,12 +3369,12 @@ export default function AdminSettingsPage() {
             className="admin-confirm-card"
             role="dialog"
             aria-modal="true"
-            aria-label="删除所有用户对话数据"
+            aria-label="删除当前授课教师对话数据"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3>删除所有用户的对话数据</h3>
+            <h3>{`删除“${selectedTeacherScopeLabel}”授课教师的对话数据`}</h3>
             <p>
-              此操作会清空所有用户在数据库中的会话和消息记录，账号信息会保留。
+              此操作只会清空该授课教师作用域下的用户会话、消息和图片历史，其他授课教师的数据与账号信息会保留。
             </p>
             <div className="admin-confirm-actions">
               <button

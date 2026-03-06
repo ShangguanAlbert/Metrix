@@ -28,6 +28,7 @@ import MessageInput from "../../../components/MessageInput.jsx";
 import MessageList from "../../../components/MessageList.jsx";
 import { AGENT_META } from "../../chat/constants.js";
 import { readErrorMessage, readSseStream } from "../../chat/chatHelpers.js";
+import { getUserToken, withAuthSlot } from "../../../app/authStorage.js";
 import {
   fetchChatBootstrap,
   getAuthTokenHeader,
@@ -43,6 +44,7 @@ import {
   joinPartyRoom,
   markPartyRoomRead,
   renamePartyRoom,
+  setPartyRoomAgentMemberAccess,
   downloadPartyFile,
   sendPartyFileMessage,
   sendPartyImageMessage,
@@ -57,6 +59,7 @@ const FALLBACK_SYNC_MS = 60 * 1000;
 const SOCKET_PING_MS = 20 * 1000;
 const PARTY_UPLOAD_FILE_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const PARTY_AGENT_PANEL_TEMPERATURE = 0.6;
+const PARTY_AGENT_ACCESS_BLOCKED_MESSAGE = "派主暂未开放成员使用派Agent。";
 const PARTY_AGENT_PANEL_TOP_P = 1;
 const PARTY_AGENT_DEFAULT_ID = "A";
 const PARTY_AGENT_CONTEXT_USER_ROUNDS = 10;
@@ -165,6 +168,7 @@ export default function PartyChatDesktopPage({
   const [showDissolveRoomModal, setShowDissolveRoomModal] = useState(false);
   const [dissolveConfirmText, setDissolveConfirmText] = useState("");
   const [dissolveSubmitting, setDissolveSubmitting] = useState(false);
+  const [partyAgentAccessSubmitting, setPartyAgentAccessSubmitting] = useState(false);
 
   const [composeText, setComposeText] = useState("");
   const [sendingText, setSendingText] = useState(false);
@@ -240,8 +244,6 @@ export default function PartyChatDesktopPage({
   const effectiveLinkedChatSmartContextEnabled =
     partyAgentSmartContextSupported && linkedChatSmartContextEnabled;
   const partyAgentSwitchLocked = !!effectiveLinkedChatSmartContextEnabled;
-  const partyAgentSmartContextToggleDisabled =
-    !linkedChatSessionId || partyAgentStreaming || !partyAgentSmartContextSupported;
   const partyAgentSmartContextInfoTitle = partyAgentSmartContextSupported
     ? "开启后将锁定当前智能体进行对话，不得切换智能体"
     : "仅火山引擎智能体支持智能上下文管理，当前智能体已默认关闭";
@@ -270,6 +272,26 @@ export default function PartyChatDesktopPage({
     (composeText.trim().length > 0 || selectedImageFiles.length > 0 || selectedUploadFiles.length > 0) &&
     !composerSending;
   const canManageActiveRoom = !!activeRoom && activeRoom.ownerUserId === me.id;
+  const partyAgentMemberEnabled = activeRoom?.partyAgentMemberEnabled !== false;
+  const partyAgentAccessBlocked = !!activeRoom && !canManageActiveRoom && !partyAgentMemberEnabled;
+  const partyAgentAccessHint = partyAgentAccessBlocked
+    ? PARTY_AGENT_ACCESS_BLOCKED_MESSAGE
+    : "";
+  const partyAgentSelectDisabled =
+    !linkedChatSessionId || partyAgentStreaming || partyAgentSwitchLocked || partyAgentAccessBlocked;
+  const partyAgentSelectDisabledTitle = partyAgentAccessBlocked
+    ? "派主暂未开放成员使用派Agent"
+    : !linkedChatSessionId
+      ? "暂无可同步的 ChatPage 会话"
+      : partyAgentStreaming
+        ? "生成中，请稍候再切换智能体"
+        : "开启智能上下文管理后，需先关闭开关才能切换智能体。";
+  const partyAgentSmartContextControlDisabled =
+    partyAgentAccessBlocked || !linkedChatSessionId || !partyAgentSmartContextSupported;
+  const partyAgentSmartContextToggleDisabled =
+    partyAgentAccessBlocked || !linkedChatSessionId || partyAgentStreaming || !partyAgentSmartContextSupported;
+  const partyAgentInputDisabled =
+    !linkedChatSessionId || partyAgentStreaming || !!chatBootstrapError || partyAgentAccessBlocked;
   const bannerMessage = actionError || messagesError || bootstrapError || chatBootstrapError;
   const activeReadStateMap = useMemo(() => {
     const map = new Map();
@@ -291,6 +313,7 @@ export default function PartyChatDesktopPage({
     [selectedForwardMessageIds],
   );
   const selectedForwardCount = selectedForwardMessageIds.length;
+  const canForwardToPartyAgent = !!linkedChatSessionId && !partyAgentAccessBlocked;
   const showSidebar = isMobileSidebarDrawer ? isSidebarDrawerOpen : isSidebarExpanded;
 
   const setChatSessionMessages = useCallback((sessionId, updater) => {
@@ -438,7 +461,7 @@ export default function PartyChatDesktopPage({
 
   const onPartyAgentChange = useCallback(
     (nextAgentId) => {
-      if (partyAgentSwitchLocked) return;
+      if (partyAgentAccessBlocked || partyAgentSwitchLocked) return;
       const safeSessionId = sanitizePartyAgentSessionId(linkedChatSessionId);
       const safeAgentId = sanitizePartyAgentId(nextAgentId, linkedChatAgentId);
       if (!safeSessionId || !safeAgentId) return;
@@ -462,12 +485,18 @@ export default function PartyChatDesktopPage({
         return nextState;
       });
     },
-    [linkedChatAgentId, linkedChatSessionId, partyAgentSwitchLocked, persistPartyAgentMetaState],
+    [
+      linkedChatAgentId,
+      linkedChatSessionId,
+      partyAgentAccessBlocked,
+      partyAgentSwitchLocked,
+      persistPartyAgentMetaState,
+    ],
   );
 
   const onPartyAgentToggleSmartContext = useCallback(
     (enabled) => {
-      if (!partyAgentSmartContextSupported) return;
+      if (partyAgentAccessBlocked || !partyAgentSmartContextSupported) return;
       const safeSessionId = sanitizePartyAgentSessionId(linkedChatSessionId);
       const safeAgentId = sanitizePartyAgentId(linkedChatAgentId, PARTY_AGENT_DEFAULT_ID);
       if (!safeSessionId || !safeAgentId) return;
@@ -495,6 +524,7 @@ export default function PartyChatDesktopPage({
     [
       linkedChatAgentId,
       linkedChatSessionId,
+      partyAgentAccessBlocked,
       partyAgentSmartContextSupported,
       persistPartyAgentMetaState,
     ],
@@ -502,6 +532,7 @@ export default function PartyChatDesktopPage({
 
   const onSendAgentPanelMessage = useCallback(
     async (text, files = []) => {
+      if (partyAgentAccessBlocked) return;
       const sessionId = sanitizePartyAgentSessionId(linkedChatSessionId);
       if (!sessionId || partyAgentStreaming) return;
 
@@ -583,6 +614,10 @@ export default function PartyChatDesktopPage({
       formData.append("temperature", String(PARTY_AGENT_PANEL_TEMPERATURE));
       formData.append("topP", String(PARTY_AGENT_PANEL_TOP_P));
       formData.append("sessionId", sessionId);
+      if (activeRoomId) {
+        formData.append("requestSource", "party-agent-panel");
+        formData.append("partyRoomId", String(activeRoomId || "").trim());
+      }
       formData.append("smartContextEnabled", String(effectiveLinkedChatSmartContextEnabled));
       formData.append("contextMode", "append");
       formData.append("messages", JSON.stringify(historyForApi));
@@ -695,7 +730,7 @@ export default function PartyChatDesktopPage({
           return;
         }
         const message = error?.message || "请求失败";
-        setPartyAgentError(message);
+        setPartyAgentError(message === PARTY_AGENT_ACCESS_BLOCKED_MESSAGE ? "" : message);
         patchChatSessionMessageById(sessionId, assistantMessageId, (assistant) => ({
           ...assistant,
           content: `${String(assistant?.content || "")}\n\n> 请求失败：${message}`,
@@ -727,12 +762,14 @@ export default function PartyChatDesktopPage({
     },
     [
       clearPartyAgentDraft,
+      activeRoomId,
       linkedChatAgentId,
       linkedChatMessages,
       linkedChatSessionId,
       effectiveLinkedChatSmartContextEnabled,
       finalizePartyAgentDraft,
       patchPartyAgentDraft,
+      partyAgentAccessBlocked,
       partyAgentStreaming,
       patchChatSessionMessageById,
       persistChatMessagesUpserts,
@@ -771,10 +808,11 @@ export default function PartyChatDesktopPage({
   );
 
   const onPartyAgentAskSelection = useCallback((text) => {
+    if (partyAgentAccessBlocked) return;
     const trimmed = String(text || "").trim();
     if (!trimmed) return;
     setPartyAgentSelectedAskText(trimmed);
-  }, []);
+  }, [partyAgentAccessBlocked]);
 
   async function onPartyAgentForwardToRoom(assistantMessageId) {
     const roomId = String(activeRoomId || "").trim();
@@ -805,6 +843,7 @@ export default function PartyChatDesktopPage({
 
   const onPartyAgentRegenerate = useCallback(
     async (assistantMessageId, promptMessageId) => {
+      if (partyAgentAccessBlocked) return;
       const sessionId = sanitizePartyAgentSessionId(linkedChatSessionId);
       const safeAssistantMessageId = String(assistantMessageId || "").trim();
       const safePromptMessageId = String(promptMessageId || "").trim();
@@ -872,6 +911,10 @@ export default function PartyChatDesktopPage({
       formData.append("temperature", String(PARTY_AGENT_PANEL_TEMPERATURE));
       formData.append("topP", String(PARTY_AGENT_PANEL_TOP_P));
       formData.append("sessionId", sessionId);
+      if (activeRoomId) {
+        formData.append("requestSource", "party-agent-panel");
+        formData.append("partyRoomId", String(activeRoomId || "").trim());
+      }
       formData.append("smartContextEnabled", String(effectiveLinkedChatSmartContextEnabled));
       formData.append("contextMode", "regenerate");
       formData.append("messages", JSON.stringify(historyForApi));
@@ -957,7 +1000,7 @@ export default function PartyChatDesktopPage({
           return;
         }
         const message = error?.message || "请求失败";
-        setPartyAgentError(message);
+        setPartyAgentError(message === PARTY_AGENT_ACCESS_BLOCKED_MESSAGE ? "" : message);
         patchChatSessionMessageById(sessionId, safeAssistantMessageId, (assistant) => ({
           ...assistant,
           content: `${String(assistant?.content || "")}\n\n> 请求失败：${message}`,
@@ -990,11 +1033,13 @@ export default function PartyChatDesktopPage({
     [
       chatMessagesBySession,
       clearPartyAgentDraft,
+      activeRoomId,
       finalizePartyAgentDraft,
       linkedChatAgentId,
       linkedChatSessionId,
       effectiveLinkedChatSmartContextEnabled,
       patchPartyAgentDraft,
+      partyAgentAccessBlocked,
       partyAgentStreaming,
       patchChatSessionMessageById,
       persistChatMessagesUpserts,
@@ -1007,6 +1052,26 @@ export default function PartyChatDesktopPage({
   useEffect(() => {
     setPartyAgentSelectedAskText("");
   }, [linkedChatSessionId]);
+
+  useEffect(() => {
+    if (!partyAgentAccessBlocked) return;
+    const sessionId = sanitizePartyAgentSessionId(linkedChatSessionId);
+    if (sessionId) {
+      const controller = agentStreamControllersRef.current.get(sessionId);
+      controller?.abort();
+    }
+    setPartyAgentSelectedAskText("");
+    if (multiForwardMode || selectedForwardMessageIds.length > 0) {
+      setSelectedForwardMessageIds([]);
+      setMultiForwardMode(false);
+    }
+    setPartyAgentError("");
+  }, [
+    linkedChatSessionId,
+    multiForwardMode,
+    partyAgentAccessBlocked,
+    selectedForwardMessageIds.length,
+  ]);
 
   const resizeComposeTextarea = useCallback(() => {
     const textarea = composeTextareaRef.current;
@@ -1070,7 +1135,7 @@ export default function PartyChatDesktopPage({
     joinedRoomIdsRef.current = new Set();
     socketRef.current?.close();
     socketRef.current = null;
-    navigate("/chat", { replace: true });
+    navigate(withAuthSlot("/chat"), { replace: true });
   }, [navigate]);
 
   const mergeMessages = useCallback((roomId, incoming, { replace = false } = {}) => {
@@ -1423,7 +1488,7 @@ export default function PartyChatDesktopPage({
   }, [persistChatMessagesUpserts]);
 
   useEffect(() => {
-    const token = String(localStorage.getItem("token") || "").trim();
+    const token = getUserToken().trim();
     if (!token) return undefined;
 
     const socketClient = createPartySocketClient({
@@ -1796,6 +1861,20 @@ export default function PartyChatDesktopPage({
       setActionError(error?.message || "重命名失败，请稍后重试。");
     } finally {
       setRenameSubmitting(false);
+    }
+  }
+
+  async function handlePartyAgentMemberAccessToggle(nextEnabled) {
+    if (!activeRoom || !canManageActiveRoom || partyAgentAccessSubmitting) return;
+    setPartyAgentAccessSubmitting(true);
+    try {
+      const result = await setPartyRoomAgentMemberAccess(activeRoom.id, nextEnabled);
+      applyRoomUpsert(result?.room);
+      setActionError("");
+    } catch (error) {
+      setActionError(error?.message || "更新派Agent成员权限失败，请稍后重试。");
+    } finally {
+      setPartyAgentAccessSubmitting(false);
     }
   }
 
@@ -2530,6 +2609,7 @@ export default function PartyChatDesktopPage({
   }
 
   function forwardSelectedMessagesToAgentQuote() {
+    if (partyAgentAccessBlocked) return;
     if (!linkedChatSessionId) {
       setPartyAgentError("请先在右侧选择可用的 ChatPage 会话。");
       return;
@@ -2923,6 +3003,30 @@ export default function PartyChatDesktopPage({
                   <p className="party-room-code">派号：{activeRoom.roomCode}</p>
                 </div>
                 <div className="party-room-actions">
+                  {canManageActiveRoom ? (
+                    <div
+                      className={`party-room-agent-access-control${
+                        !activeRoom || partyAgentAccessSubmitting ? " is-disabled" : ""
+                      }`}
+                      title="控制当前派成员是否可使用右侧派Agent"
+                    >
+                      <label className="smart-context-switch" htmlFor="party-agent-member-access-toggle">
+                        <input
+                          id="party-agent-member-access-toggle"
+                          type="checkbox"
+                          checked={partyAgentMemberEnabled}
+                          onChange={(event) =>
+                            void handlePartyAgentMemberAccessToggle(event.target.checked)
+                          }
+                          disabled={!activeRoom || partyAgentAccessSubmitting}
+                        />
+                        <span className="smart-context-slider" aria-hidden="true" />
+                        <span className="smart-context-label">
+                          {partyAgentAccessSubmitting ? "保存中" : "成员可用"}
+                        </span>
+                      </label>
+                    </div>
+                  ) : null}
                   {multiForwardMode ? (
                     <>
                       <span className="party-forward-count-chip">已选 {selectedForwardCount}</span>
@@ -2930,8 +3034,14 @@ export default function PartyChatDesktopPage({
                         type="button"
                         className="party-secondary-btn"
                         onClick={forwardSelectedMessagesToAgentQuote}
-                        disabled={selectedForwardCount === 0 || !linkedChatSessionId}
-                        title={!linkedChatSessionId ? "请先在右侧选择可同步会话" : "转发到右侧派Agent"}
+                        disabled={selectedForwardCount === 0 || !canForwardToPartyAgent}
+                        title={
+                          partyAgentAccessBlocked
+                            ? "派主暂未开放成员使用派Agent"
+                            : !linkedChatSessionId
+                              ? "请先在右侧选择可同步会话"
+                              : "转发到右侧派Agent"
+                        }
                       >
                         转发到派Agent
                       </button>
@@ -2948,6 +3058,8 @@ export default function PartyChatDesktopPage({
                       type="button"
                       className="party-secondary-btn"
                       onClick={toggleMultiForwardMode}
+                      disabled={partyAgentAccessBlocked}
+                      title={partyAgentAccessBlocked ? "派主暂未开放成员使用派Agent" : "多选转发"}
                     >
                       多选转发
                     </button>
@@ -3465,7 +3577,7 @@ export default function PartyChatDesktopPage({
         </main>
 
         <aside className="party-agent-column" aria-label="派Agent">
-          <div className="party-agent-panel">
+          <div className={`party-agent-panel${partyAgentAccessBlocked ? " is-access-blocked" : ""}`}>
             <div className="party-agent-panel-head">
               <div className="party-agent-panel-head-title">
                 <h3>派·Agent</h3>
@@ -3474,20 +3586,14 @@ export default function PartyChatDesktopPage({
                 <AgentSelect
                   value={linkedChatAgentId}
                   onChange={onPartyAgentChange}
-                  disabled={!linkedChatSessionId || partyAgentStreaming || partyAgentSwitchLocked}
-                  disabledTitle={
-                    !linkedChatSessionId
-                      ? "暂无可同步的 ChatPage 会话"
-                      : partyAgentStreaming
-                        ? "生成中，请稍候再切换智能体"
-                        : "开启智能上下文管理后，需先关闭开关才能切换智能体。"
-                  }
+                  disabled={partyAgentSelectDisabled}
+                  disabledTitle={partyAgentSelectDisabledTitle}
                 />
                 <div
                   className={`smart-context-control${
-                    !linkedChatSessionId || !partyAgentSmartContextSupported ? " is-disabled" : ""
+                    partyAgentSmartContextControlDisabled ? " is-disabled" : ""
                   }`}
-                  title={partyAgentSmartContextInfoTitle}
+                  title={partyAgentAccessBlocked ? partyAgentAccessHint : partyAgentSmartContextInfoTitle}
                 >
                   <label className="smart-context-switch" htmlFor="party-agent-smart-context-toggle">
                     <input
@@ -3510,14 +3616,19 @@ export default function PartyChatDesktopPage({
                 messages={linkedChatMessages}
                 isStreaming={partyAgentStreaming}
                 onAssistantFeedback={onPartyAgentFeedback}
-                onAssistantRegenerate={onPartyAgentRegenerate}
-                onAssistantForward={onPartyAgentForwardToRoom}
-                onAskSelection={onPartyAgentAskSelection}
-                showAssistantActions
+                onAssistantRegenerate={partyAgentAccessBlocked ? null : onPartyAgentRegenerate}
+                onAssistantForward={partyAgentAccessBlocked ? null : onPartyAgentForwardToRoom}
+                onAskSelection={partyAgentAccessBlocked ? null : onPartyAgentAskSelection}
+                showAssistantActions={!partyAgentAccessBlocked}
               />
+              {partyAgentAccessBlocked ? (
+                <div className="party-agent-access-note" role="status">
+                  {PARTY_AGENT_ACCESS_BLOCKED_MESSAGE}
+                </div>
+              ) : null}
               <MessageInput
                 onSend={onSendAgentPanelMessage}
-                disabled={!linkedChatSessionId || partyAgentStreaming || !!chatBootstrapError}
+                disabled={partyAgentInputDisabled}
                 quoteText={partyAgentSelectedAskText}
                 quotePreviewMaxChars={15}
                 onClearQuote={() => setPartyAgentSelectedAskText("")}
@@ -4081,6 +4192,7 @@ function normalizeRoom(raw) {
     roomCode: String(raw?.roomCode || "").trim(),
     name: String(raw?.name || "未命名派"),
     ownerUserId: String(raw?.ownerUserId || "").trim(),
+    partyAgentMemberEnabled: raw?.partyAgentMemberEnabled !== false,
     memberUserIds,
     memberCount,
     updatedAt: String(raw?.updatedAt || ""),

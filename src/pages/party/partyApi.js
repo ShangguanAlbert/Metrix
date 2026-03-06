@@ -1,5 +1,7 @@
+import { getUserToken } from "../../app/authStorage.js";
+
 function getToken() {
-  return String(localStorage.getItem("token") || "");
+  return getUserToken();
 }
 
 function authHeaders(extra = {}) {
@@ -63,6 +65,16 @@ export function renamePartyRoom(roomId, name) {
     method: "PATCH",
     body: JSON.stringify({
       name: String(name || "").trim(),
+    }),
+  });
+}
+
+export function setPartyRoomAgentMemberAccess(roomId, partyAgentMemberEnabled) {
+  const safeRoomId = String(roomId || "").trim();
+  return request(`/api/group-chat/rooms/${encodeURIComponent(safeRoomId)}/party-agent-access`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      partyAgentMemberEnabled: !!partyAgentMemberEnabled,
     }),
   });
 }

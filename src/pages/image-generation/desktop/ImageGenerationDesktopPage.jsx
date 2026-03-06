@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { getUserToken, withAuthSlot } from "../../../app/authStorage.js";
 import {
   clearImageGenerationHistory,
   deleteImageGenerationHistoryItem,
@@ -104,11 +105,7 @@ function normalizePreviewUrl(value) {
 }
 
 function readImageAuthToken() {
-  try {
-    return String(localStorage.getItem("token") || "").trim();
-  } catch {
-    return "";
-  }
+  return getUserToken().trim();
 }
 
 function appendAuthTokenToHistoryImageUrl(value, token) {
@@ -422,7 +419,7 @@ export default function ImageGenerationDesktopPage({
   function handleBackToChat() {
     const storedContext = loadImageReturnContext();
     const context = returnContextFromState || storedContext || null;
-    navigate("/chat", {
+    navigate(withAuthSlot("/chat"), {
       state: {
         fromImageGeneration: true,
         restoreContext: context,

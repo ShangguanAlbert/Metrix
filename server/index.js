@@ -50,6 +50,18 @@ import {
   ALIYUN_SEARCH_FRESHNESS_OPTIONS,
   ALIYUN_SEARCH_STRATEGIES,
 } from "./providers/aliyun/constants.js";
+import {
+  DEFAULT_TEACHER_SCOPE_KEY,
+  buildTeacherScopedStorageUserId,
+  getTeacherScopeLabel,
+  isDefaultTeacherScopeKey,
+  sanitizeTeacherScopeKey,
+} from "../shared/teacherScopes.js";
+import {
+  FIXED_STUDENT_ACCOUNTS,
+  FIXED_STUDENT_ACCOUNT_TAG,
+  FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
+} from "../shared/fixedStudentAccounts.js";
 
 dotenv.config();
 
@@ -118,6 +130,30 @@ const GROUP_CHAT_OSS_EXPIRED_CLEANUP_BATCH_SIZE = 120;
 const GENERATED_IMAGE_OSS_EXPIRED_CLEANUP_INTERVAL_MS = 60 * 1000;
 const GENERATED_IMAGE_OSS_EXPIRED_CLEANUP_BATCH_SIZE = 80;
 const CHAT_ATTACHMENT_OSS_SCOPE = "chat-attachments";
+const FIXED_ADMIN_ACCOUNTS = Object.freeze([
+  { username: "上官福泽", password: "2025112004074" },
+  { username: "杨占山", password: "2024111004058" },
+  { username: "钟怡萱", password: "2024111004053" },
+  { username: "杨俊锋", password: "20060038" },
+]);
+const FIXED_ADMIN_USERNAME_KEYS = new Set(
+  FIXED_ADMIN_ACCOUNTS.map((item) =>
+    String(item?.username || "")
+      .trim()
+      .toLowerCase(),
+  ),
+);
+const FIXED_STUDENT_USERNAME_KEYS = new Set(
+  FIXED_STUDENT_ACCOUNTS.map((item) =>
+    String(item?.username || "")
+      .trim()
+      .toLowerCase(),
+  ),
+);
+const RESERVED_ADMIN_USERNAME_KEYS = new Set([
+  "admin",
+  ...FIXED_ADMIN_USERNAME_KEYS,
+]);
 const CHAT_PREPARED_PDF_IMAGE_OSS_SCOPE = "chat-prepared-pdf-images";
 const IMAGE_GENERATION_INPUT_OSS_SCOPE = "image-generation-inputs";
 const IMAGE_GENERATION_OUTPUT_OSS_SCOPE = "image-generation-outputs";
@@ -796,8 +832,10 @@ const authUserSchema = new mongoose.Schema(
     usernameKey: { type: String, required: true, unique: true, index: true },
     role: { type: String, enum: ["admin", "user"], default: "user" },
     passwordHash: { type: String, required: true },
-    // NOTE: 仅用于本地教学演示的管理员导出功能，不建议在生产场景保存明文密码。
+    // NOTE: 仅用于本地教学演示的账号导出功能，不建议在生产场景保存明文密码。
     passwordPlain: { type: String, required: true },
+    accountTag: { type: String, default: "" },
+    lockedTeacherScopeKey: { type: String, default: "" },
     profile: {
       name: { type: String, default: "" },
       studentId: { type: String, default: "" },
@@ -857,6 +895,10 @@ const chatStateSchema = new mongoose.Schema(
       default: () => ({}),
     },
     sessionContextRefs: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({}),
+    },
+    teacherStates: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({}),
     },
@@ -1004,6 +1046,7 @@ const groupChatRoomSchema = new mongoose.Schema(
     roomCode: { type: String, required: true, unique: true, index: true },
     name: { type: String, required: true, trim: true },
     ownerUserId: { type: String, required: true, index: true },
+    partyAgentMemberEnabled: { type: Boolean, default: true },
     memberUserIds: {
       type: [String],
       default: () => [],
@@ -1422,21 +1465,24 @@ app.get("/api/health", (_, res) => {
 });
 
 app.get("/api/auth/status", async (_req, res) => {
-  const [totalUsers, admin] = await Promise.all([
-    AuthUser.countDocuments({}),
-    AuthUser.findOne({ role: "admin" }).sort({ createdAt: 1 }).lean(),
-  ]);
+  const totalUsers = await AuthUser.countDocuments({ role: "user" });
 
   res.json({
     ok: true,
     hasAnyUser: totalUsers > 0,
-    hasAdmin: !!admin,
-    adminUsername: admin?.username || "admin",
+    hasAdmin: FIXED_ADMIN_ACCOUNTS.length > 0,
+    adminUsernames: FIXED_ADMIN_ACCOUNTS.map((item) => item.username),
+    preloadedStudentCount: FIXED_STUDENT_ACCOUNTS.length,
+    preloadedStudentTeacherScopeKey: FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
+    preloadedStudentTeacherScopeLabel: getTeacherScopeLabel(
+      FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
+    ),
   });
 });
 
 app.get("/api/chat/bootstrap", requireChatAuth, async (req, res) => {
   const user = req.authUser;
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
   const [stateDoc, adminConfig] = await Promise.all([
     ChatState.findOne({ userId: user._id }).lean(),
     readAdminAgentConfig(),
@@ -1444,11 +1490,13 @@ app.get("/api/chat/bootstrap", requireChatAuth, async (req, res) => {
 
   const normalizedProfile = sanitizeUserProfile(user.profile);
   const profileComplete = isUserProfileComplete(normalizedProfile);
-  const state = normalizeChatStateDoc(stateDoc);
+  const state = normalizeChatStateDoc(stateDoc, teacherScopeKey);
 
   res.json({
     ok: true,
     user: toPublicUser(user),
+    teacherScopeKey,
+    teacherScopeLabel: getTeacherScopeLabel(teacherScopeKey),
     profile: normalizedProfile,
     profileComplete,
     state,
@@ -1486,20 +1534,23 @@ app.put("/api/user/profile", requireChatAuth, async (req, res) => {
 
 app.put("/api/chat/state", requireChatAuth, async (req, res) => {
   const nextState = sanitizeChatStatePayload(req.body || {});
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+  const setPayload = { userId: req.authUser._id };
+  setPayload[getTeacherScopedChatStatePath("activeId", teacherScopeKey)] = nextState.activeId;
+  setPayload[getTeacherScopedChatStatePath("groups", teacherScopeKey)] = nextState.groups;
+  setPayload[getTeacherScopedChatStatePath("sessions", teacherScopeKey)] = nextState.sessions;
+  setPayload[getTeacherScopedChatStatePath("sessionMessages", teacherScopeKey)] =
+    nextState.sessionMessages;
+  setPayload[getTeacherScopedChatStatePath("settings", teacherScopeKey)] = nextState.settings;
 
   await ChatState.findOneAndUpdate(
     { userId: req.authUser._id },
+    { $set: setPayload },
     {
-      $set: {
-        userId: req.authUser._id,
-        activeId: nextState.activeId,
-        groups: nextState.groups,
-        sessions: nextState.sessions,
-        sessionMessages: nextState.sessionMessages,
-        settings: nextState.settings,
-      },
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: isDefaultTeacherScopeKey(teacherScopeKey),
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
   );
 
   res.json({ ok: true });
@@ -1507,19 +1558,21 @@ app.put("/api/chat/state", requireChatAuth, async (req, res) => {
 
 app.put("/api/chat/state/meta", requireChatAuth, async (req, res) => {
   const nextMeta = sanitizeChatStateMetaPayload(req.body || {});
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+  const setPayload = { userId: req.authUser._id };
+  setPayload[getTeacherScopedChatStatePath("activeId", teacherScopeKey)] = nextMeta.activeId;
+  setPayload[getTeacherScopedChatStatePath("groups", teacherScopeKey)] = nextMeta.groups;
+  setPayload[getTeacherScopedChatStatePath("sessions", teacherScopeKey)] = nextMeta.sessions;
+  setPayload[getTeacherScopedChatStatePath("settings", teacherScopeKey)] = nextMeta.settings;
 
   await ChatState.findOneAndUpdate(
     { userId: req.authUser._id },
+    { $set: setPayload },
     {
-      $set: {
-        userId: req.authUser._id,
-        activeId: nextMeta.activeId,
-        groups: nextMeta.groups,
-        sessions: nextMeta.sessions,
-        settings: nextMeta.settings,
-      },
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: isDefaultTeacherScopeKey(teacherScopeKey),
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
   );
 
   res.json({ ok: true });
@@ -1534,6 +1587,7 @@ app.post("/api/chat/smart-context/clear", requireChatAuth, async (req, res) => {
 
   await clearSessionContextRef({
     userId: String(req.authUser?._id || ""),
+    teacherScopeKey: req.authTeacherScopeKey,
     sessionId,
   });
 
@@ -1542,6 +1596,7 @@ app.post("/api/chat/smart-context/clear", requireChatAuth, async (req, res) => {
 
 app.put("/api/chat/state/messages", requireChatAuth, async (req, res) => {
   const upserts = sanitizeSessionMessageUpsertsPayload(req.body || {});
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
   if (upserts.length === 0) {
     res.json({ ok: true, updated: 0 });
     return;
@@ -1556,12 +1611,9 @@ app.put("/api/chat/state/messages", requireChatAuth, async (req, res) => {
 
   const stateDoc = await ChatState.findOne(
     { userId: req.authUser._id },
-    { sessionMessages: 1 },
+    { sessionMessages: 1, teacherStates: 1 },
   ).lean();
-  const sourceMessages =
-    stateDoc?.sessionMessages && typeof stateDoc.sessionMessages === "object"
-      ? stateDoc.sessionMessages
-      : {};
+  const sourceMessages = normalizeChatStateDoc(stateDoc, teacherScopeKey).sessionMessages;
 
   const setPayload = { userId: req.authUser._id };
   bySession.forEach((updates, sessionId) => {
@@ -1587,13 +1639,18 @@ app.put("/api/chat/state/messages", requireChatAuth, async (req, res) => {
       }
     });
 
-    setPayload[`sessionMessages.${sessionId}`] = currentList;
+    setPayload[getTeacherScopedChatStatePath(`sessionMessages.${sessionId}`, teacherScopeKey)] =
+      currentList;
   });
 
   await ChatState.findOneAndUpdate(
     { userId: req.authUser._id },
     { $set: setPayload },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: isDefaultTeacherScopeKey(teacherScopeKey),
+    },
   );
 
   res.json({ ok: true, updated: upserts.length });
@@ -1608,40 +1665,36 @@ app.post("/api/auth/register", async (req, res) => {
     return;
   }
 
-  const totalUsers = await AuthUser.countDocuments({});
-  const bootstrapMode = totalUsers === 0;
-  const username = bootstrapMode ? "admin" : normalizeUsername(usernameInput);
+  const username = normalizeUsername(usernameInput);
 
   if (!username) {
     res.status(400).json({ error: "请输入用户名。" });
     return;
   }
 
-  if (!bootstrapMode && toUsernameKey(username) === "admin") {
-    res.status(400).json({ error: "admin 为保留账号名，请使用其他用户名。" });
+  const usernameKey = toUsernameKey(username);
+  if (isReservedAdminUsernameKey(usernameKey)) {
+    res.status(400).json({ error: "该用户名为管理员保留账号，请使用其他用户名。" });
     return;
   }
 
-  const usernameKey = toUsernameKey(username);
   const existing = await AuthUser.findOne({ usernameKey }).lean();
   if (existing) {
     res.status(409).json({ error: "该账号已存在，请更换用户名。" });
     return;
   }
 
-  const role = bootstrapMode ? "admin" : "user";
   const passwordHash = await hashPassword(password);
   const user = await AuthUser.create({
     username,
     usernameKey,
-    role,
+    role: "user",
     passwordHash,
     passwordPlain: password,
   });
 
   res.status(201).json({
     ok: true,
-    bootstrapAdmin: bootstrapMode,
     user: toPublicUser(user),
   });
 });
@@ -1649,6 +1702,7 @@ app.post("/api/auth/register", async (req, res) => {
 app.post("/api/auth/login", async (req, res) => {
   const username = normalizeUsername(req.body?.username);
   const password = String(req.body?.password || "");
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.body?.teacherScopeKey);
   if (!username || !password) {
     res.status(400).json({ error: "请输入账号和密码。" });
     return;
@@ -1662,8 +1716,21 @@ app.post("/api/auth/login", async (req, res) => {
     return;
   }
 
+  const lockedTeacherScopeKey = readLockedTeacherScopeKey(user.lockedTeacherScopeKey);
+  if (lockedTeacherScopeKey && teacherScopeKey !== lockedTeacherScopeKey) {
+    res.status(403).json({
+      error: `该账号仅支持选择“${getTeacherScopeLabel(lockedTeacherScopeKey)}”授课教师登录。`,
+    });
+    return;
+  }
+
   const token = signToken(
-    { uid: String(user._id), role: user.role, scope: "chat" },
+    {
+      uid: String(user._id),
+      role: user.role,
+      scope: "chat",
+      tkey: teacherScopeKey,
+    },
     AUTH_TOKEN_TTL_SECONDS,
   );
 
@@ -1671,6 +1738,8 @@ app.post("/api/auth/login", async (req, res) => {
     ok: true,
     token,
     user: toPublicUser(user),
+    teacherScopeKey,
+    teacherScopeLabel: getTeacherScopeLabel(teacherScopeKey),
   });
 });
 
@@ -1681,7 +1750,23 @@ app.post("/api/auth/forgot/verify", async (req, res) => {
     return;
   }
 
+  if (isReservedAdminUsernameKey(toUsernameKey(username))) {
+    res.json({
+      ok: true,
+      exists: false,
+      username: "",
+    });
+    return;
+  }
+
   const user = await AuthUser.findOne({ usernameKey: toUsernameKey(username) }).lean();
+  if (isFixedStudentUser(user)) {
+    res.status(403).json({
+      error: "该学生账号为系统预置账号，不支持在此重置密码，请使用学号作为密码登录。",
+    });
+    return;
+  }
+
   res.json({
     ok: true,
     exists: !!user,
@@ -1696,6 +1781,11 @@ app.post("/api/auth/forgot/reset", async (req, res) => {
 
   if (!username) {
     res.status(400).json({ error: "请输入账号。" });
+    return;
+  }
+
+  if (isReservedAdminUsernameKey(toUsernameKey(username))) {
+    res.status(403).json({ error: "管理员账号为固定分配，不支持在此重置密码。" });
     return;
   }
 
@@ -1716,6 +1806,13 @@ app.post("/api/auth/forgot/reset", async (req, res) => {
     return;
   }
 
+  if (isFixedStudentUser(user)) {
+    res.status(403).json({
+      error: "该学生账号为系统预置账号，不支持在此重置密码，请使用学号作为密码登录。",
+    });
+    return;
+  }
+
   user.passwordHash = await hashPassword(newPassword);
   user.passwordPlain = newPassword;
   await user.save();
@@ -1724,8 +1821,13 @@ app.post("/api/auth/forgot/reset", async (req, res) => {
 });
 
 app.post("/api/auth/admin/login", async (req, res) => {
-  const username = normalizeUsername(req.body?.username || "admin");
+  const username = normalizeUsername(req.body?.username);
   const password = String(req.body?.password || "");
+
+  if (!username) {
+    res.status(400).json({ error: "请选择管理员账号。" });
+    return;
+  }
 
   if (!password) {
     res.status(400).json({ error: "请输入管理员密码。" });
@@ -1734,7 +1836,7 @@ app.post("/api/auth/admin/login", async (req, res) => {
 
   const user = await AuthUser.findOne({ usernameKey: toUsernameKey(username) });
   const valid = user ? await verifyPassword(password, user.passwordHash) : false;
-  const isAdmin = !!user && user.role === "admin" && user.usernameKey === "admin";
+  const isAdmin = isFixedAdminUser(user);
 
   if (!valid || !isAdmin) {
     res.status(401).json({ error: "管理员账号或密码错误。" });
@@ -1862,7 +1964,7 @@ app.put("/api/auth/admin/agent-e/skills", async (req, res) => {
 app.get("/api/auth/admin/users", async (req, res) => {
   if (!(await authenticateAdminRequest(req, res))) return;
 
-  const users = await AuthUser.find({})
+  const users = await AuthUser.find({ role: "user" })
     .sort({ createdAt: 1, _id: 1 })
     .lean();
 
@@ -1881,7 +1983,7 @@ app.get("/api/auth/admin/users", async (req, res) => {
 app.get("/api/auth/admin/export/users-txt", async (req, res) => {
   if (!(await authenticateAdminRequest(req, res))) return;
 
-  const users = await AuthUser.find({})
+  const users = await AuthUser.find({ role: "user" })
     .sort({ createdAt: 1, _id: 1 })
     .lean();
 
@@ -1896,56 +1998,76 @@ app.get("/api/auth/admin/export/users-txt", async (req, res) => {
 
 app.get("/api/auth/admin/export/chats-txt", async (req, res) => {
   if (!(await authenticateAdminRequest(req, res))) return;
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.query?.teacherScopeKey);
 
-  const users = await AuthUser.find({})
+  const users = await AuthUser.find({ role: "user" })
     .sort({ createdAt: 1, _id: 1 })
     .lean();
   const userIds = users.map((u) => u._id);
   const stateDocs = await ChatState.find({ userId: { $in: userIds } }).lean();
   const stateByUserId = new Map(
-    stateDocs.map((doc) => [String(doc.userId), normalizeChatStateDoc(doc)]),
+    stateDocs.map((doc) => {
+      const scoped = readTeacherScopedChatStateRaw(doc, teacherScopeKey);
+      return [
+        String(doc.userId),
+        scoped ? normalizeChatStateDoc(doc, teacherScopeKey) : null,
+      ];
+    }),
   );
 
-  const content = buildAdminChatsExportTxt(users, stateByUserId);
+  const content = buildAdminChatsExportTxt(users, stateByUserId, teacherScopeKey);
   const suffix = formatFileStamp(new Date());
   res.json({
     ok: true,
-    filename: `educhat-chats-${suffix}.txt`,
+    filename: `educhat-chats-${teacherScopeKey}-${suffix}.txt`,
     content,
   });
 });
 
 app.get("/api/auth/admin/export/chats-zip", async (req, res) => {
   if (!(await authenticateAdminRequest(req, res))) return;
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.query?.teacherScopeKey);
 
-  const users = await AuthUser.find({})
+  const users = await AuthUser.find({ role: "user" })
     .sort({ createdAt: 1, _id: 1 })
     .lean();
   const userIds = users.map((u) => u._id);
   const stateDocs = await ChatState.find({ userId: { $in: userIds } }).lean();
   const stateByUserId = new Map(
-    stateDocs.map((doc) => [String(doc.userId), normalizeChatStateDoc(doc)]),
+    stateDocs.map((doc) => {
+      const scoped = readTeacherScopedChatStateRaw(doc, teacherScopeKey);
+      return [
+        String(doc.userId),
+        scoped ? normalizeChatStateDoc(doc, teacherScopeKey) : null,
+      ];
+    }),
   );
 
   const exportedAt = new Date();
   const userFiles = users.map((user, idx) => {
     const userId = String(user?._id || "");
     const state = stateByUserId.get(userId);
-    const content = buildSingleUserChatExportTxt(user, state, idx + 1, exportedAt);
+    const content = buildSingleUserChatExportTxt(
+      user,
+      state,
+      idx + 1,
+      exportedAt,
+      teacherScopeKey,
+    );
     const username = sanitizeZipFileNamePart(user?.username || `user-${idx + 1}`);
     const shortId = sanitizeZipFileNamePart(userId.slice(-8) || String(idx + 1));
     const fileName = `${String(idx + 1).padStart(3, "0")}-${username}-${shortId}.txt`;
     return { name: fileName, content };
   });
 
-  const readmeContent = buildZipReadme(userFiles.length, exportedAt);
+  const readmeContent = buildZipReadme(userFiles.length, exportedAt, teacherScopeKey);
   const zipBuffer = buildZipBuffer([
     { name: "README.txt", content: readmeContent },
     ...userFiles,
   ]);
 
   const suffix = formatFileStamp(exportedAt);
-  const fileName = `educhat-chats-by-user-${suffix}.zip`;
+  const fileName = `educhat-chats-by-user-${teacherScopeKey}-${suffix}.zip`;
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fileName));
   res.send(zipBuffer);
@@ -1953,9 +2075,17 @@ app.get("/api/auth/admin/export/chats-zip", async (req, res) => {
 
 app.delete("/api/auth/admin/chats", async (req, res) => {
   if (!(await authenticateAdminRequest(req, res))) return;
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.query?.teacherScopeKey);
+  const users = await AuthUser.find({ role: "user" }, { _id: 1 }).lean();
+  const userIds = users.map((user) => user._id);
+  const scopedUserIds = users
+    .map((user) =>
+      buildTeacherScopedStorageUserId(String(user?._id || ""), teacherScopeKey),
+    )
+    .filter(Boolean);
 
   const imageHistoryDocs = await GeneratedImageHistory.find(
-    {},
+    { userId: { $in: scopedUserIds } },
     { _id: 1, ossKey: 1 },
   ).lean();
   let deleteImageHistoryOssSummary = { deletedCount: 0, failedKeys: [] };
@@ -1969,14 +2099,37 @@ app.delete("/api/auth/admin/chats", async (req, res) => {
       error?.message || error,
     );
   }
-  const [chatStateResult, uploadedContextResult, imageHistoryResult] = await Promise.all([
-    ChatState.deleteMany({}),
-    UploadedFileContext.deleteMany({}),
-    GeneratedImageHistory.deleteMany({}),
+  const chatStateResult = isDefaultTeacherScopeKey(teacherScopeKey)
+    ? await ChatState.updateMany(
+        { userId: { $in: userIds } },
+        {
+          $unset: {
+            activeId: "",
+            groups: "",
+            sessions: "",
+            sessionMessages: "",
+            sessionContextRefs: "",
+            settings: "",
+          },
+        },
+      )
+    : await ChatState.updateMany(
+        { userId: { $in: userIds } },
+        {
+          $unset: {
+            [`teacherStates.${teacherScopeKey}`]: "",
+          },
+        },
+      );
+  const [uploadedContextResult, imageHistoryResult] = await Promise.all([
+    UploadedFileContext.deleteMany({ userId: { $in: scopedUserIds } }),
+    GeneratedImageHistory.deleteMany({ userId: { $in: scopedUserIds } }),
   ]);
   res.json({
     ok: true,
-    deletedCount: Number(chatStateResult?.deletedCount || 0),
+    teacherScopeKey,
+    teacherScopeLabel: getTeacherScopeLabel(teacherScopeKey),
+    deletedCount: Number(chatStateResult?.modifiedCount || 0),
     deletedUploadedFileContextCount: Number(uploadedContextResult?.deletedCount || 0),
     deletedImageHistoryCount: Number(imageHistoryResult?.deletedCount || 0),
     deletedImageHistoryOssObjectCount: Number(deleteImageHistoryOssSummary?.deletedCount || 0),
@@ -2241,7 +2394,7 @@ app.post(
   upload.array("files", MAX_FILES),
   async (req, res) => {
     const agentId = sanitizeAgent(req.body?.agentId || "A");
-    const userId = sanitizeId(req.authUser?._id, "");
+    const userId = sanitizeId(req.authStorageUserId || req.authUser?._id, "");
     const files = Array.isArray(req.files) ? req.files.filter(Boolean) : [];
     if (files.length === 0) {
       res.json({ ok: true, files: [] });
@@ -2314,7 +2467,7 @@ app.post(
   async (req, res) => {
     const agentId = sanitizeAgent(req.body?.agentId || "A");
     const sessionId = sanitizeId(req.body?.sessionId, "");
-    const userId = sanitizeId(req.authUser?._id, "");
+    const userId = sanitizeId(req.authStorageUserId || req.authUser?._id, "");
     if (!userId) {
       res.status(400).json({ error: "无效用户身份。" });
       return;
@@ -2429,6 +2582,7 @@ app.post(
   requireChatAuth,
   upload.array("files", MAX_FILES),
   async (req, res) => {
+    if ((await assertPartyAgentPanelRoomAccess(req, res)) === false) return;
     const agentId = sanitizeAgent(req.body?.agentId || "A");
     const sessionId = sanitizeId(req.body?.sessionId, "");
     const smartContextEnabled = sanitizeRuntimeBoolean(req.body?.smartContextEnabled, false);
@@ -2453,6 +2607,8 @@ app.post(
       messages,
       files: req.files || [],
       chatUserId: String(req.authUser?._id || ""),
+      chatStorageUserId: String(req.authStorageUserId || ""),
+      teacherScopeKey: req.authTeacherScopeKey,
       sessionId,
       smartContextEnabled,
       contextMode,
@@ -2468,6 +2624,7 @@ app.post(
   requireChatAuth,
   upload.array("files", MAX_FILES),
   async (req, res) => {
+    if ((await assertPartyAgentPanelRoomAccess(req, res)) === false) return;
     const sessionId = sanitizeId(req.body?.sessionId, "");
     const smartContextEnabled = sanitizeRuntimeBoolean(req.body?.smartContextEnabled, false);
     const contextMode = sanitizeSmartContextMode(req.body?.contextMode);
@@ -2490,6 +2647,8 @@ app.post(
       messages,
       files: req.files || [],
       chatUserId: String(req.authUser?._id || ""),
+      chatStorageUserId: String(req.authStorageUserId || ""),
+      teacherScopeKey: req.authTeacherScopeKey,
       sessionId,
       smartContextEnabled,
       contextMode,
@@ -2510,12 +2669,14 @@ app.post(
       body: req.body || {},
       files: req.files || [],
       chatUserId: String(req.authUser?._id || ""),
+      chatStorageUserId: String(req.authStorageUserId || ""),
+      teacherScopeKey: req.authTeacherScopeKey,
     });
   },
 );
 
 app.get("/api/images/history", requireChatAuth, async (req, res) => {
-  const userId = sanitizeId(req.authUser?._id, "");
+  const userId = sanitizeId(req.authStorageUserId || req.authUser?._id, "");
   if (!userId) {
     res.status(400).json({ error: "无效用户身份。" });
     return;
@@ -2641,7 +2802,7 @@ app.get("/api/images/history/:imageId/content", async (req, res) => {
 });
 
 app.delete("/api/images/history", requireChatAuth, async (req, res) => {
-  const userId = sanitizeId(req.authUser?._id, "");
+  const userId = sanitizeId(req.authStorageUserId || req.authUser?._id, "");
   if (!userId) {
     res.status(400).json({ error: "无效用户身份。" });
     return;
@@ -2670,7 +2831,7 @@ app.delete("/api/images/history", requireChatAuth, async (req, res) => {
 });
 
 app.delete("/api/images/history/:imageId", requireChatAuth, async (req, res) => {
-  const userId = sanitizeId(req.authUser?._id, "");
+  const userId = sanitizeId(req.authStorageUserId || req.authUser?._id, "");
   const imageId = sanitizeId(req.params?.imageId, "");
   if (!userId || !imageId) {
     res.status(400).json({ error: "无效参数。" });
@@ -3017,6 +3178,72 @@ app.patch("/api/group-chat/rooms/:roomId", requireChatAuth, async (req, res) => 
   } catch (error) {
     res.status(500).json({
       error: error?.message || "重命名失败，请稍后重试。",
+    });
+  }
+});
+
+app.patch("/api/group-chat/rooms/:roomId/party-agent-access", requireChatAuth, async (req, res) => {
+  const userId = sanitizeId(req.authUser?._id, "");
+  const roomId = sanitizeId(req.params?.roomId, "");
+  const nextEnabled = sanitizeRuntimeBoolean(req.body?.partyAgentMemberEnabled, true);
+  if (!userId || !roomId) {
+    res.status(400).json({ error: "无效参数。" });
+    return;
+  }
+  if (!isMongoObjectIdLike(roomId)) {
+    res.status(400).json({ error: "无效群聊 ID。" });
+    return;
+  }
+
+  try {
+    const room = await GroupChatRoom.findById(roomId).lean();
+    const normalizedRoom = normalizeGroupChatRoomDoc(room, {
+      viewerUserId: userId,
+    });
+    if (!normalizedRoom) {
+      res.status(404).json({ error: "群聊不存在或已失效。" });
+      return;
+    }
+    if (normalizedRoom.ownerUserId !== userId) {
+      res.status(403).json({ error: "仅派主可设置派Agent成员权限。" });
+      return;
+    }
+
+    if (normalizedRoom.partyAgentMemberEnabled === nextEnabled) {
+      res.json({
+        ok: true,
+        room: normalizedRoom,
+      });
+      return;
+    }
+
+    const updated = await GroupChatRoom.findByIdAndUpdate(
+      roomId,
+      {
+        $set: {
+          partyAgentMemberEnabled: nextEnabled,
+          updatedAt: new Date(),
+        },
+      },
+      { new: true },
+    ).lean();
+    const updatedRoom = normalizeGroupChatRoomDoc(updated, {
+      viewerUserId: userId,
+    });
+    if (!updatedRoom) {
+      res.status(404).json({ error: "群聊不存在或已失效。" });
+      return;
+    }
+
+    broadcastGroupChatRoomUpdated(roomId, updatedRoom);
+
+    res.json({
+      ok: true,
+      room: updatedRoom,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error?.message || "更新派Agent成员权限失败，请稍后重试。",
     });
   }
 });
@@ -5544,6 +5771,8 @@ async function streamAgentEResponse({
   preparedAttachmentRefs = [],
   runtimeOverride = null,
   chatUserId = "",
+  chatStorageUserId = "",
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
   sessionId = "",
   smartContextEnabled = false,
   contextMode = "append",
@@ -5599,6 +5828,8 @@ async function streamAgentEResponse({
       providerLockedTo: effectiveProvider,
     },
     chatUserId,
+    chatStorageUserId,
+    teacherScopeKey,
     sessionId,
     smartContextEnabled,
     contextMode,
@@ -5619,11 +5850,21 @@ async function streamAgentResponse({
   modelOverride = "",
   metaExtras = null,
   chatUserId = "",
+  chatStorageUserId = "",
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
   sessionId = "",
   smartContextEnabled = false,
   contextMode = "append",
   attachUploadedFiles = true,
 }) {
+  const safeChatUserId = sanitizeId(chatUserId, "");
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
+  const storageUserId =
+    sanitizeId(chatStorageUserId, "") ||
+    sanitizeId(
+      buildTeacherScopedStorageUserId(safeChatUserId, safeTeacherScopeKey),
+      "",
+    );
   const hasSystemPromptOverride =
     typeof systemPromptOverride === "string" && !!systemPromptOverride.trim();
   const systemPrompt = hasSystemPromptOverride
@@ -5683,7 +5924,8 @@ async function streamAgentResponse({
     protocol,
     model,
     agentId,
-    userId: chatUserId,
+    userId: safeChatUserId,
+    teacherScopeKey: safeTeacherScopeKey,
     sessionId,
     contextMode,
   });
@@ -5698,7 +5940,7 @@ async function streamAgentResponse({
     attachUploadedFiles && effectivePreparedAttachmentRefs.length > 0
       ? resolvePreparedAttachmentRefsFromCache({
           refs: effectivePreparedAttachmentRefs,
-          userId: chatUserId,
+          userId: storageUserId,
           sessionId,
           provider,
           protocol,
@@ -5775,7 +6017,7 @@ async function streamAgentResponse({
     (filesForLocalAttach.length > 0 || hasPreparedAttachmentEntries);
   if (shouldUsePersistentFileContext && !shouldSkipPersistentFileContextRehydrate) {
     await rehydrateUploadedFileContexts(safeMessages, {
-      userId: chatUserId,
+      userId: storageUserId,
       sessionId,
       provider,
       protocol,
@@ -5888,7 +6130,7 @@ async function streamAgentResponse({
       filesForLocalAttach = uploadedBundle.fallbackFiles;
       const uploadedToOss = await uploadChatAttachmentsToOss({
         files: uploadedBundle.uploadedFiles,
-        userId: chatUserId,
+        userId: storageUserId,
         sessionId,
         source: "stream-volcengine-files-api",
         stopOnError: false,
@@ -5916,7 +6158,7 @@ async function streamAgentResponse({
     try {
       uploadedContextOssFiles = await uploadChatAttachmentsToOss({
         files: filesForLocalAttach,
-        userId: chatUserId,
+        userId: storageUserId,
         sessionId,
         source: `${provider}-${protocol}-local`,
         stopOnError: true,
@@ -5949,7 +6191,7 @@ async function streamAgentResponse({
           protocol,
           model,
           ossFiles: uploadedContextOssFiles,
-          userId: chatUserId,
+          userId: storageUserId,
           sessionId,
           aliyunFileProcessMode,
         },
@@ -5987,7 +6229,7 @@ async function streamAgentResponse({
   }
   if (shouldUsePersistentFileContext && uploadedFileContextRecord?.messageId) {
     await saveUploadedFileContext({
-      userId: chatUserId,
+      userId: storageUserId,
       sessionId,
       messageId: uploadedFileContextRecord.messageId,
       content: uploadedFileContextRecord.content,
@@ -5996,7 +6238,7 @@ async function streamAgentResponse({
     });
     if (shouldKeepOnlyLatestAliyunFileContext) {
       await pruneUploadedFileContextsForSession({
-        userId: chatUserId,
+        userId: storageUserId,
         sessionId,
         keepMessageId: uploadedFileContextRecord.messageId,
       });
@@ -6213,7 +6455,7 @@ async function streamAgentResponse({
               protocol,
               model,
               ossFiles: uploadedContextOssFiles,
-              userId: chatUserId,
+              userId: storageUserId,
               sessionId,
               aliyunFileProcessMode: "local_parse",
             },
@@ -6236,7 +6478,7 @@ async function streamAgentResponse({
       }
       if (shouldUsePersistentFileContext && retryUploadedContextRecord?.messageId) {
         await saveUploadedFileContext({
-          userId: chatUserId,
+          userId: storageUserId,
           sessionId,
           messageId: retryUploadedContextRecord.messageId,
           content: retryUploadedContextRecord.content,
@@ -6245,7 +6487,7 @@ async function streamAgentResponse({
         });
         if (shouldKeepOnlyLatestAliyunFileContext) {
           await pruneUploadedFileContextsForSession({
-            userId: chatUserId,
+            userId: storageUserId,
             sessionId,
             keepMessageId: retryUploadedContextRecord.messageId,
           });
@@ -6337,6 +6579,7 @@ async function streamAgentResponse({
       ) {
         await clearSessionContextRef({
           userId: smartContextRuntime.userId,
+          teacherScopeKey: smartContextRuntime.teacherScopeKey,
           sessionId: smartContextRuntime.sessionId,
         });
       }
@@ -6374,6 +6617,7 @@ async function streamAgentResponse({
       if (nextResponseId) {
         await saveSessionContextRef({
           userId: smartContextRuntime.userId,
+          teacherScopeKey: smartContextRuntime.teacherScopeKey,
           sessionId: smartContextRuntime.sessionId,
           previousResponseId: nextResponseId,
           provider,
@@ -6409,7 +6653,16 @@ async function streamAgentResponse({
   }
 }
 
-async function streamSeedreamImageGeneration({ res, body, files = [], chatUserId = "" }) {
+async function streamSeedreamImageGeneration({
+  res,
+  body,
+  files = [],
+  chatUserId = "",
+  chatStorageUserId = "",
+}) {
+  const safeChatUserId = sanitizeId(chatUserId, "");
+  const safeChatStorageUserId =
+    sanitizeId(chatStorageUserId, "") || safeChatUserId;
   const imageConfig = getVolcengineImageGenerationConfig();
   if (!imageConfig.apiKey) {
     res.status(500).json({ error: imageConfig.missingKeyMessage });
@@ -6422,7 +6675,7 @@ async function streamSeedreamImageGeneration({ res, body, files = [], chatUserId
       body,
       files,
       model: imageConfig.model,
-      chatUserId,
+      chatStorageUserId: safeChatStorageUserId,
     });
   } catch (error) {
     res.status(400).json({ error: error?.message || "图片输入参数不合法。" });
@@ -6517,7 +6770,7 @@ async function streamSeedreamImageGeneration({ res, body, files = [], chatUserId
 
     if (generatedImageByIndex.size > 0) {
       await saveGeneratedImageHistory({
-        userId: chatUserId,
+        userId: safeChatStorageUserId,
         prompt: request.prompt,
         responseFormat: request.payload.response_format,
         model: request.payload.model,
@@ -6534,7 +6787,12 @@ async function streamSeedreamImageGeneration({ res, body, files = [], chatUserId
   }
 }
 
-async function buildSeedreamImageGenerationRequest({ body, files, model, chatUserId = "" }) {
+async function buildSeedreamImageGenerationRequest({
+  body,
+  files,
+  model,
+  chatStorageUserId = "",
+}) {
   const prompt = sanitizeText(body?.prompt, "", 2000);
   const size = normalizeSeedreamSize(body?.size);
   const sequentialImageGeneration = normalizeSeedreamSequentialMode(
@@ -6546,7 +6804,7 @@ async function buildSeedreamImageGenerationRequest({ body, files, model, chatUse
   const imageUrls = parseSeedreamImageInputs(body?.imageUrls);
   const fileInputs = await buildSeedreamFileImageInputs({
     files,
-    chatUserId,
+    chatStorageUserId,
   });
   const inputImages = [...imageUrls, ...fileInputs];
   if (inputImages.length > MAX_IMAGE_GENERATION_INPUT_FILES) {
@@ -6660,7 +6918,7 @@ function isSeedreamImageInputUrl(value) {
   return /^https?:\/\//i.test(text) || /^data:image\//i.test(text);
 }
 
-async function buildSeedreamFileImageInputs({ files, chatUserId = "" }) {
+async function buildSeedreamFileImageInputs({ files, chatStorageUserId = "" }) {
   const safeFiles = Array.isArray(files) ? files : [];
   const list = [];
   for (let idx = 0; idx < safeFiles.length; idx += 1) {
@@ -6687,7 +6945,7 @@ async function buildSeedreamFileImageInputs({ files, chatUserId = "" }) {
     try {
       const uploaded = await uploadBufferToGroupChatOss({
         scope: IMAGE_GENERATION_INPUT_OSS_SCOPE,
-        userId: chatUserId,
+        userId: chatStorageUserId,
         sessionId: "",
         fileName: safeFileName,
         mimeType: mime,
@@ -8001,11 +8259,13 @@ async function resolveSmartContextRuntime({
   model,
   agentId,
   userId,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
   sessionId,
   contextMode,
 }) {
   const requestedEnabled = sanitizeRuntimeBoolean(requested, false);
   const safeUserId = sanitizeId(userId, "");
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
   const safeSessionId = sanitizeId(sessionId, "");
   const safeContextMode = sanitizeSmartContextMode(contextMode);
   const normalizedModel = String(sanitizeRuntimeModel(model) || "")
@@ -8023,6 +8283,7 @@ async function resolveSmartContextRuntime({
     requested: requestedEnabled,
     enabled,
     userId: safeUserId,
+    teacherScopeKey: safeTeacherScopeKey,
     sessionId: safeSessionId,
     contextMode: safeContextMode,
     usePreviousResponseId: false,
@@ -8033,7 +8294,11 @@ async function resolveSmartContextRuntime({
 
   if (!enabled) return runtime;
 
-  const ref = await readSessionContextRef({ userId: safeUserId, sessionId: safeSessionId });
+  const ref = await readSessionContextRef({
+    userId: safeUserId,
+    teacherScopeKey: safeTeacherScopeKey,
+    sessionId: safeSessionId,
+  });
   if (!ref) return runtime;
 
   const sameProvider = ref.provider === provider;
@@ -8050,19 +8315,21 @@ async function resolveSmartContextRuntime({
   return runtime;
 }
 
-async function readSessionContextRef({ userId, sessionId }) {
+async function readSessionContextRef({
+  userId,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+  sessionId,
+}) {
   const safeUserId = sanitizeId(userId, "");
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
   const safeSessionId = sanitizeId(sessionId, "");
   if (!safeUserId || !safeSessionId) return null;
 
   const stateDoc = await ChatState.findOne(
     { userId: safeUserId },
-    { sessionContextRefs: 1 },
+    { sessionContextRefs: 1, teacherStates: 1 },
   ).lean();
-  const refs =
-    stateDoc?.sessionContextRefs && typeof stateDoc.sessionContextRefs === "object"
-      ? stateDoc.sessionContextRefs
-      : {};
+  const refs = readTeacherScopedSessionContextRefs(stateDoc, safeTeacherScopeKey);
   const raw = refs[safeSessionId];
   if (!raw || typeof raw !== "object") return null;
 
@@ -8094,6 +8361,7 @@ async function readSessionContextRef({ userId, sessionId }) {
 
 async function saveSessionContextRef({
   userId,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
   sessionId,
   previousResponseId,
   provider,
@@ -8102,6 +8370,7 @@ async function saveSessionContextRef({
   agentId,
 }) {
   const safeUserId = sanitizeId(userId, "");
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
   const safeSessionId = sanitizeId(sessionId, "");
   const safeResponseId = sanitizeText(previousResponseId, "", 160);
   if (!safeUserId || !safeSessionId || !safeResponseId) return;
@@ -8125,7 +8394,10 @@ async function saveSessionContextRef({
     {
       $set: {
         userId: safeUserId,
-        [`sessionContextRefs.${safeSessionId}`]: {
+        [getTeacherScopedChatStatePath(
+          `sessionContextRefs.${safeSessionId}`,
+          safeTeacherScopeKey,
+        )]: {
           previousResponseId: safeResponseId,
           provider: safeProvider,
           protocol: safeProtocol,
@@ -8135,12 +8407,21 @@ async function saveSessionContextRef({
         },
       },
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: isDefaultTeacherScopeKey(safeTeacherScopeKey),
+    },
   );
 }
 
-async function clearSessionContextRef({ userId, sessionId }) {
+async function clearSessionContextRef({
+  userId,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+  sessionId,
+}) {
   const safeUserId = sanitizeId(userId, "");
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
   const safeSessionId = sanitizeId(sessionId, "");
   if (!safeUserId || !safeSessionId) return;
 
@@ -8148,9 +8429,18 @@ async function clearSessionContextRef({ userId, sessionId }) {
     { userId: safeUserId },
     {
       $set: { userId: safeUserId },
-      $unset: { [`sessionContextRefs.${safeSessionId}`]: "" },
+      $unset: {
+        [getTeacherScopedChatStatePath(
+          `sessionContextRefs.${safeSessionId}`,
+          safeTeacherScopeKey,
+        )]: "",
+      },
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: isDefaultTeacherScopeKey(safeTeacherScopeKey),
+    },
   );
 }
 
@@ -10297,6 +10587,8 @@ function requireChatAuth(req, res, next) {
     return;
   }
 
+  const teacherScopeKey = sanitizeTeacherScopeKey(payload.tkey);
+
   AuthUser.findById(payload.uid)
     .then((user) => {
       if (!user) {
@@ -10304,6 +10596,11 @@ function requireChatAuth(req, res, next) {
         return;
       }
       req.authUser = user;
+      req.authTeacherScopeKey = teacherScopeKey;
+      req.authStorageUserId = buildTeacherScopedStorageUserId(
+        String(user?._id || ""),
+        teacherScopeKey,
+      );
       next();
     })
     .catch((error) => {
@@ -10317,7 +10614,10 @@ function resolveImageHistoryAuthUserId(req) {
   const token = bearerToken || queryToken;
   const payload = verifyToken(token);
   if (!payload || payload.scope !== "chat" || !payload.uid) return "";
-  return sanitizeId(payload.uid, "");
+  return buildTeacherScopedStorageUserId(
+    sanitizeId(payload.uid, ""),
+    sanitizeTeacherScopeKey(payload.tkey),
+  );
 }
 
 async function requireAdminAuth(req, res, next) {
@@ -10386,15 +10686,68 @@ function defaultChatState() {
   };
 }
 
-function normalizeChatStateDoc(doc) {
-  if (!doc) return defaultChatState();
+function readChatStateShape(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const hasStoredFields = [
+    "activeId",
+    "groups",
+    "sessions",
+    "sessionMessages",
+    "sessionContextRefs",
+    "settings",
+  ].some((key) => Object.prototype.hasOwnProperty.call(raw, key));
+  if (!hasStoredFields) return null;
+  return {
+    activeId: raw.activeId,
+    groups: raw.groups,
+    sessions: raw.sessions,
+    sessionMessages: raw.sessionMessages,
+    sessionContextRefs: raw.sessionContextRefs,
+    settings: raw.settings,
+  };
+}
+
+function readTeacherScopedChatStateRaw(doc, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY) {
+  if (!doc) return null;
+
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
+  if (isDefaultTeacherScopeKey(safeTeacherScopeKey)) {
+    return readChatStateShape(doc);
+  }
+
+  const teacherStates =
+    doc?.teacherStates && typeof doc.teacherStates === "object"
+      ? doc.teacherStates
+      : {};
+  return readChatStateShape(teacherStates[safeTeacherScopeKey]);
+}
+
+function normalizeChatStateDoc(doc, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY) {
+  const scoped = readTeacherScopedChatStateRaw(doc, teacherScopeKey);
+  if (!scoped) return defaultChatState();
   return sanitizeChatStatePayload({
-    activeId: doc.activeId,
-    groups: doc.groups,
-    sessions: doc.sessions,
-    sessionMessages: doc.sessionMessages,
-    settings: doc.settings,
+    activeId: scoped.activeId,
+    groups: scoped.groups,
+    sessions: scoped.sessions,
+    sessionMessages: scoped.sessionMessages,
+    settings: scoped.settings,
   });
+}
+
+function getTeacherScopedChatStatePath(field, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY) {
+  const safeField = String(field || "").trim();
+  if (!safeField) return "";
+
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
+  if (isDefaultTeacherScopeKey(safeTeacherScopeKey)) return safeField;
+  return `teacherStates.${safeTeacherScopeKey}.${safeField}`;
+}
+
+function readTeacherScopedSessionContextRefs(doc, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY) {
+  const scoped = readTeacherScopedChatStateRaw(doc, teacherScopeKey);
+  return scoped?.sessionContextRefs && typeof scoped.sessionContextRefs === "object"
+    ? scoped.sessionContextRefs
+    : {};
 }
 
 function sanitizeChatStatePayload(payload) {
@@ -10907,6 +11260,7 @@ function normalizeGroupChatRoomDoc(doc, options = {}) {
     roomCode: sanitizeGroupChatCode(doc.roomCode),
     name: sanitizeGroupChatRoomName(doc.name),
     ownerUserId,
+    partyAgentMemberEnabled: sanitizeRuntimeBoolean(doc.partyAgentMemberEnabled, true),
     memberUserIds,
     memberCount: Math.max(memberUserIds.length, sanitizeRuntimeInteger(doc.memberCount, 1, 1, 999)),
     createdAt: sanitizeIsoDate(doc.createdAt),
@@ -13054,6 +13408,47 @@ function broadcastGroupChatRoomUpdated(roomId, room) {
   });
 }
 
+async function assertPartyAgentPanelRoomAccess(req, res) {
+  const requestSource = String(req.body?.requestSource || "")
+    .trim()
+    .toLowerCase();
+  const roomId = sanitizeId(req.body?.partyRoomId, "");
+  const requiresPartyRoomGuard = requestSource === "party-agent-panel" || !!roomId;
+
+  if (!requiresPartyRoomGuard) return null;
+  if (requestSource === "party-agent-panel" && !roomId) {
+    res.status(400).json({ error: "派Agent 请求缺少房间 ID。" });
+    return false;
+  }
+  if (!roomId || !isMongoObjectIdLike(roomId)) {
+    res.status(400).json({ error: "无效派房间 ID。" });
+    return false;
+  }
+
+  const userId = sanitizeId(req.authUser?._id, "");
+  if (!userId) {
+    res.status(401).json({ error: "登录状态无效或已过期，请重新登录。" });
+    return false;
+  }
+
+  const room = await GroupChatRoom.findOne({ _id: roomId, memberUserIds: userId }).lean();
+  const normalizedRoom = normalizeGroupChatRoomDoc(room, {
+    viewerUserId: userId,
+  });
+  if (!normalizedRoom) {
+    res.status(403).json({ error: "你不是该派成员，不能使用该派的派Agent。" });
+    return false;
+  }
+
+  const isOwner = normalizedRoom.ownerUserId === userId;
+  if (!isOwner && !normalizedRoom.partyAgentMemberEnabled) {
+    res.status(403).json({ error: "派主暂未开放成员使用派Agent。" });
+    return false;
+  }
+
+  return normalizedRoom;
+}
+
 function broadcastGroupChatRoomDissolved(roomId, byUser) {
   const safeRoomId = sanitizeId(roomId, "");
   if (!safeRoomId) return;
@@ -13084,6 +13479,14 @@ function broadcastGroupChatMemberJoined(roomId, user) {
 async function startServer() {
   await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 6000 });
   console.log(`Mongo connected: ${mongoUri}`);
+  await ensureFixedAdminAccounts();
+  await ensureFixedStudentAccounts();
+  console.log(
+    `Fixed admin accounts ensured: ${FIXED_ADMIN_ACCOUNTS.map((item) => item.username).join(", ")}`,
+  );
+  console.log(
+    `Fixed student accounts ensured: ${FIXED_STUDENT_ACCOUNTS.length} accounts for ${getTeacherScopeLabel(FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY)}`,
+  );
 
   const server = http.createServer(app);
   initGroupChatWebSocketServer(server);
@@ -13367,6 +13770,48 @@ function toUsernameKey(name) {
     .toLowerCase();
 }
 
+function isReservedAdminUsernameKey(usernameKey) {
+  return RESERVED_ADMIN_USERNAME_KEYS.has(
+    String(usernameKey || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+function isFixedAdminUsernameKey(usernameKey) {
+  return FIXED_ADMIN_USERNAME_KEYS.has(
+    String(usernameKey || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+function isFixedAdminUser(user) {
+  return !!user && user.role === "admin" && isFixedAdminUsernameKey(user.usernameKey);
+}
+
+function isFixedStudentUsernameKey(usernameKey) {
+  return FIXED_STUDENT_USERNAME_KEYS.has(
+    String(usernameKey || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+function isFixedStudentUser(user) {
+  return (
+    !!user &&
+    user.role === "user" &&
+    (String(user.accountTag || "").trim() === FIXED_STUDENT_ACCOUNT_TAG ||
+      isFixedStudentUsernameKey(user.usernameKey))
+  );
+}
+
+function readLockedTeacherScopeKey(value) {
+  const raw = String(value || "").trim();
+  return raw ? sanitizeTeacherScopeKey(raw) : "";
+}
+
 function validatePassword(password) {
   const value = String(password || "");
   if (!value) return "请输入密码。";
@@ -13394,6 +13839,112 @@ async function verifyPassword(password, storedHash) {
   const b = Buffer.from(derived);
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
+}
+
+async function ensureFixedAdminAccounts() {
+  for (const account of FIXED_ADMIN_ACCOUNTS) {
+    const username = normalizeUsername(account?.username) || String(account?.username || "").trim();
+    const password = String(account?.password || "");
+    if (!username || !password) continue;
+
+    const usernameKey = toUsernameKey(username);
+    const existing = await AuthUser.findOne({ usernameKey });
+    const hashMatches = existing
+      ? await verifyPassword(password, existing.passwordHash).catch(() => false)
+      : false;
+
+    if (!existing) {
+      const passwordHash = await hashPassword(password);
+      await AuthUser.create({
+        username,
+        usernameKey,
+        role: "admin",
+        passwordHash,
+        passwordPlain: password,
+      });
+      continue;
+    }
+
+    const needsUpdate =
+      existing.role !== "admin" ||
+      existing.username !== username ||
+      existing.passwordPlain !== password ||
+      !hashMatches;
+    if (!needsUpdate) continue;
+
+    existing.username = username;
+    existing.usernameKey = usernameKey;
+    existing.role = "admin";
+    existing.passwordPlain = password;
+    existing.passwordHash = await hashPassword(password);
+    await existing.save();
+  }
+}
+
+async function ensureFixedStudentAccounts() {
+  for (const account of FIXED_STUDENT_ACCOUNTS) {
+    const username = normalizeUsername(account?.username) || String(account?.username || "").trim();
+    const password = String(account?.password || "");
+    const className = sanitizeText(account?.className, "", 40);
+    const studentId = sanitizeText(account?.studentId, "", 20);
+    const lockedTeacherScopeKey = sanitizeTeacherScopeKey(
+      account?.requiredTeacherScopeKey || FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
+    );
+    if (!username || !password || !studentId || !lockedTeacherScopeKey) continue;
+
+    const usernameKey = toUsernameKey(username);
+    const existing = await AuthUser.findOne({ usernameKey });
+    const hashMatches = existing
+      ? await verifyPassword(password, existing.passwordHash).catch(() => false)
+      : false;
+
+    if (!existing) {
+      const passwordHash = await hashPassword(password);
+      await AuthUser.create({
+        username,
+        usernameKey,
+        role: "user",
+        passwordHash,
+        passwordPlain: password,
+        accountTag: FIXED_STUDENT_ACCOUNT_TAG,
+        lockedTeacherScopeKey,
+        profile: {
+          name: username,
+          studentId,
+          className,
+        },
+      });
+      continue;
+    }
+
+    const nextProfile = {
+      ...sanitizeUserProfile(existing.profile),
+      name: username,
+      studentId,
+      className,
+    };
+    const needsUpdate =
+      existing.role !== "user" ||
+      existing.username !== username ||
+      existing.passwordPlain !== password ||
+      !hashMatches ||
+      String(existing.accountTag || "").trim() !== FIXED_STUDENT_ACCOUNT_TAG ||
+      readLockedTeacherScopeKey(existing.lockedTeacherScopeKey) !== lockedTeacherScopeKey ||
+      nextProfile.name !== sanitizeText(existing.profile?.name, "", 20) ||
+      nextProfile.studentId !== sanitizeText(existing.profile?.studentId, "", 20) ||
+      nextProfile.className !== sanitizeText(existing.profile?.className, "", 40);
+    if (!needsUpdate) continue;
+
+    existing.username = username;
+    existing.usernameKey = usernameKey;
+    existing.role = "user";
+    existing.passwordPlain = password;
+    existing.passwordHash = await hashPassword(password);
+    existing.accountTag = FIXED_STUDENT_ACCOUNT_TAG;
+    existing.lockedTeacherScopeKey = lockedTeacherScopeKey;
+    existing.profile = nextProfile;
+    await existing.save();
+  }
 }
 
 function signToken(payload, ttlSeconds) {
@@ -13451,7 +14002,7 @@ async function authenticateAdminRequest(req, res) {
   }
 
   const admin = await AuthUser.findById(payload.uid).lean();
-  if (!admin || admin.role !== "admin" || admin.usernameKey !== "admin") {
+  if (!isFixedAdminUser(admin)) {
     res.status(403).json({ error: "仅管理员可访问。" });
     return null;
   }
@@ -13478,11 +14029,17 @@ function buildAdminUsersExportTxt(users) {
   return lines.join("\n");
 }
 
-function buildAdminChatsExportTxt(users, stateByUserId) {
+function buildAdminChatsExportTxt(
+  users,
+  stateByUserId,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+) {
   const exportedAt = new Date();
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
   const lines = [
     "EduChat 管理员导出：全量聊天数据",
     `导出时间: ${formatDisplayTime(exportedAt)}`,
+    `授课教师: ${getTeacherScopeLabel(safeTeacherScopeKey)}`,
     `总用户数: ${users.length}`,
     "",
   ];
@@ -13490,24 +14047,38 @@ function buildAdminChatsExportTxt(users, stateByUserId) {
   users.forEach((user, userIndex) => {
     const userId = String(user?._id || "");
     const state = stateByUserId.get(userId);
-    appendUserChatSection(lines, user, state, userIndex + 1);
+    appendUserChatSection(lines, user, state, userIndex + 1, safeTeacherScopeKey);
     lines.push("");
   });
 
   return lines.join("\n");
 }
 
-function buildSingleUserChatExportTxt(user, state, userIndex = 1, exportedAt = new Date()) {
+function buildSingleUserChatExportTxt(
+  user,
+  state,
+  userIndex = 1,
+  exportedAt = new Date(),
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+) {
+  const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
   const lines = [
     "EduChat 用户聊天数据",
     `导出时间: ${formatDisplayTime(exportedAt)}`,
+    `授课教师: ${getTeacherScopeLabel(safeTeacherScopeKey)}`,
     "",
   ];
-  appendUserChatSection(lines, user, state, userIndex);
+  appendUserChatSection(lines, user, state, userIndex, safeTeacherScopeKey);
   return lines.join("\n");
 }
 
-function appendUserChatSection(lines, user, state, userIndex = 1) {
+function appendUserChatSection(
+  lines,
+  user,
+  state,
+  userIndex = 1,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+) {
   const userId = String(user?._id || "");
   const profile = sanitizeUserProfile(user?.profile);
   const groups = Array.isArray(state?.groups) ? state.groups : [];
@@ -13522,6 +14093,7 @@ function appendUserChatSection(lines, user, state, userIndex = 1) {
   lines.push(`账号: ${user?.username || "-"}`);
   lines.push(`角色: ${user?.role || "user"}`);
   lines.push(`用户ID: ${userId || "-"}`);
+  lines.push(`授课教师: ${getTeacherScopeLabel(teacherScopeKey)}`);
   lines.push(`注册时间: ${formatDisplayTime(user?.createdAt)}`);
   lines.push(`更新时间: ${formatDisplayTime(user?.updatedAt)}`);
   lines.push("个人信息:");
@@ -13678,10 +14250,15 @@ function formatMaybeNumber(value) {
   return String(n);
 }
 
-function buildZipReadme(fileCount, exportedAt) {
+function buildZipReadme(
+  fileCount,
+  exportedAt,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+) {
   return [
     "EduChat 管理员导出：按用户分文件聊天数据 ZIP",
     `导出时间: ${formatDisplayTime(exportedAt)}`,
+    `授课教师: ${getTeacherScopeLabel(teacherScopeKey)}`,
     `文件数量: ${fileCount}`,
     "",
     "说明:",

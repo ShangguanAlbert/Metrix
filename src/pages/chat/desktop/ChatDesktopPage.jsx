@@ -55,6 +55,7 @@ import {
   saveUserProfile,
   uploadVolcengineChatFiles,
 } from "../stateApi.js";
+import { clearUserAuthSession, withAuthSlot } from "../../../app/authStorage.js";
 import {
   createNewSessionRecord,
   createWelcomeMessage,
@@ -665,7 +666,7 @@ export default function ChatDesktopPage() {
     if (context) {
       saveImageReturnContext(context);
     }
-    navigate("/image-generation", {
+    navigate(withAuthSlot("/image-generation"), {
       state: {
         returnContext: context,
       },
@@ -673,7 +674,7 @@ export default function ChatDesktopPage() {
   }
 
   function onOpenGroupChat() {
-    navigate("/party");
+    navigate(withAuthSlot("/party"));
   }
 
   function onDeleteSession(sessionId) {
@@ -1628,9 +1629,8 @@ export default function ChatDesktopPage() {
   }
 
   function onLogout() {
-    localStorage.removeItem("token");
-    localStorage.removeItem("auth_user");
-    navigate("/login", { replace: true });
+    clearUserAuthSession();
+    navigate(withAuthSlot("/login"), { replace: true });
   }
 
   async function submitUserInfo(e) {
@@ -1831,9 +1831,8 @@ export default function ChatDesktopPage() {
           msg.includes("重新登录") ||
           msg.includes("账号不存在")
         ) {
-          localStorage.removeItem("token");
-          localStorage.removeItem("auth_user");
-          navigate("/login", { replace: true });
+          clearUserAuthSession();
+          navigate(withAuthSlot("/login"), { replace: true });
           return;
         }
         persistReadyRef.current = true;

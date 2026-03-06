@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import ModalOverlay from "../components/login/ModalOverlay.jsx";
+import PortalSelect from "../components/PortalSelect.jsx";
+import { setStoredAuthUser, setUserToken, withAuthSlot } from "../app/authStorage.js";
 import {
   adminLogin,
   fetchAuthStatus,
@@ -12,6 +14,15 @@ import {
 } from "./auth/authApi.js";
 import { setAdminToken } from "./login/adminSession.js";
 import { EMPTY_AUTH_STATUS, PRIVACY_POLICY_SECTIONS } from "./login/loginConstants.js";
+import {
+  DEFAULT_TEACHER_SCOPE_KEY,
+  TEACHER_SCOPE_OPTIONS,
+  getTeacherScopeLabel,
+} from "../../shared/teacherScopes.js";
+import {
+  findFixedStudentLoginRuleByUsername,
+  resolveFixedStudentTeacherScopeKeyByUsername,
+} from "./login/fixedStudentLoginRules.js";
 import "../styles/login.css";
 
 function readErrorMessage(error) {
@@ -23,6 +34,7 @@ export default function LoginPage() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [teacherScopeKey, setTeacherScopeKey] = useState(DEFAULT_TEACHER_SCOPE_KEY);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState(false);
@@ -49,29 +61,54 @@ export default function LoginPage() {
   const [forgotSaving, setForgotSaving] = useState(false);
 
   const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
-  const [adminUsername, setAdminUsername] = useState("admin");
+  const [adminUsername, setAdminUsername] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [adminLoginLoading, setAdminLoginLoading] = useState(false);
   const [adminLoginErr, setAdminLoginErr] = useState("");
 
-  const bootstrapMode = !authStatus.hasAnyUser;
-
   const loginHint = useMemo(() => {
     if (authStatusLoading) return "正在读取账号状态…";
-    if (bootstrapMode) return "首次运行请先注册管理员账号（admin）。";
+    if (!authStatus.hasAnyUser) return "尚未注册普通用户账号，请先点击“注册账号”。";
     return "";
-  }, [authStatusLoading, bootstrapMode]);
+  }, [authStatus.hasAnyUser, authStatusLoading]);
+
+  const lockedTeacherScopeKey = useMemo(
+    () => resolveFixedStudentTeacherScopeKeyByUsername(username),
+    [username],
+  );
+  const fixedStudentLoginRule = useMemo(
+    () => findFixedStudentLoginRuleByUsername(username),
+    [username],
+  );
+  const lockedTeacherScopeLabel = useMemo(
+    () => (lockedTeacherScopeKey ? getTeacherScopeLabel(lockedTeacherScopeKey) : ""),
+    [lockedTeacherScopeKey],
+  );
+
+  useEffect(() => {
+    if (lockedTeacherScopeKey && teacherScopeKey !== lockedTeacherScopeKey) {
+      setTeacherScopeKey(lockedTeacherScopeKey);
+    }
+  }, [lockedTeacherScopeKey, teacherScopeKey]);
 
   async function refreshAuthStatus() {
     setAuthStatusLoading(true);
     try {
       const data = await fetchAuthStatus();
+      const adminUsernames = Array.isArray(data.adminUsernames)
+        ? data.adminUsernames.filter(Boolean)
+        : [];
       setAuthStatus({
         hasAnyUser: !!data.hasAnyUser,
         hasAdmin: !!data.hasAdmin,
-        adminUsername: data.adminUsername || "admin",
+        adminUsernames,
+        preloadedStudentCount: Number(data.preloadedStudentCount || 0),
+        preloadedStudentTeacherScopeKey: String(data.preloadedStudentTeacherScopeKey || ""),
+        preloadedStudentTeacherScopeLabel: String(data.preloadedStudentTeacherScopeLabel || ""),
       });
-      setAdminUsername(data.adminUsername || "admin");
+      setAdminUsername((current) =>
+        adminUsernames.includes(current) ? current : adminUsernames[0] || "",
+      );
     } catch (error) {
       setErr(readErrorMessage(error));
       setAuthStatus(EMPTY_AUTH_STATUS);
@@ -92,17 +129,21 @@ export default function LoginPage() {
     if (!username.trim()) return setErr("请输入用户名");
     if (!password) return setErr("请输入密码");
     if (!privacyAgreed) return setErr("请先勾选并同意隐私政策");
-    if (bootstrapMode) return setErr("尚未注册账号，请先注册管理员账号。");
 
     setLoading(true);
     try {
       const data = await loginAccount({
         username: username.trim(),
         password,
+        teacherScopeKey,
       });
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("auth_user", JSON.stringify(data.user || {}));
-      navigate("/chat");
+      setUserToken(data.token);
+      setStoredAuthUser({
+        ...(data.user || {}),
+        teacherScopeKey: data.teacherScopeKey || teacherScopeKey,
+        teacherScopeLabel: data.teacherScopeLabel || "",
+      });
+      navigate(withAuthSlot("/chat"));
     } catch (error) {
       setErr(readErrorMessage(error));
     } finally {
@@ -114,7 +155,7 @@ export default function LoginPage() {
     setRegisterErr("");
     setRegisterPassword("");
     setRegisterPasswordConfirm("");
-    setRegisterUsername(bootstrapMode ? "admin" : "");
+    setRegisterUsername("");
     setShowRegisterModal(true);
     setAdminNotice("");
   }
@@ -123,7 +164,7 @@ export default function LoginPage() {
     e.preventDefault();
     setRegisterErr("");
 
-    const targetUsername = bootstrapMode ? "admin" : registerUsername.trim();
+    const targetUsername = registerUsername.trim();
     if (!targetUsername) return setRegisterErr("请输入用户名。");
     if (!registerPassword) return setRegisterErr("请输入密码。");
     if (registerPassword !== registerPasswordConfirm) {
@@ -140,11 +181,7 @@ export default function LoginPage() {
       setShowRegisterModal(false);
       setUsername(data?.user?.username || targetUsername);
       setPassword("");
-      setErr(
-        data.bootstrapAdmin
-          ? "管理员账号已创建，请使用 admin 登录。"
-          : "注册成功，请登录。",
-      );
+      setErr("注册成功，请登录。");
       await refreshAuthStatus();
     } catch (error) {
       setRegisterErr(readErrorMessage(error));
@@ -220,10 +257,11 @@ export default function LoginPage() {
     setAdminLoginErr("");
     if (authStatusLoading) return;
     if (!authStatus.hasAdmin) {
-      setAdminNotice("管理员未注册，请先注册");
+      setAdminNotice("管理员账号未初始化。");
       return;
     }
 
+    setAdminUsername((current) => current || authStatus.adminUsernames[0] || "");
     setAdminPassword("");
     setShowAdminLoginModal(true);
   }
@@ -232,6 +270,10 @@ export default function LoginPage() {
     e.preventDefault();
     setAdminLoginErr("");
 
+    if (!adminUsername.trim()) {
+      setAdminLoginErr("请选择管理员账号。");
+      return;
+    }
     if (!adminPassword) {
       setAdminLoginErr("请输入管理员密码。");
       return;
@@ -240,7 +282,7 @@ export default function LoginPage() {
     setAdminLoginLoading(true);
     try {
       const loginData = await adminLogin({
-        username: adminUsername.trim() || "admin",
+        username: adminUsername.trim(),
         password: adminPassword,
       });
 
@@ -252,7 +294,7 @@ export default function LoginPage() {
 
       setAdminToken(nextToken);
       setShowAdminLoginModal(false);
-      navigate("/admin/settings");
+      navigate(withAuthSlot("/admin/settings"));
     } catch (error) {
       setAdminLoginErr(readErrorMessage(error));
     } finally {
@@ -295,6 +337,29 @@ export default function LoginPage() {
               placeholder="请输入密码"
               autoComplete="current-password"
             />
+          </div>
+
+          <div className="login-field">
+            <label className="login-label">授课教师</label>
+            <PortalSelect
+              className="login-portal-select"
+              value={teacherScopeKey}
+              ariaLabel="选择授课教师"
+              options={TEACHER_SCOPE_OPTIONS.map((item) => ({
+                value: item.key,
+                label:
+                  item.key === DEFAULT_TEACHER_SCOPE_KEY
+                    ? `${item.label}（历史数据）`
+                    : item.label,
+              }))}
+              onChange={setTeacherScopeKey}
+              disabled={!!lockedTeacherScopeKey}
+            />
+            {lockedTeacherScopeKey ? (
+              <p className="login-field-note">
+                {`检测到预置学生账号“${fixedStudentLoginRule?.username || username.trim()}”，授课教师已自动锁定为“${lockedTeacherScopeLabel}”。`}
+              </p>
+            ) : null}
           </div>
 
           <div className="login-consent-row">
@@ -385,11 +450,7 @@ export default function LoginPage() {
       {showRegisterModal && (
         <ModalOverlay
           title="注册账号"
-          subtitle={
-            bootstrapMode
-              ? "首次注册将自动创建管理员账号（admin）"
-              : "创建普通用户账号用于登录"
-          }
+          subtitle="创建普通用户账号用于登录"
           onClose={() => setShowRegisterModal(false)}
         >
           <form onSubmit={onRegisterSubmit}>
@@ -397,10 +458,10 @@ export default function LoginPage() {
               <label className="login-label">用户名</label>
               <input
                 className="login-input"
-                value={bootstrapMode ? "admin" : registerUsername}
+                value={registerUsername}
                 onChange={(e) => setRegisterUsername(e.target.value)}
                 placeholder="请输入用户名"
-                disabled={bootstrapMode || registerLoading}
+                disabled={registerLoading}
                 autoComplete="username"
               />
             </div>
@@ -546,11 +607,15 @@ export default function LoginPage() {
           <form onSubmit={onAdminLoginSubmit}>
             <div className="login-field">
               <label className="login-label">管理员账号</label>
-              <input
-                className="login-input"
+              <PortalSelect
+                className="login-portal-select"
                 value={adminUsername}
-                readOnly
-                autoComplete="username"
+                ariaLabel="选择管理员账号"
+                options={authStatus.adminUsernames.map((item) => ({
+                  value: item,
+                  label: item,
+                }))}
+                onChange={setAdminUsername}
               />
             </div>
 
