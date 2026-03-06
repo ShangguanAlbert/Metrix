@@ -130,7 +130,7 @@ const ALIYUN_DASHSCOPE_PDF_RENDER_SCRIPT_PATH = path.resolve(
   "scripts",
   "aliyun_pdf_to_images.py",
 );
-const GROUP_CHAT_TEXT_MAX_LENGTH = 1800;
+const GROUP_CHAT_TEXT_MAX_LENGTH = 3600;
 const GROUP_CHAT_ROOM_NAME_MAX_LENGTH = 30;
 const GROUP_CHAT_REPLY_PREVIEW_MAX_LENGTH = 120;
 const GROUP_CHAT_LOCAL_PARSE_HINT_TEXT = "仅解析文字中的文本";

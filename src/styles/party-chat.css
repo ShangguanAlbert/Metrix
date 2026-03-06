@@ -535,7 +535,7 @@
 
 .party-agent-panel-head-title h3 {
   margin: 0;
-  font-size: 17px;
+  font-size: 22px;
 }
 
 .party-agent-panel-controls {
@@ -853,7 +853,27 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.party-room-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.party-forward-count-chip {
+  border: 1px solid #c6daf8;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #274b80;
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
 }
 
 .party-room-title {
@@ -1013,6 +1033,39 @@
   gap: 6px;
   min-width: 0;
   max-width: min(80%, 720px);
+}
+
+.party-forward-select-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #cad8ed;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1f406d;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+.party-forward-select-btn:hover {
+  background: #eef4ff;
+}
+
+.party-forward-select-btn.is-selected {
+  border-color: #8cb1ec;
+  background: #e3eeff;
+  color: #194f9f;
+}
+
+.party-forward-select-btn.is-disabled {
+  border-color: #dce4f2;
+  background: #f3f6fb;
+  color: #95a1b4;
 }
 
 .party-message-main {

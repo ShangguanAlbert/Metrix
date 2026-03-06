@@ -62,6 +62,13 @@ const PARTY_AGENT_DEFAULT_ID = "A";
 const PARTY_AGENT_CONTEXT_USER_ROUNDS = 10;
 const PARTY_AGENT_DRAFT_PERSIST_MS = 420;
 const CHAT_AGENT_IDS = Object.freeze(["A", "B", "C", "D", "E"]);
+const PARTY_DEFAULT_AGENT_PROVIDER_MAP = Object.freeze({
+  A: "volcengine",
+  B: "volcengine",
+  C: "volcengine",
+  D: "aliyun",
+  E: "openrouter",
+});
 const PARTY_MARKDOWN_FORWARD_PREFIX = "\u2063\u2063\u2063";
 const QUICK_REACTION_EMOJIS = Object.freeze(["👍", "👏", "🎉", "😄", "🤝"]);
 const COMPOSER_TOOL_EMOJIS = Object.freeze(["😀", "🤔", "👍", "🎯", "🎉", "🙏"]);
@@ -131,10 +138,18 @@ export default function PartyChatDesktopPage({
     settings: {},
   }));
   const [chatMessagesBySession, setChatMessagesBySession] = useState({});
+  const [chatAgentRuntimeConfigs, setChatAgentRuntimeConfigs] = useState(() =>
+    sanitizePartyAgentRuntimeConfigMap({}),
+  );
+  const [chatAgentProviderDefaults, setChatAgentProviderDefaults] = useState(() =>
+    sanitizePartyAgentProviderDefaults({}),
+  );
   const [chatBootstrapError, setChatBootstrapError] = useState("");
   const [partyAgentStreaming, setPartyAgentStreaming] = useState(false);
   const [partyAgentError, setPartyAgentError] = useState("");
   const [partyAgentSelectedAskText, setPartyAgentSelectedAskText] = useState("");
+  const [multiForwardMode, setMultiForwardMode] = useState(false);
+  const [selectedForwardMessageIds, setSelectedForwardMessageIds] = useState([]);
 
   const [createRoomName, setCreateRoomName] = useState("");
   const [createSubmitting, setCreateSubmitting] = useState(false);
@@ -212,8 +227,24 @@ export default function PartyChatDesktopPage({
     linkedChatSessionId,
     linkedChatAgentId,
   ]);
-  const partyAgentSwitchLocked = !!linkedChatSmartContextEnabled;
-  const partyAgentSmartContextToggleDisabled = !linkedChatSessionId || partyAgentStreaming;
+  const linkedChatProvider = useMemo(
+    () =>
+      resolvePartyAgentProvider(
+        linkedChatAgentId,
+        chatAgentRuntimeConfigs,
+        chatAgentProviderDefaults,
+      ),
+    [linkedChatAgentId, chatAgentRuntimeConfigs, chatAgentProviderDefaults],
+  );
+  const partyAgentSmartContextSupported = linkedChatProvider === "volcengine";
+  const effectiveLinkedChatSmartContextEnabled =
+    partyAgentSmartContextSupported && linkedChatSmartContextEnabled;
+  const partyAgentSwitchLocked = !!effectiveLinkedChatSmartContextEnabled;
+  const partyAgentSmartContextToggleDisabled =
+    !linkedChatSessionId || partyAgentStreaming || !partyAgentSmartContextSupported;
+  const partyAgentSmartContextInfoTitle = partyAgentSmartContextSupported
+    ? "开启后将锁定当前智能体进行对话，不得切换智能体"
+    : "仅火山引擎智能体支持智能上下文管理，当前智能体已默认关闭";
   const activeMembers = useMemo(() => {
     if (!activeRoom) return [];
     return activeRoom.memberUserIds.map((userId) => {
@@ -255,6 +286,11 @@ export default function PartyChatDesktopPage({
     });
     return map;
   }, [activeRoom, canManageActiveRoom]);
+  const selectedForwardMessageIdSet = useMemo(
+    () => new Set(selectedForwardMessageIds),
+    [selectedForwardMessageIds],
+  );
+  const selectedForwardCount = selectedForwardMessageIds.length;
   const showSidebar = isMobileSidebarDrawer ? isSidebarDrawerOpen : isSidebarExpanded;
 
   const setChatSessionMessages = useCallback((sessionId, updater) => {
@@ -431,6 +467,7 @@ export default function PartyChatDesktopPage({
 
   const onPartyAgentToggleSmartContext = useCallback(
     (enabled) => {
+      if (!partyAgentSmartContextSupported) return;
       const safeSessionId = sanitizePartyAgentSessionId(linkedChatSessionId);
       const safeAgentId = sanitizePartyAgentId(linkedChatAgentId, PARTY_AGENT_DEFAULT_ID);
       if (!safeSessionId || !safeAgentId) return;
@@ -455,7 +492,12 @@ export default function PartyChatDesktopPage({
         return nextState;
       });
     },
-    [linkedChatAgentId, linkedChatSessionId, persistPartyAgentMetaState],
+    [
+      linkedChatAgentId,
+      linkedChatSessionId,
+      partyAgentSmartContextSupported,
+      persistPartyAgentMetaState,
+    ],
   );
 
   const onSendAgentPanelMessage = useCallback(
@@ -541,7 +583,7 @@ export default function PartyChatDesktopPage({
       formData.append("temperature", String(PARTY_AGENT_PANEL_TEMPERATURE));
       formData.append("topP", String(PARTY_AGENT_PANEL_TOP_P));
       formData.append("sessionId", sessionId);
-      formData.append("smartContextEnabled", String(linkedChatSmartContextEnabled));
+      formData.append("smartContextEnabled", String(effectiveLinkedChatSmartContextEnabled));
       formData.append("contextMode", "append");
       formData.append("messages", JSON.stringify(historyForApi));
       localFiles.forEach((file) => {
@@ -688,7 +730,7 @@ export default function PartyChatDesktopPage({
       linkedChatAgentId,
       linkedChatMessages,
       linkedChatSessionId,
-      linkedChatSmartContextEnabled,
+      effectiveLinkedChatSmartContextEnabled,
       finalizePartyAgentDraft,
       patchPartyAgentDraft,
       partyAgentStreaming,
@@ -830,7 +872,7 @@ export default function PartyChatDesktopPage({
       formData.append("temperature", String(PARTY_AGENT_PANEL_TEMPERATURE));
       formData.append("topP", String(PARTY_AGENT_PANEL_TOP_P));
       formData.append("sessionId", sessionId);
-      formData.append("smartContextEnabled", String(linkedChatSmartContextEnabled));
+      formData.append("smartContextEnabled", String(effectiveLinkedChatSmartContextEnabled));
       formData.append("contextMode", "regenerate");
       formData.append("messages", JSON.stringify(historyForApi));
 
@@ -951,7 +993,7 @@ export default function PartyChatDesktopPage({
       finalizePartyAgentDraft,
       linkedChatAgentId,
       linkedChatSessionId,
-      linkedChatSmartContextEnabled,
+      effectiveLinkedChatSmartContextEnabled,
       patchPartyAgentDraft,
       partyAgentStreaming,
       patchChatSessionMessageById,
@@ -1320,6 +1362,12 @@ export default function PartyChatDesktopPage({
           state.sessionMessages && typeof state.sessionMessages === "object"
             ? state.sessionMessages
             : {};
+        setChatAgentRuntimeConfigs(
+          sanitizePartyAgentRuntimeConfigMap(result?.agentRuntimeConfigs),
+        );
+        setChatAgentProviderDefaults(
+          sanitizePartyAgentProviderDefaults(result?.agentProviderDefaults),
+        );
         setChatMetaState({
           activeId: resolvedActiveId,
           groups: Array.isArray(state.groups) ? state.groups : [],
@@ -1477,6 +1525,24 @@ export default function PartyChatDesktopPage({
   useEffect(() => {
     setShowMentionPicker(false);
   }, [activeRoomId]);
+
+  useEffect(() => {
+    setMultiForwardMode(false);
+    setSelectedForwardMessageIds([]);
+  }, [activeRoomId]);
+
+  useEffect(() => {
+    if (selectedForwardMessageIds.length === 0) return;
+    const liveMessageIdSet = new Set(
+      activeMessages
+        .map((message) => String(message?.id || "").trim())
+        .filter(Boolean),
+    );
+    setSelectedForwardMessageIds((prev) => {
+      const next = prev.filter((messageId) => liveMessageIdSet.has(messageId));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [activeMessages, selectedForwardMessageIds.length]);
 
   useEffect(() => {
     if (!rooms.length) {
@@ -2430,6 +2496,77 @@ export default function PartyChatDesktopPage({
     });
   }
 
+  function toggleMultiForwardMode() {
+    setMultiForwardMode((prev) => {
+      const next = !prev;
+      if (!next) {
+        setSelectedForwardMessageIds([]);
+      } else {
+        closeMessageMenu();
+      }
+      return next;
+    });
+  }
+
+  function clearMultiForwardSelection() {
+    setSelectedForwardMessageIds([]);
+    setMultiForwardMode(false);
+  }
+
+  function toggleForwardMessageSelection(message) {
+    const messageId = String(message?.id || "").trim();
+    const messageType = String(message?.type || "").trim().toLowerCase();
+    if (!messageId || messageType === "system") return;
+    if (messageType !== "text") {
+      setActionError("暂不支持转发图片或文件消息，请仅选择文本消息。");
+      return;
+    }
+    setSelectedForwardMessageIds((prev) => {
+      if (prev.includes(messageId)) {
+        return prev.filter((id) => id !== messageId);
+      }
+      return [...prev, messageId];
+    });
+  }
+
+  function forwardSelectedMessagesToAgentQuote() {
+    if (!linkedChatSessionId) {
+      setPartyAgentError("请先在右侧选择可用的 ChatPage 会话。");
+      return;
+    }
+    if (selectedForwardMessageIds.length === 0) {
+      setActionError("请先勾选要转发的聊天记录。");
+      return;
+    }
+    const selectedIdSet = new Set(selectedForwardMessageIds);
+    const selectedMessages = activeMessages.filter((message) => selectedIdSet.has(String(message?.id || "").trim()));
+    if (selectedMessages.length === 0) {
+      setActionError("未找到可转发的聊天记录，请重试。");
+      return;
+    }
+    if (selectedMessages.some((message) => String(message?.type || "").trim().toLowerCase() !== "text")) {
+      setActionError("暂不支持转发图片或文件消息，请仅选择文本消息。");
+      return;
+    }
+    const lines = selectedMessages
+      .map((message) => {
+        const sender = String(message?.senderName || "用户").trim() || "用户";
+        const content = extractPartyMessageForwardText(message);
+        if (!content) return "";
+        return `${sender}：${content}`;
+      })
+      .filter(Boolean);
+    if (lines.length === 0) {
+      setActionError("选中的消息没有可转发文本。");
+      return;
+    }
+    setPartyAgentSelectedAskText(lines.join("\n"));
+    setPartyAgentError("");
+    setActionError("");
+    setSelectedForwardMessageIds([]);
+    setMultiForwardMode(false);
+  }
+
   function handleQuoteMessage(message) {
     setReplyTarget(createReplyTarget(message));
     closeMessageMenu();
@@ -2785,11 +2922,42 @@ export default function PartyChatDesktopPage({
                   </div>
                   <p className="party-room-code">派号：{activeRoom.roomCode}</p>
                 </div>
-                {canManageActiveRoom ? (
-                  <button type="button" className="party-room-dissolve-btn" onClick={openDissolveRoomModal}>
-                    解散派
-                  </button>
-                ) : null}
+                <div className="party-room-actions">
+                  {multiForwardMode ? (
+                    <>
+                      <span className="party-forward-count-chip">已选 {selectedForwardCount}</span>
+                      <button
+                        type="button"
+                        className="party-secondary-btn"
+                        onClick={forwardSelectedMessagesToAgentQuote}
+                        disabled={selectedForwardCount === 0 || !linkedChatSessionId}
+                        title={!linkedChatSessionId ? "请先在右侧选择可同步会话" : "转发到右侧派Agent"}
+                      >
+                        转发到派Agent
+                      </button>
+                      <button
+                        type="button"
+                        className="party-secondary-btn"
+                        onClick={clearMultiForwardSelection}
+                      >
+                        取消
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="party-secondary-btn"
+                      onClick={toggleMultiForwardMode}
+                    >
+                      多选转发
+                    </button>
+                  )}
+                  {canManageActiveRoom ? (
+                    <button type="button" className="party-room-dissolve-btn" onClick={openDissolveRoomModal}>
+                      解散派
+                    </button>
+                  ) : null}
+                </div>
               </header>
 
               <div className="party-room-body">
@@ -2807,6 +2975,8 @@ export default function PartyChatDesktopPage({
                           const showReactions = isMenuOpen && messageMenuState.showReactions;
                           const messageReactions = Array.isArray(message.reactions) ? message.reactions : [];
                           const readReceipt = buildMessageReadReceipt(message);
+                          const selectedForForward = selectedForwardMessageIdSet.has(String(message.id || "").trim());
+                          const selectableForForward = String(message?.type || "").trim().toLowerCase() === "text";
 
                           return (
                             <article
@@ -2819,6 +2989,25 @@ export default function PartyChatDesktopPage({
                                 <p className="party-system-text">{message.content}</p>
                               ) : (
                                 <div className="party-message-row">
+                                  {multiForwardMode ? (
+                                    <button
+                                      type="button"
+                                      className={`party-forward-select-btn${
+                                        selectedForForward ? " is-selected" : ""
+                                      }${!selectableForForward ? " is-disabled" : ""}`}
+                                      onClick={() => toggleForwardMessageSelection(message)}
+                                      title={
+                                        selectableForForward
+                                          ? selectedForForward
+                                            ? "取消选择"
+                                            : "选择转发"
+                                          : "暂不支持转发图片或文件消息"
+                                      }
+                                      aria-label={selectableForForward ? "选择转发消息" : "不支持转发该消息类型"}
+                                    >
+                                      {selectedForForward ? "✓" : ""}
+                                    </button>
+                                  ) : null}
                                   <NameAvatar name={message.senderName} />
                                   <div className="party-message-main">
                                     <div className="party-message-head">
@@ -2851,7 +3040,13 @@ export default function PartyChatDesktopPage({
                                           <button
                                             type="button"
                                             className="party-image-thumb-btn"
-                                            onClick={() => setPreviewImage(message.image)}
+                                            onClick={() => {
+                                              if (multiForwardMode) {
+                                                toggleForwardMessageSelection(message);
+                                                return;
+                                              }
+                                              setPreviewImage(message.image);
+                                            }}
                                           >
                                             <img
                                               src={message.image?.dataUrl}
@@ -2865,7 +3060,13 @@ export default function PartyChatDesktopPage({
                                           <button
                                             type="button"
                                             className="party-file-msg-btn"
-                                            onClick={() => void handleDownloadFileMessage(message)}
+                                            onClick={() => {
+                                              if (multiForwardMode) {
+                                                toggleForwardMessageSelection(message);
+                                                return;
+                                              }
+                                              void handleDownloadFileMessage(message);
+                                            }}
                                             disabled={downloadingFileMessageId === message.id}
                                           >
                                             <div className="party-file-msg-icon">
@@ -3267,7 +3468,7 @@ export default function PartyChatDesktopPage({
           <div className="party-agent-panel">
             <div className="party-agent-panel-head">
               <div className="party-agent-panel-head-title">
-                <h3>派Agent</h3>
+                <h3>派·Agent</h3>
               </div>
               <div className="party-agent-panel-controls">
                 <AgentSelect
@@ -3283,14 +3484,16 @@ export default function PartyChatDesktopPage({
                   }
                 />
                 <div
-                  className={`smart-context-control${!linkedChatSessionId ? " is-disabled" : ""}`}
-                  title="开启后将锁定当前智能体进行对话，不得切换智能体"
+                  className={`smart-context-control${
+                    !linkedChatSessionId || !partyAgentSmartContextSupported ? " is-disabled" : ""
+                  }`}
+                  title={partyAgentSmartContextInfoTitle}
                 >
                   <label className="smart-context-switch" htmlFor="party-agent-smart-context-toggle">
                     <input
                       id="party-agent-smart-context-toggle"
                       type="checkbox"
-                      checked={linkedChatSmartContextEnabled}
+                      checked={effectiveLinkedChatSmartContextEnabled}
                       onChange={(event) => onPartyAgentToggleSmartContext(event.target.checked)}
                       disabled={partyAgentSmartContextToggleDisabled}
                     />
@@ -4078,6 +4281,13 @@ function formatFileSize(bytes) {
   return `${gb.toFixed(gb >= 100 ? 0 : 1)} GB`;
 }
 
+function extractPartyMessageForwardText(message) {
+  if (!message || String(message?.type || "").trim().toLowerCase() !== "text") return "";
+  const markdownText = decodePartyForwardMarkdown(message?.content);
+  const rawText = markdownText !== null ? markdownText : String(message?.content || "");
+  return rawText.replace(/\s+/g, " ").trim();
+}
+
 function createReplyTarget(message) {
   if (!message) return null;
   const previewText = message.type === "image"
@@ -4309,6 +4519,55 @@ function sanitizePartyAgentId(value, fallback = PARTY_AGENT_DEFAULT_ID) {
     .trim()
     .toUpperCase();
   return CHAT_AGENT_IDS.includes(safeFallback) ? safeFallback : PARTY_AGENT_DEFAULT_ID;
+}
+
+function sanitizePartyProvider(value, fallback = "openrouter") {
+  const key = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (key === "openrouter" || key === "volcengine" || key === "aliyun") {
+    return key;
+  }
+  return fallback;
+}
+
+function sanitizePartyAgentRuntimeConfigMap(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const normalized = {};
+  CHAT_AGENT_IDS.forEach((agentId) => {
+    const runtime = source[agentId] && typeof source[agentId] === "object" ? source[agentId] : {};
+    normalized[agentId] = {
+      provider: String(runtime.provider || "")
+        .trim()
+        .toLowerCase(),
+    };
+  });
+  return normalized;
+}
+
+function sanitizePartyAgentProviderDefaults(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  return {
+    A: sanitizePartyProvider(source.A, PARTY_DEFAULT_AGENT_PROVIDER_MAP.A),
+    B: sanitizePartyProvider(source.B, PARTY_DEFAULT_AGENT_PROVIDER_MAP.B),
+    C: sanitizePartyProvider(source.C, PARTY_DEFAULT_AGENT_PROVIDER_MAP.C),
+    D: sanitizePartyProvider(source.D, PARTY_DEFAULT_AGENT_PROVIDER_MAP.D),
+    E: sanitizePartyProvider(source.E, PARTY_DEFAULT_AGENT_PROVIDER_MAP.E),
+  };
+}
+
+function resolvePartyAgentProvider(agentId, runtimeConfigs, providerDefaults) {
+  const safeAgentId = sanitizePartyAgentId(agentId, PARTY_AGENT_DEFAULT_ID);
+  const runtimeProvider = String(runtimeConfigs?.[safeAgentId]?.provider || "")
+    .trim()
+    .toLowerCase();
+  if (runtimeProvider && runtimeProvider !== "inherit") {
+    return sanitizePartyProvider(runtimeProvider, "openrouter");
+  }
+  return sanitizePartyProvider(
+    providerDefaults?.[safeAgentId],
+    PARTY_DEFAULT_AGENT_PROVIDER_MAP[safeAgentId],
+  );
 }
 
 function sanitizePartyAgentBySessionMap(raw, fallback = PARTY_AGENT_DEFAULT_ID) {
