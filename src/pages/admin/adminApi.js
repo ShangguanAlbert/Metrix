@@ -65,6 +65,67 @@ export function fetchAdminMe(adminToken) {
   return request("/api/auth/admin/me", adminToken);
 }
 
+export function createAdminChatSession(adminToken, payload = {}) {
+  const safePayload = payload && typeof payload === "object" ? payload : {};
+  return request("/api/auth/admin/chat-session", adminToken, {
+    method: "POST",
+    body: JSON.stringify(safePayload),
+  });
+}
+
+export function fetchAdminGeneratedImageGroups(adminToken, keyword = "") {
+  const safeKeyword = String(keyword || "").trim();
+  const path = safeKeyword
+    ? `/api/auth/admin/images/history?keyword=${encodeURIComponent(safeKeyword)}`
+    : "/api/auth/admin/images/history";
+  return request(path, adminToken);
+}
+
+export async function downloadAdminGeneratedImage(adminToken, imageId) {
+  const safeImageId = String(imageId || "").trim();
+  const resp = await fetch(
+    `/api/auth/admin/images/history/${encodeURIComponent(safeImageId)}/content?download=1`,
+    {
+      method: "GET",
+      headers: authHeader(adminToken),
+    },
+  );
+  const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
+
+  if (!resp.ok) {
+    let message = "";
+    try {
+      const data = await resp.json();
+      message = data?.error || data?.message || "";
+    } catch {
+      try {
+        message = await resp.text();
+      } catch {
+        message = "";
+      }
+    }
+    throw new Error(message || `请求失败（${resp.status}）`);
+  }
+
+  if (contentType.includes("application/json")) {
+    const data = await readJson(resp);
+    const downloadUrl = String(data?.downloadUrl || "").trim();
+    if (downloadUrl) {
+      return {
+        downloadUrl,
+        filename: String(data?.fileName || "图片.png").trim() || "图片.png",
+        mimeType: String(data?.mimeType || ""),
+      };
+    }
+  }
+
+  const blob = await resp.blob();
+  const filename =
+    readContentDispositionFilename(resp.headers.get("Content-Disposition")) ||
+    "图片.png";
+  return { blob, filename };
+}
+
 export function fetchAdminOnlinePresence(adminToken, className = "") {
   const safeClassName = String(className || "").trim();
   const path = safeClassName
@@ -100,6 +161,14 @@ export function saveAdminClassroomPlans(adminToken, payload) {
     method: "PUT",
     body: JSON.stringify(payload),
   });
+}
+
+export function fetchAdminClassroomHomeworkOverview(adminToken) {
+  return request("/api/auth/admin/classroom-homework/overview", adminToken);
+}
+
+export function fetchAdminGroupChatRooms(adminToken) {
+  return request("/api/auth/admin/group-chat/rooms", adminToken);
 }
 
 export async function uploadAdminClassroomLessonFiles(adminToken, lessonId, files = []) {
@@ -225,6 +294,51 @@ export async function downloadAdminClassroomLessonFile(adminToken, fileId) {
   const filename =
     readContentDispositionFilename(resp.headers.get("Content-Disposition")) ||
     "课程文件.bin";
+  return { blob, filename };
+}
+
+export async function downloadAdminClassroomHomeworkFile(adminToken, fileId) {
+  const safeFileId = String(fileId || "").trim();
+  const resp = await fetch(
+    `/api/auth/admin/classroom-homework/files/${encodeURIComponent(safeFileId)}/download`,
+    {
+      method: "GET",
+      headers: authHeader(adminToken),
+    },
+  );
+  const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
+
+  if (!resp.ok) {
+    let message = "";
+    try {
+      const data = await resp.json();
+      message = data?.error || data?.message || "";
+    } catch {
+      try {
+        message = await resp.text();
+      } catch {
+        message = "";
+      }
+    }
+    throw new Error(message || `请求失败（${resp.status}）`);
+  }
+
+  if (contentType.includes("application/json")) {
+    const data = await readJson(resp);
+    const downloadUrl = String(data?.downloadUrl || "").trim();
+    if (downloadUrl) {
+      return {
+        downloadUrl,
+        filename: String(data?.fileName || "作业文件.bin").trim() || "作业文件.bin",
+        mimeType: String(data?.mimeType || ""),
+      };
+    }
+  }
+
+  const blob = await resp.blob();
+  const filename =
+    readContentDispositionFilename(resp.headers.get("Content-Disposition")) ||
+    "作业文件.bin";
   return { blob, filename };
 }
 

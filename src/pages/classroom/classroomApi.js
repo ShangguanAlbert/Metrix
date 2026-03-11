@@ -37,6 +37,59 @@ export function fetchClassroomTaskSettings() {
   return request("/api/classroom/tasks/settings");
 }
 
+export function fetchClassroomHomeworkSubmissions() {
+  return request("/api/classroom/homework/submissions/me");
+}
+
+export async function uploadClassroomHomeworkFiles(lessonId, items = []) {
+  const safeLessonId = String(lessonId || "").trim();
+  const safeItems = Array.isArray(items)
+    ? items.filter(
+        (item) =>
+          item &&
+          item.file &&
+          typeof item.file === "object" &&
+          typeof item.file.name === "string" &&
+          String(item.fileName || item.file?.name || "").trim(),
+      )
+    : [];
+  const formData = new FormData();
+  const fileNames = [];
+  safeItems.forEach((item) => {
+    formData.append("files", item.file);
+    fileNames.push(String(item.fileName || item.file?.name || "").trim());
+  });
+  formData.append("fileNames", JSON.stringify(fileNames));
+
+  const resp = await fetch(
+    `/api/classroom/homework/submissions/${encodeURIComponent(safeLessonId)}/files`,
+    {
+      method: "POST",
+      headers: authHeaders(),
+      body: formData,
+    },
+  );
+  const data = await readJson(resp);
+  if (!resp.ok) {
+    const message = data?.error || data?.message || `请求失败（${resp.status}）`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+export function deleteClassroomHomeworkFile(lessonId, fileId) {
+  const safeLessonId = String(lessonId || "").trim();
+  const safeFileId = String(fileId || "").trim();
+  return request(
+    `/api/classroom/homework/submissions/${encodeURIComponent(
+      safeLessonId,
+    )}/files/${encodeURIComponent(safeFileId)}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
 export async function downloadClassroomLessonFile(fileId) {
   const safeFileId = String(fileId || "").trim();
   const resp = await fetch(

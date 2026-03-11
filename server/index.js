@@ -152,6 +152,9 @@ const GENERATED_IMAGE_OSS_EXPIRED_CLEANUP_BATCH_SIZE = 80;
 const CHAT_ATTACHMENT_OSS_SCOPE = "chat-attachments";
 const TEACHER_LESSON_FILE_OSS_SCOPE = "teacher_sgfz";
 const TEACHER_LESSON_FILE_OSS_SUB_SCOPE = "lesson-files";
+const STUDENT_HOMEWORK_OSS_SUB_SCOPE = "student-homework";
+const STUDENT_HOMEWORK_UPLOAD_MAX_FILES = 6;
+const STUDENT_HOMEWORK_MAX_FILES_PER_LESSON_PER_STUDENT = 20;
 const FIXED_ADMIN_ACCOUNTS = Object.freeze([
   { username: "上官福泽", password: "2025112004074" },
   { username: "杨占山", password: "2024111004058" },
@@ -1467,6 +1470,7 @@ const adminClassroomCoursePlanSchema = new mongoose.Schema(
     courseEndAt: { type: String, default: "" },
     notes: { type: String, default: "" },
     enabled: { type: Boolean, default: true },
+    homeworkUploadEnabled: { type: Boolean, default: true },
     tasks: { type: [adminClassroomTaskSchema], default: () => [] },
     files: { type: [adminClassroomCourseFileSchema], default: () => [] },
     createdAt: { type: String, default: "" },
@@ -1556,6 +1560,38 @@ const adminClassroomLessonFileSchema = new mongoose.Schema(
 const AdminClassroomLessonFile =
   mongoose.models.AdminClassroomLessonFile ||
   mongoose.model("AdminClassroomLessonFile", adminClassroomLessonFileSchema);
+const classroomHomeworkFileSchema = new mongoose.Schema(
+  {
+    key: { type: String, default: ADMIN_CONFIG_KEY, index: true },
+    teacherScopeKey: { type: String, default: SHANGGUAN_FUZE_TEACHER_SCOPE_KEY, index: true },
+    fileId: { type: String, required: true, unique: true, index: true },
+    lessonId: { type: String, default: "", index: true },
+    lessonName: { type: String, default: "" },
+    studentUserId: { type: String, default: "", index: true },
+    studentUsername: { type: String, default: "" },
+    studentName: { type: String, default: "" },
+    studentId: { type: String, default: "", index: true },
+    className: { type: String, default: "" },
+    fileName: { type: String, default: "" },
+    originalFileName: { type: String, default: "" },
+    mimeType: { type: String, default: "application/octet-stream" },
+    size: { type: Number, default: 0 },
+    storageType: { type: String, default: "oss" },
+    ossKey: { type: String, default: "" },
+    ossBucket: { type: String, default: "" },
+    ossRegion: { type: String, default: "" },
+    fileUrl: { type: String, default: "" },
+    binary: { type: Buffer, default: () => Buffer.from([]) },
+    uploadedAt: { type: Date, default: Date.now, index: true },
+  },
+  {
+    timestamps: true,
+    collection: "classroom_homework_files",
+  },
+);
+const ClassroomHomeworkFile =
+  mongoose.models.ClassroomHomeworkFile ||
+  mongoose.model("ClassroomHomeworkFile", classroomHomeworkFileSchema);
 const AgentEConfig = createAgentEConfigModel(mongoose);
 
 app.use(cors());
@@ -1633,6 +1669,270 @@ app.get("/api/classroom/tasks/settings", requireChatAuth, async (req, res) => {
     teacherCoursePlans,
   });
 });
+
+app.get("/api/classroom/homework/submissions/me", requireChatAuth, async (req, res) => {
+  const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+  if (teacherScopeKey !== SHANGGUAN_FUZE_TEACHER_SCOPE_KEY) {
+    res.status(403).json({ error: "当前班级暂不支持作业上传。" });
+    return;
+  }
+
+  const config = await readAdminAgentConfig();
+  const lessons = config.teacherCoursePlans
+    .filter(
+      (lesson) =>
+        sanitizeRuntimeBoolean(lesson?.enabled, true),
+    )
+    .map((lesson) => ({
+      id: sanitizeId(lesson?.id, ""),
+      courseName: sanitizeText(lesson?.courseName, "", 80),
+      courseStartAt: sanitizeIsoDate(lesson?.courseStartAt) || "",
+      courseEndAt: sanitizeIsoDate(lesson?.courseEndAt) || "",
+      courseTime: sanitizeText(lesson?.courseTime, "", 120),
+      homeworkUploadEnabled: true,
+      enabled: sanitizeRuntimeBoolean(lesson?.enabled, true),
+    }))
+    .filter((lesson) => lesson.id);
+
+  if (lessons.length === 0) {
+    res.json({
+      ok: true,
+      teacherScopeKey,
+      lessons: [],
+      submissionsByLesson: {},
+    });
+    return;
+  }
+
+  const lessonIds = lessons.map((lesson) => lesson.id);
+  const studentUserId = sanitizeId(req.authUser?._id, "");
+  const docs = await ClassroomHomeworkFile.find({
+    key: ADMIN_CONFIG_KEY,
+    teacherScopeKey,
+    studentUserId,
+    lessonId: { $in: lessonIds },
+  })
+    .sort({ uploadedAt: -1, _id: -1 })
+    .lean();
+
+  const submissionsByLesson = {};
+  docs.forEach((doc) => {
+    const lessonId = sanitizeId(doc?.lessonId, "");
+    if (!lessonId) return;
+    if (!Array.isArray(submissionsByLesson[lessonId])) {
+      submissionsByLesson[lessonId] = [];
+    }
+    submissionsByLesson[lessonId].push(normalizeClassroomHomeworkFileDoc(doc));
+  });
+
+  res.json({
+    ok: true,
+    teacherScopeKey,
+    lessons,
+    submissionsByLesson,
+  });
+});
+
+app.post(
+  "/api/classroom/homework/submissions/:lessonId/files",
+  requireChatAuth,
+  upload.array("files", STUDENT_HOMEWORK_UPLOAD_MAX_FILES),
+  async (req, res) => {
+    const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+    if (teacherScopeKey !== SHANGGUAN_FUZE_TEACHER_SCOPE_KEY) {
+      res.status(403).json({ error: "当前班级暂不支持作业上传。" });
+      return;
+    }
+
+    const lessonId = sanitizeId(req.params.lessonId, "");
+    if (!lessonId) {
+      res.status(400).json({ error: "课时标识无效。" });
+      return;
+    }
+
+    const sourceFiles = Array.isArray(req.files) ? req.files : [];
+    const normalizedFiles = sourceFiles
+      .map((file) => normalizeMultipartUploadFile(file))
+      .filter((file) => file && Buffer.isBuffer(file.buffer) && file.buffer.length > 0);
+    if (normalizedFiles.length === 0) {
+      res.status(400).json({ error: "请先选择要上传的作业文件。" });
+      return;
+    }
+
+    const config = await readAdminAgentConfig();
+    const lessonIndex = config.teacherCoursePlans.findIndex(
+      (lesson) => sanitizeId(lesson?.id, "") === lessonId,
+    );
+    if (lessonIndex < 0) {
+      res.status(404).json({ error: "未找到该课时，请刷新后重试。" });
+      return;
+    }
+    const lesson = config.teacherCoursePlans[lessonIndex];
+    if (!sanitizeRuntimeBoolean(lesson?.enabled, true)) {
+      res.status(403).json({ error: "该课时暂未开放，无法上传作业。" });
+      return;
+    }
+    const studentUserId = sanitizeId(req.authUser?._id, "");
+    if (!studentUserId) {
+      res.status(401).json({ error: "登录状态无效，请重新登录后再上传。" });
+      return;
+    }
+
+    const currentCount = await ClassroomHomeworkFile.countDocuments({
+      key: ADMIN_CONFIG_KEY,
+      teacherScopeKey,
+      lessonId,
+      studentUserId,
+    });
+    if (currentCount + normalizedFiles.length > STUDENT_HOMEWORK_MAX_FILES_PER_LESSON_PER_STUDENT) {
+      res.status(400).json({
+        error: `每节课最多上传 ${STUDENT_HOMEWORK_MAX_FILES_PER_LESSON_PER_STUDENT} 份作业，请删除后再上传。`,
+      });
+      return;
+    }
+
+    const customFileNamesRaw = readJsonLikeField(req.body?.fileNames, []);
+    const customFileNames = Array.isArray(customFileNamesRaw) ? customFileNamesRaw : [];
+    const profile = sanitizeUserProfile(req.authUser?.profile);
+    const studentName = sanitizeText(
+      profile.name || req.authUser?.username,
+      sanitizeText(req.authUser?.username, "", 64),
+      64,
+    );
+    const studentId = sanitizeText(profile.studentId, "", 20);
+    const className = sanitizeText(profile.className, "", 40);
+    const nowIso = new Date().toISOString();
+    const newFileDocs = [];
+    try {
+      for (let fileIndex = 0; fileIndex < normalizedFiles.length; fileIndex += 1) {
+        const file = normalizedFiles[fileIndex];
+        const renamedFileName = sanitizeGroupChatFileName(
+          customFileNames[fileIndex] || file.originalname || `作业文件-${fileIndex + 1}`,
+        );
+        const uploaded = await uploadStudentHomeworkFileToOss({
+          lesson,
+          lessonIndex,
+          file,
+          fileNameOverride: renamedFileName,
+          studentName,
+          studentId,
+          studentUserId,
+        });
+        const fileId = createClassroomHomeworkFileId();
+        newFileDocs.push({
+          key: ADMIN_CONFIG_KEY,
+          teacherScopeKey,
+          fileId,
+          lessonId,
+          lessonName: sanitizeText(lesson?.courseName, "", 80),
+          studentUserId,
+          studentUsername: sanitizeText(req.authUser?.username, "", 80),
+          studentName,
+          studentId,
+          className,
+          fileName: sanitizeGroupChatFileName(uploaded.fileName || renamedFileName),
+          originalFileName: sanitizeGroupChatFileName(file.originalname || renamedFileName),
+          mimeType: sanitizeGroupChatFileMimeType(uploaded.mimeType || file.mimetype),
+          size: sanitizeRuntimeInteger(uploaded.size, 0, 0, MAX_FILE_SIZE_BYTES),
+          storageType: "oss",
+          ossKey: sanitizeGroupChatOssObjectKey(uploaded.ossKey),
+          ossBucket: sanitizeAliyunOssBucket(uploaded.ossBucket),
+          ossRegion: sanitizeAliyunOssRegion(uploaded.ossRegion),
+          fileUrl: sanitizeGroupChatHttpUrl(uploaded.fileUrl),
+          binary: Buffer.alloc(0),
+          uploadedAt: new Date(nowIso),
+        });
+      }
+    } catch (error) {
+      for (const uploadedDoc of newFileDocs) {
+        const ossKey = sanitizeGroupChatOssObjectKey(uploadedDoc.ossKey);
+        if (!ossKey) continue;
+        await deleteGroupChatOssObject(ossKey).catch(() => {});
+      }
+      throw error;
+    }
+
+    if (newFileDocs.length === 0) {
+      res.status(400).json({ error: "作业文件为空，请重新选择后上传。" });
+      return;
+    }
+
+    await ClassroomHomeworkFile.insertMany(newFileDocs, { ordered: true });
+    const lessonDocs = await ClassroomHomeworkFile.find({
+      key: ADMIN_CONFIG_KEY,
+      teacherScopeKey,
+      lessonId,
+      studentUserId,
+    })
+      .sort({ uploadedAt: -1, _id: -1 })
+      .lean();
+
+    res.json({
+      ok: true,
+      lessonId,
+      submissions: lessonDocs.map((doc) => normalizeClassroomHomeworkFileDoc(doc)),
+      uploadedAt: nowIso,
+    });
+  },
+);
+
+app.delete(
+  "/api/classroom/homework/submissions/:lessonId/files/:fileId",
+  requireChatAuth,
+  async (req, res) => {
+    const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+    if (teacherScopeKey !== SHANGGUAN_FUZE_TEACHER_SCOPE_KEY) {
+      res.status(403).json({ error: "当前班级暂不支持作业上传。" });
+      return;
+    }
+
+    const lessonId = sanitizeId(req.params.lessonId, "");
+    const fileId = sanitizeId(req.params.fileId, "");
+    if (!lessonId || !fileId) {
+      res.status(400).json({ error: "作业文件标识无效。" });
+      return;
+    }
+
+    const studentUserId = sanitizeId(req.authUser?._id, "");
+    if (!studentUserId) {
+      res.status(401).json({ error: "登录状态无效，请重新登录后重试。" });
+      return;
+    }
+
+    const removedDoc = await ClassroomHomeworkFile.findOneAndDelete({
+      key: ADMIN_CONFIG_KEY,
+      teacherScopeKey,
+      lessonId,
+      fileId,
+      studentUserId,
+    }).lean();
+    if (!removedDoc) {
+      res.status(404).json({ error: "作业文件不存在或已被删除。" });
+      return;
+    }
+
+    const removedOssKey = sanitizeGroupChatOssObjectKey(removedDoc?.ossKey);
+    if (removedOssKey) {
+      await deleteGroupChatOssObject(removedOssKey).catch(() => {});
+    }
+
+    const lessonDocs = await ClassroomHomeworkFile.find({
+      key: ADMIN_CONFIG_KEY,
+      teacherScopeKey,
+      lessonId,
+      studentUserId,
+    })
+      .sort({ uploadedAt: -1, _id: -1 })
+      .lean();
+
+    res.json({
+      ok: true,
+      lessonId,
+      fileId,
+      submissions: lessonDocs.map((doc) => normalizeClassroomHomeworkFileDoc(doc)),
+    });
+  },
+);
 
 app.get("/api/user/profile", requireChatAuth, async (req, res) => {
   const profile = sanitizeUserProfile(req.authUser.profile);
@@ -2020,6 +2320,33 @@ app.post("/api/auth/admin/login", async (req, res) => {
   });
 });
 
+app.post("/api/auth/admin/chat-session", async (req, res) => {
+  const admin = await authenticateAdminRequest(req, res);
+  if (!admin) return;
+
+  const teacherScopeKey = sanitizeTeacherScopeKey(
+    req.body?.teacherScopeKey || SHANGGUAN_FUZE_TEACHER_SCOPE_KEY,
+  );
+  const token = signToken(
+    {
+      uid: String(admin._id),
+      role: String(admin.role || "admin").trim().toLowerCase() || "admin",
+      scope: "chat",
+      tkey: teacherScopeKey,
+    },
+    AUTH_TOKEN_TTL_SECONDS,
+  );
+  markUserOnlinePresence(admin);
+
+  res.json({
+    ok: true,
+    token,
+    user: toPublicUser(admin),
+    teacherScopeKey,
+    teacherScopeLabel: getTeacherScopeLabel(teacherScopeKey),
+  });
+});
+
 app.get("/api/auth/admin/agent-prompts", async (req, res) => {
   if (!(await authenticateAdminRequest(req, res))) return;
 
@@ -2165,6 +2492,186 @@ app.get("/api/auth/admin/classroom-plans", async (req, res) => {
     updatedAt: config.updatedAt,
   });
 });
+
+app.get("/api/auth/admin/classroom-homework/overview", requireAdminAuth, async (req, res) => {
+  const teacherScopeKey = SHANGGUAN_FUZE_TEACHER_SCOPE_KEY;
+  const config = await readAdminAgentConfig();
+  const lessons = sortAdminClassroomCoursePlans(config.teacherCoursePlans);
+  const lessonIds = lessons
+    .map((lesson) => sanitizeId(lesson?.id, ""))
+    .filter(Boolean);
+
+  const [rosterUsers, homeworkDocs] = await Promise.all([
+    AuthUser.find(
+      {
+        role: "user",
+        lockedTeacherScopeKey: teacherScopeKey,
+      },
+      { username: 1, profile: 1, accountTag: 1 },
+    ).lean(),
+    lessonIds.length > 0
+      ? ClassroomHomeworkFile.find({
+          key: ADMIN_CONFIG_KEY,
+          teacherScopeKey,
+          lessonId: { $in: lessonIds },
+        })
+          .sort({ uploadedAt: -1, _id: -1 })
+          .lean()
+      : Promise.resolve([]),
+  ]);
+
+  const roster = rosterUsers
+    .map((user) => {
+      const profile = sanitizeUserProfile(user?.profile);
+      return {
+        userId: sanitizeId(user?._id, ""),
+        username: sanitizeText(user?.username, "", 64),
+        studentName: sanitizeText(profile.name || user?.username, "", 64),
+        studentId: sanitizeText(profile.studentId, "", 20),
+        className: sanitizeText(profile.className, "", 40),
+      };
+    })
+    .filter((item) => item.userId)
+    .sort(compareClassroomRosterStudent);
+
+  const lessonStudentDocsMap = new Map();
+  for (const doc of homeworkDocs) {
+    const lessonId = sanitizeId(doc?.lessonId, "");
+    const studentUserId = sanitizeId(doc?.studentUserId, "");
+    if (!lessonId || !studentUserId) continue;
+    if (!lessonStudentDocsMap.has(lessonId)) {
+      lessonStudentDocsMap.set(lessonId, new Map());
+    }
+    const studentDocMap = lessonStudentDocsMap.get(lessonId);
+    if (!studentDocMap.has(studentUserId)) {
+      studentDocMap.set(studentUserId, []);
+    }
+    studentDocMap.get(studentUserId).push(doc);
+  }
+
+  const lessonsOverview = lessons.map((lesson, lessonIndex) => {
+    const lessonId = sanitizeId(lesson?.id, "");
+    const perStudentDocs = lessonStudentDocsMap.get(lessonId) || new Map();
+    const studentRows = roster.map((student) => {
+      const docs = perStudentDocs.get(student.userId) || [];
+      const files = docs.map((doc) => normalizeClassroomHomeworkFileDoc(doc));
+      return {
+        userId: student.userId,
+        username: student.username,
+        studentName: student.studentName,
+        studentId: student.studentId,
+        className: student.className,
+        submitted: files.length > 0,
+        fileCount: files.length,
+        latestUploadedAt: files[0]?.uploadedAt || "",
+        files,
+      };
+    });
+
+    const uploadedStudentCount = studentRows.filter((student) => student.submitted).length;
+    const missingStudents = studentRows.filter((student) => !student.submitted);
+    const unlistedStudents = Array.from(perStudentDocs.entries())
+      .filter(([studentUserId]) => !roster.some((student) => student.userId === studentUserId))
+      .map(([studentUserId, docs]) => {
+        const sample = docs[0] || {};
+        return {
+          userId: studentUserId,
+          studentName: sanitizeText(sample.studentName || sample.studentUsername, "", 64) || "未登记学生",
+          studentId: sanitizeText(sample.studentId, "", 20),
+          className: sanitizeText(sample.className, "", 40),
+          submitted: true,
+          fileCount: docs.length,
+          latestUploadedAt: sanitizeIsoDate(sample.uploadedAt) || "",
+          files: docs.map((doc) => normalizeClassroomHomeworkFileDoc(doc)),
+        };
+      })
+      .sort(compareClassroomRosterStudent);
+
+    return {
+      id: lessonId,
+      lessonIndex,
+      courseName: sanitizeText(lesson?.courseName, "", 80) || `第${lessonIndex + 1}节课`,
+      courseStartAt: sanitizeIsoDate(lesson?.courseStartAt) || "",
+      courseEndAt: sanitizeIsoDate(lesson?.courseEndAt) || "",
+      courseTime: sanitizeText(lesson?.courseTime, "", 120),
+      enabled: sanitizeRuntimeBoolean(lesson?.enabled, true),
+      homeworkUploadEnabled: true,
+      studentTotal: roster.length,
+      uploadedStudentCount,
+      missingStudentCount: missingStudents.length,
+      missingStudents: missingStudents.map((student) => ({
+        userId: student.userId,
+        studentName: student.studentName,
+        studentId: student.studentId,
+        className: student.className,
+      })),
+      students: studentRows,
+      unlistedStudents,
+    };
+  });
+
+  res.json({
+    ok: true,
+    teacherScopeKey,
+    rosterTotal: roster.length,
+    lessons: lessonsOverview,
+    updatedAt: config.updatedAt,
+  });
+});
+
+app.get(
+  "/api/auth/admin/classroom-homework/files/:fileId/download",
+  requireAdminAuth,
+  async (req, res) => {
+    const fileId = sanitizeId(req.params.fileId, "");
+    if (!fileId) {
+      res.status(400).json({ error: "作业文件标识无效。" });
+      return;
+    }
+
+    const teacherScopeKey = SHANGGUAN_FUZE_TEACHER_SCOPE_KEY;
+    const fileDoc = await ClassroomHomeworkFile.findOne({
+      key: ADMIN_CONFIG_KEY,
+      teacherScopeKey,
+      fileId,
+    }).lean();
+    if (!fileDoc) {
+      res.status(404).json({ error: "作业文件不存在或已被移除。" });
+      return;
+    }
+
+    const fileName = sanitizeGroupChatFileName(fileDoc.fileName || "作业文件.bin");
+    const mimeType = sanitizeGroupChatFileMimeType(fileDoc.mimeType);
+    const storageType = sanitizeGroupChatFileStorageType(fileDoc.storageType);
+    const ossKey = sanitizeGroupChatOssObjectKey(fileDoc.ossKey);
+    if (storageType === "oss" && ossKey) {
+      const downloadUrl = await buildTeacherLessonFileDownloadUrl({
+        ossKey,
+        fileName,
+      });
+      if (!downloadUrl) {
+        res.status(404).json({ error: "作业文件下载链接不可用，请稍后重试。" });
+        return;
+      }
+      res.json({
+        ok: true,
+        downloadUrl,
+        fileName,
+        mimeType,
+      });
+      return;
+    }
+
+    if (!Buffer.isBuffer(fileDoc.binary) || fileDoc.binary.length === 0) {
+      res.status(404).json({ error: "作业文件不存在或已失效。" });
+      return;
+    }
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fileName));
+    res.setHeader("Content-Length", String(fileDoc.binary.length));
+    res.send(fileDoc.binary);
+  },
+);
 
 app.put("/api/auth/admin/classroom-plans", async (req, res) => {
   if (!(await authenticateAdminRequest(req, res))) return;
@@ -2905,6 +3412,490 @@ app.get("/api/auth/admin/users", async (req, res) => {
       updatedAt: item.updatedAt,
     })),
   });
+});
+
+app.get("/api/auth/admin/group-chat/rooms", async (req, res) => {
+  if (!(await authenticateAdminRequest(req, res))) return;
+
+  const adminOrderMap = new Map(
+    FIXED_ADMIN_ACCOUNTS.map((item, idx) => [toUsernameKey(item?.username), idx]),
+  );
+  const adminDefaultOrder = FIXED_ADMIN_ACCOUNTS.length + 200;
+  const adminFallbackOrder = FIXED_ADMIN_ACCOUNTS.length + 80;
+
+  const resolveAdminOrder = (user = null) => {
+    if (!user || user.role !== "admin") return adminDefaultOrder;
+    const usernameKey =
+      toUsernameKey(user.username) ||
+      toUsernameKey(user.usernameKey) ||
+      toUsernameKey(user.displayName);
+    if (adminOrderMap.has(usernameKey)) {
+      return adminOrderMap.get(usernameKey);
+    }
+    return adminFallbackOrder;
+  };
+
+  const buildMemberItem = (userId, usersById) => {
+    const safeUserId = sanitizeId(userId, "");
+    const user = usersById.get(safeUserId);
+    if (!safeUserId) return null;
+    if (!user) {
+      return {
+        id: safeUserId,
+        username: "",
+        displayName: "未知用户",
+        role: "",
+        className: "",
+        studentId: "",
+        adminOrder: adminDefaultOrder,
+      };
+    }
+
+    const profile = sanitizeUserProfile(user?.profile);
+    const username = sanitizeText(user?.username, "", 64);
+    const displayName = sanitizeText(
+      profile.name || username,
+      username || "未知用户",
+      64,
+    );
+    return {
+      id: safeUserId,
+      username,
+      displayName,
+      role: sanitizeText(user?.role, "", 20),
+      className: sanitizeText(profile.className, "", 40),
+      studentId: sanitizeText(profile.studentId, "", 20),
+      adminOrder: resolveAdminOrder({
+        role: user?.role,
+        username,
+        usernameKey: user?.usernameKey,
+        displayName,
+      }),
+    };
+  };
+
+  try {
+    const rawRooms = await GroupChatRoom.find(
+      {},
+      {
+        roomCode: 1,
+        name: 1,
+        ownerUserId: 1,
+        memberUserIds: 1,
+        partyAgentMemberEnabled: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    )
+      .sort({ updatedAt: -1, _id: 1 })
+      .lean();
+    const rooms = (Array.isArray(rawRooms) ? rawRooms : [])
+      .map((room) => normalizeGroupChatRoomDoc(room))
+      .filter(Boolean);
+
+    const userIdSet = new Set();
+    rooms.forEach((room) => {
+      const ownerUserId = sanitizeId(room?.ownerUserId, "");
+      if (ownerUserId) userIdSet.add(ownerUserId);
+      sanitizeGroupChatMemberUserIds(room?.memberUserIds).forEach((userId) => {
+        userIdSet.add(userId);
+      });
+    });
+
+    const users = userIdSet.size
+      ? await AuthUser.find(
+          { _id: { $in: Array.from(userIdSet) } },
+          { username: 1, usernameKey: 1, profile: 1, role: 1 },
+        ).lean()
+      : [];
+    const usersById = new Map(
+      users.map((user) => [sanitizeId(user?._id, ""), user]),
+    );
+
+    const payloadRooms = rooms
+      .map((room) => {
+        const roomId = sanitizeId(room?.id, "");
+        if (!roomId) return null;
+        const ownerUserId = sanitizeId(room?.ownerUserId, "");
+        const owner = buildMemberItem(ownerUserId, usersById);
+        const ownerSortOrder = owner?.adminOrder ?? adminDefaultOrder;
+        const members = sanitizeGroupChatMemberUserIds(room?.memberUserIds)
+          .map((memberId) => buildMemberItem(memberId, usersById))
+          .filter(Boolean)
+          .sort((a, b) => {
+            if (a.id === ownerUserId) return -1;
+            if (b.id === ownerUserId) return 1;
+            if (a.adminOrder !== b.adminOrder) return a.adminOrder - b.adminOrder;
+            return String(a.displayName || "").localeCompare(
+              String(b.displayName || ""),
+              "zh-CN",
+              { sensitivity: "base" },
+            );
+          });
+
+        if (owner && !members.some((member) => member.id === owner.id)) {
+          members.unshift(owner);
+        }
+
+        return {
+          id: roomId,
+          roomCode: sanitizeText(room?.roomCode, "", 32),
+          name: sanitizeText(room?.name, "未命名派", 80),
+          partyAgentMemberEnabled: sanitizeRuntimeBoolean(room?.partyAgentMemberEnabled, true),
+          memberCount: members.length,
+          owner,
+          members,
+          createdAt: sanitizeIsoDate(room?.createdAt),
+          updatedAt: sanitizeIsoDate(room?.updatedAt),
+          ownerAdminSortOrder: ownerSortOrder,
+        };
+      })
+      .filter(Boolean);
+
+    payloadRooms.sort((a, b) => {
+      if (a.ownerAdminSortOrder !== b.ownerAdminSortOrder) {
+        return a.ownerAdminSortOrder - b.ownerAdminSortOrder;
+      }
+      const ownerCompare = String(a.owner?.displayName || "").localeCompare(
+        String(b.owner?.displayName || ""),
+        "zh-CN",
+        { sensitivity: "base" },
+      );
+      if (ownerCompare !== 0) return ownerCompare;
+      const updatedDiff =
+        (Date.parse(String(b.updatedAt || "")) || 0) -
+        (Date.parse(String(a.updatedAt || "")) || 0);
+      if (updatedDiff !== 0) return updatedDiff;
+      return String(a.name || "").localeCompare(String(b.name || ""), "zh-CN", {
+        sensitivity: "base",
+      });
+    });
+
+    res.json({
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      totalRoomCount: payloadRooms.length,
+      rooms: payloadRooms,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error?.message || "读取群聊派列表失败，请稍后重试。",
+    });
+  }
+});
+
+app.get("/api/auth/admin/images/history", async (req, res) => {
+  if (!(await authenticateAdminRequest(req, res))) return;
+
+  const keyword = sanitizeText(req.query?.keyword, "", 80);
+  const keywordLower = keyword.toLowerCase();
+  const limit = sanitizeRuntimeInteger(req.query?.limit, 0, 0, 20000);
+
+  let docs = [];
+  try {
+    let query = GeneratedImageHistory.find(
+      {
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $gt: new Date() } },
+          { imageStorageType: "oss" },
+        ],
+      },
+      {
+        userId: 1,
+        prompt: 1,
+        imageStorageType: 1,
+        imageUrl: 1,
+        imageMimeType: 1,
+        size: 1,
+        model: 1,
+        createdAt: 1,
+      },
+    )
+      .sort({ createdAt: -1, _id: -1 });
+    if (limit > 0) {
+      query = query.limit(limit);
+    }
+    docs = await query.lean();
+  } catch (error) {
+    res.status(500).json({
+      error: error?.message || "读取图片管理列表失败，请稍后重试。",
+    });
+    return;
+  }
+
+  let groups = [];
+  try {
+    const imageItems = Array.isArray(docs) ? docs.map(toAdminGeneratedImageHistoryItem) : [];
+    const baseUserIdSet = new Set(
+      imageItems
+        .map((item) => sanitizeId(item?.baseUserId, ""))
+        .filter((id) => id && isMongoObjectIdLike(id)),
+    );
+
+    const rosterUsers = baseUserIdSet.size
+      ? await AuthUser.find(
+          {
+            _id: { $in: Array.from(baseUserIdSet) },
+            role: "user",
+          },
+          { username: 1, profile: 1 },
+        ).lean()
+      : [];
+    const rosterByUserId = new Map(
+      rosterUsers.map((user) => {
+        const userId = sanitizeId(user?._id, "");
+        const profile = sanitizeUserProfile(user?.profile);
+        return [
+          userId,
+          {
+            userId,
+            username: sanitizeText(user?.username, "", 64),
+            studentName: sanitizeText(profile.name || user?.username, "", 64),
+            studentId: sanitizeText(profile.studentId, "", 20),
+            className: sanitizeText(profile.className, "", 40),
+          },
+        ];
+      }),
+    );
+
+    const groupMap = new Map();
+    imageItems.forEach((item) => {
+      const baseUserId = sanitizeId(item?.baseUserId, "");
+      const roster = rosterByUserId.get(baseUserId);
+      if (!baseUserId || !roster) return;
+
+      if (!groupMap.has(baseUserId)) {
+        groupMap.set(baseUserId, {
+          userId: baseUserId,
+          baseUserId,
+          username: roster.username,
+          studentName: roster.studentName,
+          studentId: roster.studentId,
+          className: roster.className,
+          imageCount: 0,
+          latestCreatedAt: "",
+          images: [],
+        });
+      }
+
+      const group = groupMap.get(baseUserId);
+      group.images.push(item);
+      group.imageCount += 1;
+      if (
+        !group.latestCreatedAt ||
+        Date.parse(item.createdAt) > Date.parse(group.latestCreatedAt)
+      ) {
+        group.latestCreatedAt = item.createdAt;
+      }
+    });
+
+    groups = Array.from(groupMap.values()).map((group) => {
+      const sortedImages = [...group.images].sort((a, b) => {
+        const aTime = Date.parse(a?.createdAt || "") || 0;
+        const bTime = Date.parse(b?.createdAt || "") || 0;
+        if (bTime !== aTime) return bTime - aTime;
+        return String(b?.id || "").localeCompare(String(a?.id || ""), "zh-CN");
+      });
+      return {
+        ...group,
+        imageCount: sortedImages.length,
+        latestCreatedAt: sortedImages[0]?.createdAt || "",
+        images: sortedImages,
+      };
+    });
+
+    if (keywordLower) {
+      groups = groups.filter((group) => {
+        const fields = [
+          group?.studentName,
+          group?.username,
+          group?.studentId,
+          group?.className,
+          group?.userId,
+        ];
+        return fields.some((field) =>
+          String(field || "").toLowerCase().includes(keywordLower),
+        );
+      });
+    }
+
+    groups.sort((a, b) => {
+      const aTime = Date.parse(a?.latestCreatedAt || "") || 0;
+      const bTime = Date.parse(b?.latestCreatedAt || "") || 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return compareClassroomRosterStudent(a, b);
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error?.message || "整理图片管理列表失败，请稍后重试。",
+    });
+    return;
+  }
+
+  res.json({
+    ok: true,
+    keyword,
+    updatedAt: new Date().toISOString(),
+    totalGroupCount: groups.length,
+    totalImageCount: groups.reduce((sum, group) => sum + Number(group?.imageCount || 0), 0),
+    groups,
+  });
+});
+
+app.get("/api/auth/admin/images/history/:imageId/content", async (req, res) => {
+  if (!(await authenticateAdminRequestFromHeaderOrQuery(req, res))) return;
+
+  const imageId = sanitizeId(req.params?.imageId, "");
+  const download = sanitizeRuntimeBoolean(req.query?.download, false);
+  if (!imageId) {
+    res.status(400).json({ error: "无效图片 ID。" });
+    return;
+  }
+
+  try {
+    const doc = await GeneratedImageHistory.findOne(
+      { _id: imageId },
+      {
+        prompt: 1,
+        imageUrl: 1,
+        ossKey: 1,
+        imageData: 1,
+        imageMimeType: 1,
+        imageStorageType: 1,
+        createdAt: 1,
+        expiresAt: 1,
+      },
+    ).lean();
+    if (!doc) {
+      res.status(404).json({ error: "图片不存在或已过期。" });
+      return;
+    }
+
+    const storageType = normalizeGeneratedImageStorageType(doc?.imageStorageType);
+    const expiresAt = sanitizeIsoDate(doc?.expiresAt);
+    if (storageType !== "oss" && expiresAt && Date.parse(expiresAt) <= Date.now()) {
+      res.status(410).json({ error: "图片已过期。" });
+      return;
+    }
+
+    const mimeType = normalizeGeneratedImageMimeType(doc?.imageMimeType) || "image/png";
+    const ext = resolveFileExtensionByMimeType(mimeType, "png");
+    const fileName = sanitizeGroupChatFileName(
+      `generated-image-${String(imageId).slice(-8) || imageId}.${ext}`,
+    );
+    const ossKey = sanitizeGroupChatOssObjectKey(doc?.ossKey);
+    if (ossKey) {
+      if (download) {
+        const downloadUrl = await buildTeacherLessonFileDownloadUrl({
+          ossKey,
+          fileName,
+        });
+        if (downloadUrl) {
+          res.json({
+            ok: true,
+            downloadUrl,
+            fileName,
+            mimeType,
+          });
+          return;
+        }
+      } else if (groupChatOssClient && groupChatOssConfig && !groupChatOssConfig.publicRead) {
+        try {
+          const signedUrl = sanitizeGroupChatHttpUrl(
+            await groupChatOssClient.asyncSignatureUrl(ossKey, {
+              method: "GET",
+              expires: groupChatOssConfig.signedUrlTtlSeconds,
+            }),
+          );
+          if (/^https?:\/\//i.test(signedUrl)) {
+            res.redirect(signedUrl);
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            `[image-management] OSS 预览地址生成失败（${ossKey}）：`,
+            error?.message || error,
+          );
+        }
+      }
+
+      const directUrl =
+        sanitizeGroupChatHttpUrl(doc?.imageUrl) || buildGroupChatOssObjectUrl(ossKey);
+      if (/^https?:\/\//i.test(directUrl)) {
+        if (download) {
+          res.json({
+            ok: true,
+            downloadUrl: directUrl,
+            fileName,
+            mimeType,
+          });
+          return;
+        }
+        res.redirect(directUrl);
+        return;
+      }
+    }
+
+    const imageBuffer = extractGeneratedImageDataBuffer(doc?.imageData);
+    if (imageBuffer.length > 0) {
+      res.setHeader("Content-Type", mimeType);
+      res.setHeader("Content-Length", String(imageBuffer.length));
+      res.setHeader("Cache-Control", "private, no-store");
+      if (download) {
+        res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fileName));
+      }
+      res.send(imageBuffer);
+      return;
+    }
+
+    const fallbackUrl = normalizeGeneratedImageStoreUrl(doc?.imageUrl || "");
+    if (/^https?:\/\//i.test(fallbackUrl)) {
+      if (download) {
+        res.json({
+          ok: true,
+          downloadUrl: fallbackUrl,
+          fileName,
+          mimeType,
+        });
+      } else {
+        res.redirect(fallbackUrl);
+      }
+      return;
+    }
+
+    const parsedDataUrl = parseGeneratedImageDataUrl(fallbackUrl);
+    if (parsedDataUrl) {
+      const fallbackMimeType =
+        normalizeGeneratedImageMimeType(parsedDataUrl?.mimeType) || mimeType;
+      const fallbackExt = resolveFileExtensionByMimeType(fallbackMimeType, "png");
+      const fallbackFileName = sanitizeGroupChatFileName(
+        `generated-image-${String(imageId).slice(-8) || imageId}.${fallbackExt}`,
+      );
+      res.setHeader("Content-Type", fallbackMimeType);
+      res.setHeader("Content-Length", String(parsedDataUrl.data.length));
+      res.setHeader("Cache-Control", "private, no-store");
+      if (download) {
+        res.setHeader(
+          "Content-Disposition",
+          buildAttachmentContentDisposition(fallbackFileName),
+        );
+      }
+      res.send(parsedDataUrl.data);
+      return;
+    }
+
+    res.status(404).json({ error: "图片不存在或已过期。" });
+  } catch (error) {
+    if (String(error?.name || "") === "CastError") {
+      res.status(400).json({ error: "无效图片 ID。" });
+      return;
+    }
+    res.status(500).json({
+      error: error?.message || "读取图片内容失败，请稍后重试。",
+    });
+  }
 });
 
 app.get("/api/auth/admin/online-presence", async (req, res) => {
@@ -8554,6 +9545,40 @@ function buildGeneratedImageHistoryContentPath(imageId) {
   return `/api/images/history/${encodeURIComponent(safeImageId)}/content`;
 }
 
+function buildAdminGeneratedImageHistoryContentPath(imageId, { download = false } = {}) {
+  const safeImageId = sanitizeId(imageId, "");
+  if (!safeImageId) return "";
+  const basePath = `/api/auth/admin/images/history/${encodeURIComponent(safeImageId)}/content`;
+  return download ? `${basePath}?download=1` : basePath;
+}
+
+function parseTeacherScopedStorageUserId(storageUserId) {
+  const raw = sanitizeId(storageUserId, "");
+  if (!raw) {
+    return {
+      storageUserId: "",
+      baseUserId: "",
+      teacherScopeKey: DEFAULT_TEACHER_SCOPE_KEY,
+    };
+  }
+  const marker = "__teacher__";
+  const markerIndex = raw.indexOf(marker);
+  if (markerIndex <= 0) {
+    return {
+      storageUserId: raw,
+      baseUserId: raw,
+      teacherScopeKey: DEFAULT_TEACHER_SCOPE_KEY,
+    };
+  }
+  const baseUserId = sanitizeId(raw.slice(0, markerIndex), "");
+  const scopeText = raw.slice(markerIndex + marker.length);
+  return {
+    storageUserId: raw,
+    baseUserId,
+    teacherScopeKey: sanitizeTeacherScopeKey(scopeText),
+  };
+}
+
 function resolveGeneratedImageOutputUrl({ url, b64Json }) {
   const direct = normalizeGeneratedImageStoreUrl(url);
   if (direct) return direct;
@@ -8712,6 +9737,25 @@ function toGeneratedImageHistoryItem(doc) {
     size: sanitizeText(doc?.size, "", 80),
     model: sanitizeText(doc?.model, "", 160),
     createdAt: sanitizeIsoDate(doc?.createdAt) || new Date().toISOString(),
+  };
+}
+
+function toAdminGeneratedImageHistoryItem(doc) {
+  const id = sanitizeId(doc?._id, "");
+  const createdAt = sanitizeIsoDate(doc?.createdAt) || new Date().toISOString();
+  const parsedUser = parseTeacherScopedStorageUserId(doc?.userId);
+  return {
+    id,
+    prompt: sanitizeText(doc?.prompt, "", 2000),
+    model: sanitizeText(doc?.model, "", 160),
+    size: sanitizeText(doc?.size, "", 80),
+    createdAt,
+    storageUserId: parsedUser.storageUserId,
+    baseUserId: parsedUser.baseUserId,
+    teacherScopeKey: parsedUser.teacherScopeKey,
+    teacherScopeLabel: getTeacherScopeLabel(parsedUser.teacherScopeKey),
+    previewPath: buildAdminGeneratedImageHistoryContentPath(id),
+    downloadPath: buildAdminGeneratedImageHistoryContentPath(id, { download: true }),
   };
 }
 
@@ -10920,6 +11964,7 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
   }
 
   const enabled = sanitizeRuntimeBoolean(source.enabled, true);
+  const homeworkUploadEnabled = true;
   const files = sanitizeAdminClassroomCourseFilesPayload(source.files);
   const courseName = sanitizeText(source.courseName || source.name, "", 80);
   const legacyCourseRange = parseAdminClassroomLegacyCourseTimeRange(
@@ -10964,6 +12009,7 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
     courseEndAt,
     notes,
     enabled,
+    homeworkUploadEnabled,
     tasks,
     files,
     createdAt: sanitizeIsoDate(source.createdAt) || "",
@@ -10990,6 +12036,10 @@ function createAdminClassroomLessonFileId() {
   return `lesson-file-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("hex")}`;
 }
 
+function createClassroomHomeworkFileId() {
+  return `homework-file-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("hex")}`;
+}
+
 function normalizeAdminClassroomLessonFileDoc(doc) {
   return {
     id: sanitizeId(doc?.fileId || doc?.id, ""),
@@ -10998,6 +12048,39 @@ function normalizeAdminClassroomLessonFileDoc(doc) {
     size: sanitizeRuntimeInteger(doc?.size, 0, 0, MAX_FILE_SIZE_BYTES),
     uploadedAt: sanitizeIsoDate(doc?.uploadedAt) || "",
   };
+}
+
+function normalizeClassroomHomeworkFileDoc(doc) {
+  return {
+    id: sanitizeId(doc?.fileId || doc?.id, ""),
+    name: sanitizeGroupChatFileName(doc?.fileName || doc?.name || "作业文件.bin"),
+    originalName: sanitizeGroupChatFileName(doc?.originalFileName || ""),
+    mimeType: sanitizeGroupChatFileMimeType(doc?.mimeType),
+    size: sanitizeRuntimeInteger(doc?.size, 0, 0, MAX_FILE_SIZE_BYTES),
+    uploadedAt: sanitizeIsoDate(doc?.uploadedAt) || "",
+  };
+}
+
+function compareClassroomRosterStudent(a, b) {
+  const aId = String(a?.studentId || "").trim();
+  const bId = String(b?.studentId || "").trim();
+  if (aId && bId) {
+    const numericCompare = aId.localeCompare(bId, "zh-CN", {
+      numeric: true,
+      sensitivity: "base",
+    });
+    if (numericCompare !== 0) return numericCompare;
+  } else if (aId || bId) {
+    return aId ? -1 : 1;
+  }
+
+  const aName = String(a?.studentName || a?.username || "").trim();
+  const bName = String(b?.studentName || b?.username || "").trim();
+  const nameCompare = aName.localeCompare(bName, "zh-CN", {
+    sensitivity: "base",
+  });
+  if (nameCompare !== 0) return nameCompare;
+  return String(a?.userId || "").localeCompare(String(b?.userId || ""), "zh-CN");
 }
 
 function iterateAdminClassroomTaskFiles(lesson, onFile) {
@@ -13834,6 +14917,65 @@ function buildTeacherLessonOssLessonSegment(lesson, lessonIndex = 0) {
   return `lesson-${indexText}-${safeLessonId.slice(0, 24)}`;
 }
 
+function sanitizeStudentHomeworkOssFolderSegment(value, fallback = "unknown") {
+  const source = String(value || "").trim();
+  let raw = "";
+  for (const char of source) {
+    const code = char.charCodeAt(0);
+    if (code < 32) continue;
+    if (char === "/" || char === "\\") {
+      raw += "-";
+      continue;
+    }
+    raw += char;
+  }
+  raw = raw.replace(/\s+/g, " ");
+  if (!raw) return fallback;
+  if (raw === "." || raw === "..") return fallback;
+  return raw.slice(0, 80);
+}
+
+function buildStudentHomeworkLessonFolderName(lesson, lessonIndex = 0) {
+  const name = sanitizeText(lesson?.courseName, "", 80);
+  if (name) return sanitizeStudentHomeworkOssFolderSegment(name, `第${lessonIndex + 1}节课`);
+  return sanitizeStudentHomeworkOssFolderSegment(`第${lessonIndex + 1}节课`, "未命名课时");
+}
+
+function buildStudentHomeworkStudentFolderName({
+  studentName = "",
+  studentId = "",
+  studentUserId = "",
+}) {
+  const safeStudentName = sanitizeText(studentName, "", 64);
+  const safeStudentId = sanitizeText(studentId, "", 20);
+  if (safeStudentId && safeStudentName) {
+    return sanitizeStudentHomeworkOssFolderSegment(`${safeStudentId}-${safeStudentName}`, safeStudentId);
+  }
+  if (safeStudentId) return sanitizeStudentHomeworkOssFolderSegment(safeStudentId, "student");
+  if (safeStudentName) return sanitizeStudentHomeworkOssFolderSegment(safeStudentName, "student");
+  const fallbackUserId = sanitizeId(studentUserId, "") || "student";
+  return sanitizeStudentHomeworkOssFolderSegment(fallbackUserId, "student");
+}
+
+function buildStudentHomeworkOssObjectKey({
+  lessonFolder = "",
+  studentFolder = "",
+  fileName = "",
+}) {
+  const objectPrefix = sanitizeAliyunOssObjectPrefix(TEACHER_LESSON_FILE_OSS_SCOPE);
+  const safeScope = sanitizeStudentHomeworkOssFolderSegment(
+    STUDENT_HOMEWORK_OSS_SUB_SCOPE,
+    "student-homework",
+  );
+  const safeLessonFolder = sanitizeStudentHomeworkOssFolderSegment(lessonFolder, "未命名课时");
+  const safeStudentFolder = sanitizeStudentHomeworkOssFolderSegment(studentFolder, "student");
+  const safeFileName = sanitizeGroupChatFileName(fileName).replace(/\s+/g, "_");
+  const randomPart = crypto.randomBytes(8).toString("hex");
+  const timestamp = Date.now();
+  const rawKey = `${objectPrefix}/${safeScope}/${safeLessonFolder}/${safeStudentFolder}/${timestamp}-${randomPart}-${safeFileName}`;
+  return sanitizeGroupChatOssObjectKey(rawKey);
+}
+
 async function uploadTeacherLessonFileToOss({
   lesson,
   lessonIndex = 0,
@@ -13864,6 +15006,76 @@ async function uploadTeacherLessonFileToOss({
     throw new Error("课程文件上传到 OSS 失败，请稍后重试。");
   }
   return uploaded;
+}
+
+async function uploadStudentHomeworkFileToOss({
+  lesson,
+  lessonIndex = 0,
+  file,
+  fileNameOverride = "",
+  studentName = "",
+  studentId = "",
+  studentUserId = "",
+}) {
+  if (!groupChatOssClient || !groupChatOssConfig) {
+    throw new Error("未配置阿里云 OSS，暂时无法上传作业文件。");
+  }
+  const normalizedFile = normalizeMultipartUploadFile(file);
+  if (!normalizedFile || !Buffer.isBuffer(normalizedFile.buffer) || normalizedFile.buffer.length === 0) {
+    throw new Error("作业文件为空，上传失败。");
+  }
+
+  const targetFileName = sanitizeGroupChatFileName(
+    fileNameOverride || normalizedFile.originalname || "作业文件.bin",
+  );
+  const lessonFolder = buildStudentHomeworkLessonFolderName(lesson, lessonIndex);
+  const studentFolder = buildStudentHomeworkStudentFolderName({
+    studentName,
+    studentId,
+    studentUserId,
+  });
+  const ossKey = buildStudentHomeworkOssObjectKey({
+    lessonFolder,
+    studentFolder,
+    fileName: targetFileName,
+  });
+  if (!ossKey) {
+    throw new Error("生成作业文件路径失败，请稍后重试。");
+  }
+
+  const safeMimeType = sanitizeGroupChatFileMimeType(
+    normalizedFile.mimetype || "application/octet-stream",
+  );
+  await callGroupChatOssWithTimeoutFallback(
+    `put(${ossKey})`,
+    async (client) =>
+      client.put(ossKey, normalizedFile.buffer, {
+        headers: {
+          "Content-Type": safeMimeType,
+          "Content-Disposition": buildAttachmentContentDisposition(targetFileName),
+          "Cache-Control": "private, no-store",
+        },
+      }),
+    async (client) =>
+      client.put(ossKey, normalizedFile.buffer, {
+        headers: {
+          "Content-Type": safeMimeType,
+          "Content-Disposition": buildAttachmentContentDisposition(targetFileName),
+          "Cache-Control": "private, no-store",
+        },
+      }),
+  );
+
+  return {
+    fileName: targetFileName,
+    mimeType: safeMimeType,
+    size: normalizedFile.buffer.length,
+    storageType: "oss",
+    ossKey,
+    ossBucket: groupChatOssConfig.bucket,
+    ossRegion: groupChatOssConfig.region,
+    fileUrl: buildGroupChatOssObjectUrl(ossKey),
+  };
 }
 
 async function uploadBufferToGroupChatOss({
@@ -15853,6 +17065,22 @@ function readBearerToken(req) {
 
 async function authenticateAdminRequest(req, res) {
   const token = readBearerToken(req);
+  const payload = verifyToken(token);
+  if (!payload || payload.scope !== "admin" || payload.role !== "admin") {
+    res.status(401).json({ error: "管理员身份无效或已过期。" });
+    return null;
+  }
+
+  const admin = await AuthUser.findById(payload.uid).lean();
+  if (!isFixedAdminUser(admin)) {
+    res.status(403).json({ error: "仅管理员可访问。" });
+    return null;
+  }
+  return admin;
+}
+
+async function authenticateAdminRequestFromHeaderOrQuery(req, res) {
+  const token = readBearerToken(req) || String(req.query?.token || "").trim();
   const payload = verifyToken(token);
   if (!payload || payload.scope !== "admin" || payload.role !== "admin") {
     res.status(401).json({ error: "管理员身份无效或已过期。" });

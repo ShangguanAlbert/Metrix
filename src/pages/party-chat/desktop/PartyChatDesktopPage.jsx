@@ -22,7 +22,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import AgentSelect from "../../../components/AgentSelect.jsx";
 import MessageInput from "../../../components/MessageInput.jsx";
 import MessageList from "../../../components/MessageList.jsx";
@@ -107,6 +107,25 @@ export default function PartyChatDesktopPage({
   onToggleSidebarDrawer = null,
 } = {}) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTarget = useMemo(() => {
+    try {
+      const params = new URLSearchParams(String(location.search || ""));
+      const target = String(params.get("returnTo") || "")
+        .trim()
+        .toLowerCase();
+      if (target === "mode-selection" || target === "student-home") {
+        return "mode-selection";
+      }
+      if (target === "teacher-home" || target === "admin-home") {
+        return "teacher-home";
+      }
+    } catch {
+      // Ignore malformed query and fall back to chat.
+    }
+    return "chat";
+  }, [location.search]);
+  const backButtonLabel = returnTarget === "teacher-home" ? "返回教师主页" : "返回";
   const imageInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const messagesViewportRef = useRef(null);
@@ -1210,8 +1229,15 @@ export default function PartyChatDesktopPage({
     joinedRoomIdsRef.current = new Set();
     socketRef.current?.close();
     socketRef.current = null;
-    navigate(withAuthSlot("/chat"), { replace: true });
-  }, [navigate]);
+    const backPath = returnTarget === "mode-selection"
+      ? "/mode-selection"
+      : returnTarget === "teacher-home"
+        ? "/admin/settings"
+        : "/chat";
+    navigate(withAuthSlot(backPath), {
+      replace: true,
+    });
+  }, [navigate, returnTarget]);
 
   const mergeMessages = useCallback((roomId, incoming, { replace = false } = {}) => {
     const safeRoomId = String(roomId || "").trim();
@@ -2991,9 +3017,15 @@ export default function PartyChatDesktopPage({
     <div className="party-page">
       <header className="party-header">
         <div className="party-header-left">
-          <button type="button" className="party-back-btn" onClick={handleBackToChat}>
+          <button
+            type="button"
+            className="party-back-btn"
+            onClick={handleBackToChat}
+            title={backButtonLabel}
+            aria-label={backButtonLabel}
+          >
             <ArrowLeft size={16} />
-            返回
+            {backButtonLabel}
           </button>
           <div>
             <h1 className="party-title">派 · 协作</h1>

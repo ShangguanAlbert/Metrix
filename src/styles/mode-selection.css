@@ -374,6 +374,180 @@
   color: var(--mode-muted);
 }
 
+.task-hidden-file-input {
+  display: none;
+}
+
+.task-homework-upload-block {
+  border: 1px dashed #c3d3ec;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.task-homework-upload-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-homework-upload-head strong {
+  font-size: 14px;
+  color: #1f2f4b;
+}
+
+.task-homework-upload-head small {
+  font-size: 12px;
+  color: var(--mode-muted);
+}
+
+.task-homework-dropzone {
+  border: 1px dashed #b6c7e5;
+  border-radius: 10px;
+  background: #fff;
+  min-height: 86px;
+  padding: 10px;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.task-homework-dropzone.active {
+  border-color: #6692d8;
+  background: #edf4ff;
+}
+
+.task-homework-dropzone p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--mode-muted);
+}
+
+.task-homework-upload-btn,
+.task-homework-submit-btn,
+.task-homework-remove-btn {
+  border: 1px solid #c3d3ec;
+  border-radius: 10px;
+  background: #fff;
+  color: #1f2f4b;
+  cursor: pointer;
+}
+
+.task-homework-upload-btn {
+  min-height: 34px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-homework-upload-btn:hover:not(:disabled),
+.task-homework-submit-btn:hover:not(:disabled),
+.task-homework-remove-btn:hover:not(:disabled) {
+  background: #eef4ff;
+  border-color: #9bb3dc;
+}
+
+.task-homework-upload-btn:disabled,
+.task-homework-submit-btn:disabled,
+.task-homework-remove-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.task-homework-draft-list {
+  display: grid;
+  gap: 6px;
+}
+
+.task-homework-draft-item {
+  border: 1px solid #d7e1ef;
+  border-radius: 10px;
+  background: #fff;
+  min-height: 40px;
+  padding: 6px 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-homework-draft-item input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #ced9ea;
+  border-radius: 8px;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 13px;
+  color: #1f2f4b;
+}
+
+.task-homework-draft-item span {
+  font-size: 12px;
+  color: var(--mode-muted);
+}
+
+.task-homework-remove-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-homework-submit-btn {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-homework-uploaded-list {
+  display: grid;
+  gap: 6px;
+}
+
+.task-homework-uploaded-item {
+  border: 1px solid #d8e2f1;
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-homework-uploaded-meta {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+}
+
+.task-homework-uploaded-meta strong {
+  font-size: 13px;
+  color: #1f2f4b;
+}
+
+.task-homework-uploaded-meta span {
+  justify-self: end;
+  font-size: 12px;
+  color: var(--mode-muted);
+}
+
+.task-homework-uploaded-meta small {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--mode-muted);
+}
+
 .task-lock-box,
 .task-content-box {
   border: 1px solid #d1dcee;
@@ -419,5 +593,21 @@
 
   .mode-hub-grid {
     grid-template-columns: 1fr;
+  }
+
+  .task-homework-draft-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-homework-uploaded-item {
+    align-items: flex-start;
+  }
+
+  .task-homework-uploaded-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-homework-uploaded-meta span {
+    justify-self: start;
   }
 }

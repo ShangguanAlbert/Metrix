@@ -63,10 +63,10 @@ export default function ProductImprovementTaskPage() {
         <button
           type="button"
           className="task-back-btn"
-          onClick={() => navigate(withAuthSlot("/classroom/tasks", activeSlot))}
+          onClick={() => navigate(withAuthSlot("/mode-selection", activeSlot))}
         >
           <ArrowLeft size={16} />
-          <span>返回课堂任务</span>
+          <span>返回学生主页</span>
         </button>
 
         <header className="task-page-header">

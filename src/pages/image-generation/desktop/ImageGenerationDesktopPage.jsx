@@ -278,6 +278,24 @@ export default function ImageGenerationDesktopPage({
   const returnContextFromState = normalizeImageReturnContext(
     location.state?.returnContext || location.state?.restoreContext,
   );
+  const returnTarget = useMemo(() => {
+    try {
+      const params = new URLSearchParams(String(location.search || ""));
+      const target = String(params.get("returnTo") || "")
+        .trim()
+        .toLowerCase();
+      if (target === "mode-selection" || target === "student-home") {
+        return "mode-selection";
+      }
+      if (target === "teacher-home" || target === "admin-home") {
+        return "teacher-home";
+      }
+    } catch {
+      // Ignore malformed query and fall back to chat.
+    }
+    return "chat";
+  }, [location.search]);
+  const backButtonLabel = returnTarget === "teacher-home" ? "返回教师主页" : "返回";
   const termsContent = IMAGE_TERMS_CONTENT;
   const termsHash = IMAGE_TERMS_HASH;
   const termsLocked = !termsAgreed;
@@ -429,6 +447,14 @@ export default function ImageGenerationDesktopPage({
   }, [previewMap, selectedPreviewKey]);
 
   function handleBackToChat() {
+    if (returnTarget === "mode-selection") {
+      navigate(withAuthSlot("/mode-selection"));
+      return;
+    }
+    if (returnTarget === "teacher-home") {
+      navigate(withAuthSlot("/admin/settings"));
+      return;
+    }
     const storedContext = loadImageReturnContext();
     const context = returnContextFromState || storedContext || null;
     navigate(withAuthSlot("/chat"), {
@@ -619,11 +645,11 @@ export default function ImageGenerationDesktopPage({
             type="button"
             className="image-back-btn"
             onClick={handleBackToChat}
-            title="返回"
-            aria-label="返回"
+            title={backButtonLabel}
+            aria-label={backButtonLabel}
           >
             <ArrowLeft size={16} />
-            <span>返回</span>
+            <span>{backButtonLabel}</span>
           </button>
           <h1 className="image-page-title">图片生成</h1>
         </div>

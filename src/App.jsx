@@ -4,7 +4,6 @@ import LoginPage from "./pages/LoginPage.jsx";
 import LicensePage from "./pages/LicensePage.jsx";
 import ChatPage from "./pages/ChatPage.jsx";
 import ModeSelectionPage from "./pages/ModeSelectionPage.jsx";
-import ClassroomTaskPage from "./pages/ClassroomTaskPage.jsx";
 import ProductImprovementTaskPage from "./pages/ProductImprovementTaskPage.jsx";
 import AdminSettingsPage from "./pages/AdminSettingsPage.jsx";
 import AdminOnlineUsersPage from "./pages/AdminOnlineUsersPage.jsx";
@@ -42,7 +41,7 @@ export default function App() {
         path="/classroom/tasks"
         element={
           <RequireAuth>
-            <ClassroomTaskPage />
+            <Navigate to={withAuthSlot("/mode-selection", activeSlot)} replace />
           </RequireAuth>
         }
       />

@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   BookOpenCheck,
   Download,
   ExternalLink,
+  Image,
+  Lock,
   Sparkles,
+  Upload,
+  Users,
+  X,
 } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -15,8 +20,11 @@ import {
 } from "../app/authStorage.js";
 import { SHANGGUAN_FUZE_TEACHER_SCOPE_KEY } from "../../shared/teacherScopes.js";
 import {
+  deleteClassroomHomeworkFile,
   downloadClassroomLessonFile,
+  fetchClassroomHomeworkSubmissions,
   fetchClassroomTaskSettings,
+  uploadClassroomHomeworkFiles,
 } from "./classroom/classroomApi.js";
 import "../styles/teacher-home.css";
 import "../styles/mode-selection.css";
@@ -26,14 +34,6 @@ const CLASS_TASK_FALLBACK_DATE = "2026-03-11";
 
 function readErrorMessage(error) {
   return error?.message || "读取课堂任务失败，请稍后重试。";
-}
-
-function formatDateLabel(dateText) {
-  const raw = String(dateText || "").trim();
-  if (!raw) return "2026年3月11日";
-  const match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (!match) return raw;
-  return `${match[1]}年${Number(match[2])}月${Number(match[3])}日`;
 }
 
 function formatFileSize(size) {
@@ -46,6 +46,65 @@ function formatFileSize(size) {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   }
   return `${bytes} B`;
+}
+
+function formatUploadTime(input) {
+  if (!input) return "--";
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function splitFileName(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return { base: "", ext: "" };
+  const dotIndex = raw.lastIndexOf(".");
+  if (dotIndex <= 0 || dotIndex >= raw.length - 1) {
+    return { base: raw, ext: "" };
+  }
+  return {
+    base: raw.slice(0, dotIndex),
+    ext: raw.slice(dotIndex),
+  };
+}
+
+function normalizeHomeworkFileName(inputName, originalName) {
+  const typed = String(inputName || "").trim();
+  const original = String(originalName || "").trim();
+  if (!typed) return original || "作业文件";
+  const typedParts = splitFileName(typed);
+  if (typedParts.ext) return typed;
+  const originalParts = splitFileName(original);
+  if (originalParts.ext) {
+    return `${typed}${originalParts.ext}`;
+  }
+  return typed;
+}
+
+function parseTaskLinks(content) {
+  return String(content || "")
+    .split(/\r?\n/)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function resolveTaskLinkLabel(linkUrl) {
+  const raw = String(linkUrl || "").trim();
+  if (!raw) return "任务链接";
+  try {
+    const parsed = new URL(raw);
+    const host = String(parsed.hostname || "").trim().replace(/^www\./i, "");
+    if (host) return host;
+    return raw;
+  } catch {
+    return raw;
+  }
 }
 
 function triggerBrowserDownload(blob, fileName) {
@@ -148,14 +207,6 @@ function sortLessonPlans(plans) {
     .map((item) => item.lesson);
 }
 
-function countLessonTaskFiles(lesson) {
-  const tasks = Array.isArray(lesson?.tasks) ? lesson.tasks : [];
-  return tasks.reduce((total, task) => {
-    const files = Array.isArray(task?.files) ? task.files : [];
-    return total + files.length;
-  }, 0);
-}
-
 function WorkshopLaunchIcon() {
   return (
     <svg
@@ -188,6 +239,7 @@ function WorkshopLaunchIcon() {
 export default function ModeSelectionPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const homeworkFileInputRef = useRef(null);
   const activeSlot = resolveActiveAuthSlot(location.search);
   const storedUser = getStoredAuthUser(activeSlot);
   const teacherScopeKey = String(storedUser?.teacherScopeKey || "")
@@ -200,6 +252,14 @@ export default function ModeSelectionPage() {
   const [settingsError, setSettingsError] = useState("");
   const [downloadError, setDownloadError] = useState("");
   const [downloadingFileId, setDownloadingFileId] = useState("");
+  const [homeworkLoading, setHomeworkLoading] = useState(false);
+  const [homeworkError, setHomeworkError] = useState("");
+  const [homeworkUploadingLessonId, setHomeworkUploadingLessonId] = useState("");
+  const [deletingHomeworkFileId, setDeletingHomeworkFileId] = useState("");
+  const [homeworkDraftFilesByLesson, setHomeworkDraftFilesByLesson] = useState({});
+  const [homeworkSubmissionsByLesson, setHomeworkSubmissionsByLesson] = useState({});
+  const [homeworkComposerOpenLessonId, setHomeworkComposerOpenLessonId] = useState("");
+  const [homeworkDropActive, setHomeworkDropActive] = useState(false);
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [taskSettings, setTaskSettings] = useState({
     firstLessonDate: CLASS_TASK_FALLBACK_DATE,
@@ -213,8 +273,15 @@ export default function ModeSelectionPage() {
     async function loadTaskSettings() {
       setSettingsLoading(true);
       setSettingsError("");
+      setHomeworkLoading(true);
+      setHomeworkError("");
       try {
-        const data = await fetchClassroomTaskSettings();
+        const [data, homeworkData] = await Promise.all([
+          fetchClassroomTaskSettings(),
+          fetchClassroomHomeworkSubmissions().catch(() => ({
+            submissionsByLesson: {},
+          })),
+        ]);
         if (cancelled) return;
         setTaskSettings({
           firstLessonDate: String(
@@ -224,12 +291,21 @@ export default function ModeSelectionPage() {
             ? data.teacherCoursePlans
             : [],
         });
+        setHomeworkSubmissionsByLesson(
+          homeworkData && typeof homeworkData === "object"
+            ? homeworkData.submissionsByLesson && typeof homeworkData.submissionsByLesson === "object"
+              ? homeworkData.submissionsByLesson
+              : {}
+            : {},
+        );
       } catch (error) {
         if (cancelled) return;
         setSettingsError(readErrorMessage(error));
+        setHomeworkSubmissionsByLesson({});
       } finally {
         if (!cancelled) {
           setSettingsLoading(false);
+          setHomeworkLoading(false);
         }
       }
     }
@@ -267,6 +343,17 @@ export default function ModeSelectionPage() {
     setSelectedCourseId(String(sortedLessons[0]?.id || ""));
   }, [selectedCourseId, sortedLessons]);
 
+  useEffect(() => {
+    if (!homeworkComposerOpenLessonId) return;
+    const exists = sortedLessons.some(
+      (lesson) => String(lesson?.id || "") === String(homeworkComposerOpenLessonId || ""),
+    );
+    if (!exists) {
+      setHomeworkComposerOpenLessonId("");
+      setHomeworkDropActive(false);
+    }
+  }, [homeworkComposerOpenLessonId, sortedLessons]);
+
   const selectedCourse = useMemo(
     () =>
       sortedLessons.find(
@@ -285,22 +372,10 @@ export default function ModeSelectionPage() {
     [selectedCourse, sortedLessons],
   );
 
-  const firstLessonDateLabel = useMemo(() => {
-    const firstLesson = sortedLessons[0];
-    const startMs = resolveLessonStartMs(firstLesson);
-    if (Number.isFinite(startMs)) {
-      const date = new Date(startMs);
-      return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
-    }
-    return formatDateLabel(taskSettings.firstLessonDate);
-  }, [sortedLessons, taskSettings.firstLessonDate]);
-
-  const firstLessonName = useMemo(() => {
-    const firstLesson = sortedLessons[0];
-    return String(firstLesson?.courseName || "").trim() || "第一节课";
-  }, [sortedLessons]);
-
-  const workshopUrl = useMemo(() => withAuthSlot("/chat", activeSlot), [activeSlot]);
+  const workshopUrl = useMemo(
+    () => withAuthSlot("/chat?returnTo=mode-selection", activeSlot),
+    [activeSlot],
+  );
 
   function onBackToLogin() {
     clearUserAuthSession(activeSlot);
@@ -310,6 +385,177 @@ export default function ModeSelectionPage() {
   function onOpenWorkshopInNewTab() {
     if (typeof window === "undefined") return;
     window.open(workshopUrl, "_blank", "noopener,noreferrer");
+  }
+
+  function onOpenImageGeneration() {
+    navigate(withAuthSlot("/image-generation?returnTo=mode-selection", activeSlot));
+  }
+
+  function onOpenParty() {
+    navigate(withAuthSlot("/party?returnTo=mode-selection", activeSlot));
+  }
+
+  function appendHomeworkDraftFiles(lessonId, fileList) {
+    const safeLessonId = String(lessonId || "").trim();
+    if (!safeLessonId) return;
+    const files = Array.from(fileList || []).filter(
+      (file) => file && typeof file === "object" && typeof file.name === "string" && file.size > 0,
+    );
+    if (files.length === 0) return;
+    setHomeworkDraftFilesByLesson((current) => {
+      const existing = Array.isArray(current[safeLessonId]) ? current[safeLessonId] : [];
+      const nextItems = files.map((file, fileIndex) => {
+        const { base } = splitFileName(file.name);
+        return {
+          id: `draft-${Date.now()}-${Math.random().toString(36).slice(2)}-${fileIndex}`,
+          file,
+          fileName: base || file.name || `作业文件-${fileIndex + 1}`,
+          originalName: file.name || `作业文件-${fileIndex + 1}`,
+        };
+      });
+      return {
+        ...current,
+        [safeLessonId]: [...existing, ...nextItems].slice(0, 30),
+      };
+    });
+    setHomeworkError("");
+  }
+
+  function onOpenHomeworkSubmit() {
+    const safeLessonId = String(selectedCourse?.id || "").trim();
+    if (!safeLessonId || !selectedHomeworkUploadEnabled) return;
+    setHomeworkComposerOpenLessonId(safeLessonId);
+    setHomeworkDropActive(false);
+    setHomeworkError("");
+  }
+
+  function onCloseHomeworkSubmit() {
+    const safeLessonId = String(selectedCourse?.id || "").trim();
+    if (safeLessonId) {
+      setHomeworkDraftFilesByLesson((current) => ({
+        ...current,
+        [safeLessonId]: [],
+      }));
+    }
+    setHomeworkComposerOpenLessonId("");
+    setHomeworkDropActive(false);
+    setHomeworkError("");
+  }
+
+  function onHomeworkInputChange(event) {
+    const safeLessonId = String(selectedCourse?.id || "").trim();
+    appendHomeworkDraftFiles(safeLessonId, event?.target?.files || []);
+    if (event?.target) {
+      event.target.value = "";
+    }
+  }
+
+  function onHomeworkDraftFileNameChange(itemId, value) {
+    const safeLessonId = String(selectedCourse?.id || "").trim();
+    const safeItemId = String(itemId || "").trim();
+    if (!safeLessonId || !safeItemId) return;
+    setHomeworkDraftFilesByLesson((current) => {
+      const list = Array.isArray(current[safeLessonId]) ? current[safeLessonId] : [];
+      const nextList = list.map((item) =>
+        String(item?.id || "") === safeItemId
+          ? {
+              ...item,
+              fileName: String(value || ""),
+            }
+          : item,
+      );
+      return {
+        ...current,
+        [safeLessonId]: nextList,
+      };
+    });
+  }
+
+  function onRemoveHomeworkDraftFile(itemId) {
+    const safeLessonId = String(selectedCourse?.id || "").trim();
+    const safeItemId = String(itemId || "").trim();
+    if (!safeLessonId || !safeItemId) return;
+    setHomeworkDraftFilesByLesson((current) => {
+      const list = Array.isArray(current[safeLessonId]) ? current[safeLessonId] : [];
+      const nextList = list.filter((item) => String(item?.id || "") !== safeItemId);
+      return {
+        ...current,
+        [safeLessonId]: nextList,
+      };
+    });
+  }
+
+  function onHomeworkDrop(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    setHomeworkDropActive(false);
+    const safeLessonId = String(selectedCourse?.id || "").trim();
+    appendHomeworkDraftFiles(safeLessonId, event?.dataTransfer?.files || []);
+  }
+
+  async function onUploadHomeworkFiles() {
+    const safeLessonId = String(selectedCourse?.id || "").trim();
+    if (!safeLessonId || !selectedHomeworkUploadEnabled) return;
+    const draftList = Array.isArray(homeworkDraftFilesByLesson[safeLessonId])
+      ? homeworkDraftFilesByLesson[safeLessonId]
+      : [];
+    if (draftList.length === 0) {
+      setHomeworkError("请先添加作业文件，再点击上传。");
+      return;
+    }
+
+    setHomeworkError("");
+    setHomeworkUploadingLessonId(safeLessonId);
+    try {
+      const payload = draftList
+        .map((item) => {
+          const file = item?.file;
+          if (!file || typeof file !== "object" || typeof file.name !== "string") return null;
+          return {
+            file,
+            fileName: normalizeHomeworkFileName(item?.fileName, item?.originalName || file.name),
+          };
+        })
+        .filter(Boolean);
+      if (payload.length === 0) {
+        setHomeworkError("当前没有可上传的作业文件。");
+        return;
+      }
+      const data = await uploadClassroomHomeworkFiles(safeLessonId, payload);
+      const submissions = Array.isArray(data?.submissions) ? data.submissions : [];
+      setHomeworkSubmissionsByLesson((current) => ({
+        ...current,
+        [safeLessonId]: submissions,
+      }));
+      setHomeworkDraftFilesByLesson((current) => ({
+        ...current,
+        [safeLessonId]: [],
+      }));
+    } catch (error) {
+      setHomeworkError(error?.message || "作业上传失败，请稍后重试。");
+    } finally {
+      setHomeworkUploadingLessonId("");
+    }
+  }
+
+  async function onDeleteHomeworkUploadedFile(fileId) {
+    const safeLessonId = String(selectedCourse?.id || "").trim();
+    const safeFileId = String(fileId || "").trim();
+    if (!safeLessonId || !safeFileId) return;
+    setHomeworkError("");
+    setDeletingHomeworkFileId(safeFileId);
+    try {
+      const data = await deleteClassroomHomeworkFile(safeLessonId, safeFileId);
+      const submissions = Array.isArray(data?.submissions) ? data.submissions : [];
+      setHomeworkSubmissionsByLesson((current) => ({
+        ...current,
+        [safeLessonId]: submissions,
+      }));
+    } catch (error) {
+      setHomeworkError(error?.message || "删除作业文件失败，请稍后重试。");
+    } finally {
+      setDeletingHomeworkFileId("");
+    }
   }
 
   async function onDownloadLessonFile(fileId) {
@@ -350,12 +596,38 @@ export default function ModeSelectionPage() {
       icon: Sparkles,
       hint: "在新标签页进入学习协作空间",
     },
+    {
+      key: "image-generation",
+      label: "图片生成",
+      icon: Image,
+      hint: "进入元协坊图片生成功能",
+    },
+    {
+      key: "party",
+      label: "派 · 协作",
+      icon: Users,
+      hint: "进入元协坊派协作功能",
+    },
   ];
 
   const username = String(storedUser?.username || "").trim() || "同学";
   const avatarText = username.slice(0, 1).toUpperCase() || "学";
+  const selectedLessonId = String(selectedCourse?.id || "").trim();
   const selectedTasks = Array.isArray(selectedCourse?.tasks) ? selectedCourse.tasks : [];
-  const selectedTaskFileCount = countLessonTaskFiles(selectedCourse);
+  const selectedHomeworkUploadEnabled = selectedCourse?.homeworkUploadEnabled === true;
+  const homeworkComposerOpen =
+    selectedHomeworkUploadEnabled && selectedLessonId === String(homeworkComposerOpenLessonId || "");
+  const selectedHomeworkDraftFiles = selectedLessonId
+    ? Array.isArray(homeworkDraftFilesByLesson[selectedLessonId])
+      ? homeworkDraftFilesByLesson[selectedLessonId]
+      : []
+    : [];
+  const selectedHomeworkSubmissions = selectedLessonId
+    ? Array.isArray(homeworkSubmissionsByLesson[selectedLessonId])
+      ? homeworkSubmissionsByLesson[selectedLessonId]
+      : []
+    : [];
+  const homeworkUploading = homeworkUploadingLessonId === selectedLessonId;
 
   return (
     <div className="teacher-home-page student-home-page">
@@ -369,10 +641,6 @@ export default function ModeSelectionPage() {
               <div>
                 <dt>授课教师</dt>
                 <dd>{storedUser?.teacherScopeLabel || "上官福泽"}</dd>
-              </div>
-              <div>
-                <dt>模式</dt>
-                <dd>课堂学习入口</dd>
               </div>
             </dl>
           </div>
@@ -389,13 +657,21 @@ export default function ModeSelectionPage() {
                     setActivePanel(item.key);
                     if (item.key === "workshop") {
                       onOpenWorkshopInNewTab();
+                      return;
+                    }
+                    if (item.key === "image-generation") {
+                      onOpenImageGeneration();
+                      return;
+                    }
+                    if (item.key === "party") {
+                      onOpenParty();
                     }
                   }}
                   title={item.hint}
                 >
                   <Icon size={17} />
                   <span className="teacher-home-nav-label">{item.label}</span>
-                  {item.key === "workshop" ? (
+                  {item.key === "workshop" || item.key === "image-generation" || item.key === "party" ? (
                     <span className="teacher-home-nav-open-indicator" aria-hidden="true">
                       <ExternalLink size={13} />
                     </span>
@@ -421,11 +697,6 @@ export default function ModeSelectionPage() {
               <header className="teacher-panel-head">
                 <div>
                   <h2>课堂任务</h2>
-                  <p>
-                    {sortedLessons.length > 0
-                      ? `${firstLessonName}（${firstLessonDateLabel}） · 共 ${sortedLessons.length} 节课`
-                      : "教师暂未发布可访问课时"}
-                  </p>
                 </div>
               </header>
 
@@ -438,6 +709,12 @@ export default function ModeSelectionPage() {
               {downloadError ? (
                 <p className="task-status-tip error" role="alert">
                   {downloadError}
+                </p>
+              ) : null}
+              {homeworkLoading ? <p className="task-status-tip">正在读取作业上传状态…</p> : null}
+              {homeworkError ? (
+                <p className="task-status-tip error" role="alert">
+                  {homeworkError}
                 </p>
               ) : null}
 
@@ -466,7 +743,10 @@ export default function ModeSelectionPage() {
                             <button
                               type="button"
                               className="teacher-lesson-row-main"
-                              onClick={() => setSelectedCourseId(courseId)}
+                              onClick={() => {
+                                setSelectedCourseId(courseId);
+                                setHomeworkDropActive(false);
+                              }}
                             >
                               <strong>{course?.courseName || `第${index + 1}节课`}</strong>
                               <p>{formatLessonTimeLabel(course)}</p>
@@ -498,13 +778,19 @@ export default function ModeSelectionPage() {
 
                       <div className="teacher-lesson-detail-scroll">
                         <div className="teacher-grid-two student-lesson-meta-grid">
-                          <div className="teacher-info-line">
-                            <strong>任务数量</strong>
-                            <span>{`${selectedTasks.length} 个`}</span>
-                          </div>
-                          <div className="teacher-info-line">
-                            <strong>任务附件数</strong>
-                            <span>{`${selectedTaskFileCount} 个`}</span>
+                          <div className="teacher-info-line teacher-span-two student-homework-submit-card">
+                            <strong>作业提交</strong>
+                            <button
+                              type="button"
+                              className={`student-homework-submit-btn${
+                                selectedHomeworkUploadEnabled ? "" : " locked"
+                              }`}
+                              onClick={onOpenHomeworkSubmit}
+                              disabled={!selectedHomeworkUploadEnabled}
+                            >
+                              {selectedHomeworkUploadEnabled ? <Upload size={15} /> : <Lock size={15} />}
+                              <span>{selectedHomeworkUploadEnabled ? "提交作业" : "教师暂未开启作业上传"}</span>
+                            </button>
                           </div>
                           {String(selectedCourse?.notes || "").trim() ? (
                             <div className="teacher-info-line teacher-span-two">
@@ -524,6 +810,7 @@ export default function ModeSelectionPage() {
                                 const taskFiles = Array.isArray(task?.files) ? task.files : [];
                                 const taskTypeLabel = task?.type === "link" ? "链接任务" : "文字任务";
                                 const taskContent = String(task?.content || "").trim();
+                                const taskLinks = task?.type === "link" ? parseTaskLinks(taskContent) : [];
                                 return (
                                   <article
                                     key={String(task?.id || `task-${index + 1}`)}
@@ -534,15 +821,20 @@ export default function ModeSelectionPage() {
                                       <span>{taskTypeLabel}</span>
                                     </header>
 
-                                    {task?.type === "link" && taskContent ? (
-                                      <a
-                                        href={taskContent}
-                                        target="_blank"
-                                        rel="noreferrer noopener"
-                                        className="student-task-link"
-                                      >
-                                        打开任务链接
-                                      </a>
+                                    {task?.type === "link" && taskLinks.length > 0 ? (
+                                      <div className="student-task-link-list">
+                                        {taskLinks.map((linkUrl, linkIndex) => (
+                                          <a
+                                            key={`${task?.id || index}-link-${linkIndex + 1}`}
+                                            href={linkUrl}
+                                            target="_blank"
+                                            rel="noreferrer noopener"
+                                            className="student-task-link"
+                                          >
+                                            {resolveTaskLinkLabel(linkUrl)}
+                                          </a>
+                                        ))}
+                                      </div>
                                     ) : null}
 
                                     {task?.type !== "link" && taskContent ? (
@@ -583,6 +875,141 @@ export default function ModeSelectionPage() {
                   )}
                 </div>
               </section>
+
+              {homeworkComposerOpen && selectedCourse ? (
+                <div
+                  className="student-homework-modal-overlay"
+                  role="presentation"
+                  onClick={onCloseHomeworkSubmit}
+                >
+                  <div
+                    className="student-homework-modal-card"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="提交作业"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="student-homework-modal-head">
+                      <div>
+                        <h3>提交作业</h3>
+                        <p>{selectedCourse?.courseName || "当前课时"}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="student-homework-modal-close"
+                        onClick={onCloseHomeworkSubmit}
+                        aria-label="关闭上传弹窗"
+                        title="关闭上传弹窗"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                    <input
+                      ref={homeworkFileInputRef}
+                      type="file"
+                      multiple
+                      className="task-hidden-file-input"
+                      onChange={onHomeworkInputChange}
+                    />
+                    <div
+                      className={`task-homework-dropzone${homeworkDropActive ? " active" : ""}`}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setHomeworkDropActive(true);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (!homeworkDropActive) setHomeworkDropActive(true);
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setHomeworkDropActive(false);
+                      }}
+                      onDrop={onHomeworkDrop}
+                    >
+                      <p>拖拽作业文件到这里，或点击下方按钮添加</p>
+                      <button
+                        type="button"
+                        className="task-homework-upload-btn"
+                        onClick={() => homeworkFileInputRef.current?.click()}
+                        disabled={homeworkUploading}
+                      >
+                        <Upload size={15} />
+                        <span>{homeworkUploading ? "上传中..." : "添加作业文件"}</span>
+                      </button>
+                    </div>
+                    {selectedHomeworkDraftFiles.length > 0 ? (
+                      <div className="task-homework-draft-list">
+                        {selectedHomeworkDraftFiles.map((item) => (
+                          <div
+                            key={item?.id || `${selectedLessonId}-${item?.originalName}`}
+                            className="task-homework-draft-item"
+                          >
+                            <input
+                              type="text"
+                              value={item?.fileName || ""}
+                              onChange={(event) =>
+                                onHomeworkDraftFileNameChange(item?.id, event.target.value)
+                              }
+                              placeholder="输入文件名称"
+                            />
+                            <span>{formatFileSize(item?.file?.size)}</span>
+                            <button
+                              type="button"
+                              className="task-homework-remove-btn"
+                              onClick={() => onRemoveHomeworkDraftFile(item?.id)}
+                              aria-label="移除待上传文件"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          className="task-homework-submit-btn"
+                          onClick={() => void onUploadHomeworkFiles()}
+                          disabled={homeworkUploading}
+                        >
+                          {homeworkUploading ? "正在上传..." : "上传作业"}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="task-status-tip">可上传多个文件，上传前可在文本框内重命名。</p>
+                    )}
+                    {selectedHomeworkSubmissions.length > 0 ? (
+                      <div className="task-homework-uploaded-list">
+                        {selectedHomeworkSubmissions.map((file, index) => (
+                          <div
+                            key={file?.id || `${selectedLessonId}-uploaded-${index + 1}`}
+                            className="task-homework-uploaded-item"
+                          >
+                            <div className="task-homework-uploaded-meta">
+                              <strong>{file?.name || "作业文件"}</strong>
+                              <span>{formatFileSize(file?.size)}</span>
+                              <small>{`上传于 ${formatUploadTime(file?.uploadedAt)}`}</small>
+                            </div>
+                            <button
+                              type="button"
+                              className="task-homework-remove-btn"
+                              onClick={() => void onDeleteHomeworkUploadedFile(file?.id)}
+                              disabled={
+                                !file?.id || deletingHomeworkFileId === String(file?.id || "")
+                              }
+                              aria-label="删除已上传文件"
+                              title="删除已上传文件"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="teacher-panel-stack student-panel-stack">

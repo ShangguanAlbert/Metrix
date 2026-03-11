@@ -88,6 +88,16 @@ const DEFAULT_AGENT_PROVIDER_MAP = Object.freeze({
 const SIDEBAR_VISIBILITY_STORAGE_KEY = "chat_sidebar_visible";
 const TEACHER_SCOPE_YANG_JUNFENG = "yang-junfeng";
 const AGENT_C_LOCKED_PROVIDER = "volcengine";
+const TEACHER_HOME_DEFAULT_GRADE = GRADE_OPTIONS.includes("大学四年级")
+  ? "大学四年级"
+  : (GRADE_OPTIONS[0] || "");
+const TEACHER_HOME_DEFAULT_USER_INFO = Object.freeze({
+  name: "教师",
+  studentId: "000000",
+  gender: GENDER_OPTIONS.includes("男") ? "男" : (GENDER_OPTIONS[0] || ""),
+  grade: TEACHER_HOME_DEFAULT_GRADE,
+  className: "教师端",
+});
 const LOCKED_AGENT_BY_TEACHER_SCOPE = Object.freeze({
   [TEACHER_SCOPE_YANG_JUNFENG]: "C",
 });
@@ -156,6 +166,41 @@ function resolveLockedAgentByTeacherScope(teacherScopeKey) {
   const normalized = normalizeTeacherScopeKey(teacherScopeKey);
   const lockedAgent = LOCKED_AGENT_BY_TEACHER_SCOPE[normalized] || "";
   return sanitizeSmartContextAgentId(lockedAgent);
+}
+
+function resolveChatReturnTarget(search = "") {
+  try {
+    const params = new URLSearchParams(String(search || ""));
+    const target = String(params.get("returnTo") || "")
+      .trim()
+      .toLowerCase();
+    if (target === "mode-selection" || target === "student-home") {
+      return "mode-selection";
+    }
+    if (target === "teacher-home" || target === "admin-home") {
+      return "teacher-home";
+    }
+  } catch {
+    // Ignore malformed query and fall back to chat.
+  }
+  return "chat";
+}
+
+function fillTeacherHomeDefaultUserInfo(profile) {
+  const source = sanitizeUserInfo(profile);
+  const gender = GENDER_OPTIONS.includes(source.gender)
+    ? source.gender
+    : TEACHER_HOME_DEFAULT_USER_INFO.gender;
+  const grade = GRADE_OPTIONS.includes(source.grade)
+    ? source.grade
+    : TEACHER_HOME_DEFAULT_USER_INFO.grade;
+  return sanitizeUserInfo({
+    name: source.name || TEACHER_HOME_DEFAULT_USER_INFO.name,
+    studentId: source.studentId || TEACHER_HOME_DEFAULT_USER_INFO.studentId,
+    gender,
+    grade,
+    className: source.className || TEACHER_HOME_DEFAULT_USER_INFO.className,
+  });
 }
 
 function resolveRuntimeConfigForAgent(agentId, runtimeConfigs) {
@@ -449,6 +494,15 @@ function enableSmartContextForAgentSessions(map, sessions, agentId) {
 export default function ChatDesktopPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const returnTarget = useMemo(
+    () => resolveChatReturnTarget(location.search),
+    [location.search],
+  );
+  const logoutText = returnTarget === "mode-selection"
+    ? "返回学生主页"
+    : returnTarget === "teacher-home"
+      ? "返回教师主页"
+      : "退出登录";
   const [groups, setGroups] = useState(DEFAULT_GROUPS);
   const [sessions, setSessions] = useState(DEFAULT_SESSIONS);
   const [sessionMessages, setSessionMessages] = useState(DEFAULT_SESSION_MESSAGES);
@@ -752,7 +806,8 @@ export default function ChatDesktopPage() {
     if (context) {
       saveImageReturnContext(context);
     }
-    navigate(withAuthSlot("/image-generation"), {
+    const nextReturnTarget = returnTarget === "teacher-home" ? "teacher-home" : "chat";
+    navigate(withAuthSlot(`/image-generation?returnTo=${nextReturnTarget}`), {
       state: {
         returnContext: context,
       },
@@ -760,7 +815,8 @@ export default function ChatDesktopPage() {
   }
 
   function onOpenGroupChat() {
-    navigate(withAuthSlot("/party"));
+    const nextReturnTarget = returnTarget === "teacher-home" ? "teacher-home" : "chat";
+    navigate(withAuthSlot(`/party?returnTo=${nextReturnTarget}`));
   }
 
   function onDeleteSession(sessionId) {
@@ -1716,6 +1772,14 @@ export default function ChatDesktopPage() {
   }
 
   function onLogout() {
+    if (returnTarget === "mode-selection") {
+      navigate(withAuthSlot("/mode-selection"), { replace: true });
+      return;
+    }
+    if (returnTarget === "teacher-home") {
+      navigate(withAuthSlot("/admin/settings"), { replace: true });
+      return;
+    }
     clearUserAuthSession();
     navigate(withAuthSlot("/login"), { replace: true });
   }
@@ -1922,7 +1986,15 @@ export default function ChatDesktopPage() {
         setLastAppliedReasoning(nextAppliedReasoning);
         setSmartContextEnabledBySessionAgent(nextSmartContextEnabledMap);
 
-        const profile = sanitizeUserInfo(data?.profile);
+        let profile = sanitizeUserInfo(data?.profile);
+        if (returnTarget === "teacher-home" && !isUserInfoComplete(profile)) {
+          profile = fillTeacherHomeDefaultUserInfo(profile);
+          try {
+            await saveUserProfile(profile);
+          } catch {
+            // Ignore profile autofill save errors and continue with local defaults.
+          }
+        }
         setUserInfo(profile);
         if (!isUserInfoComplete(profile)) {
           setForceUserInfoModal(true);
@@ -1958,7 +2030,7 @@ export default function ChatDesktopPage() {
     return () => {
       cancelled = true;
     };
-  }, [navigate, location.state]);
+  }, [navigate, location.state, returnTarget]);
 
   useEffect(() => {
     setApiTemperature(String(normalizeTemperature(activeRuntimeConfig.temperature)));
@@ -2250,10 +2322,10 @@ export default function ChatDesktopPage() {
               type="button"
               className="chat-logout-btn"
               onClick={onLogout}
-              aria-label="退出登录"
-              title="退出登录"
+              aria-label={logoutText}
+              title={logoutText}
             >
-              <span className="chat-logout-tip">退出登录</span>
+              <span className="chat-logout-tip">{logoutText}</span>
               <LogOut size={16} aria-hidden="true" />
             </button>
           </div>

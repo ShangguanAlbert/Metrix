@@ -48,6 +48,100 @@
   margin-top: 0;
 }
 
+.student-homework-submit-card {
+  gap: 10px;
+}
+
+.student-homework-submit-btn {
+  border: 1px solid #9bb3dc;
+  border-radius: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #1f4a93;
+  background: #edf4ff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.student-homework-submit-btn:hover:not(:disabled) {
+  border-color: #7e9fd6;
+  background: #e2eeff;
+}
+
+.student-homework-submit-btn.locked,
+.student-homework-submit-btn:disabled {
+  border-color: #d5deeb;
+  background: #f2f4f8;
+  color: #8a96ab;
+  cursor: not-allowed;
+}
+
+.student-homework-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3200;
+  background: rgba(15, 23, 42, 0.38);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.student-homework-modal-card {
+  width: min(680px, 100%);
+  max-height: min(86vh, 860px);
+  overflow: auto;
+  border-radius: 16px;
+  border: 1px solid #d7e2f1;
+  background: #fff;
+  box-shadow: 0 22px 46px rgba(15, 23, 42, 0.24);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.student-homework-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.student-homework-modal-head h3 {
+  margin: 0;
+  font-size: 22px;
+  color: #0f172a;
+}
+
+.student-homework-modal-head p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.student-homework-modal-close {
+  border: 1px solid #cfd9e8;
+  border-radius: 10px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f7faff;
+  color: #334155;
+  cursor: pointer;
+}
+
+.student-homework-modal-close:hover {
+  border-color: #aabedb;
+  background: #ecf3ff;
+}
+
 .student-lesson-section {
   margin-top: 14px;
   border: 1px solid #d8e2f0;
@@ -101,6 +195,11 @@
   font-size: 12px;
   color: #234991;
   text-decoration: none;
+}
+
+.student-task-link-list {
+  display: grid;
+  gap: 6px;
 }
 
 .student-task-link:hover {
