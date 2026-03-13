@@ -2005,6 +2005,27 @@
   padding: 0 9px;
 }
 
+.teacher-party-room-action-icon-btn {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  justify-content: center;
+}
+
+.teacher-party-room-action-icon-btn.is-active {
+  background: #d8e6ff;
+  color: #17326d;
+}
+
+.teacher-party-room-action-danger-btn {
+  color: #8b1a1a;
+  background: #fbe8e8;
+}
+
+.teacher-party-room-action-danger-btn:hover {
+  background: #f6d9d9;
+}
+
 .teacher-party-member-list {
   display: flex;
   flex-wrap: wrap;
@@ -2815,6 +2836,10 @@
   .teacher-party-room-action-btn {
     flex: 1;
     justify-content: center;
+  }
+
+  .teacher-party-room-action-icon-btn {
+    flex: 0 0 auto;
   }
 
   .teacher-image-library-search {

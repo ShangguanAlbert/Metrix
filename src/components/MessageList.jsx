@@ -62,6 +62,7 @@ const MessageList = forwardRef(function MessageList({
   onAskSelection,
   onLatestChange,
   showAssistantActions = true,
+  disableAssistantCopy = false,
 }, ref) {
   const streamDraft = useSessionStreamDraft(activeSessionId);
   const virtuosoRef = useRef(null);
@@ -193,6 +194,7 @@ const MessageList = forwardRef(function MessageList({
           onAssistantForward={onAssistantForward}
           promptMessageId={promptMap.get(m.id) || ""}
           showAssistantActions={showAssistantActions}
+          disableAssistantCopy={disableAssistantCopy}
         />
       );
     },
@@ -203,6 +205,7 @@ const MessageList = forwardRef(function MessageList({
       onAssistantForward,
       promptMap,
       showAssistantActions,
+      disableAssistantCopy,
     ],
   );
 
@@ -396,6 +399,7 @@ const MessageItem = memo(function MessageItem({
   onAssistantForward,
   promptMessageId,
   showAssistantActions,
+  disableAssistantCopy,
 }) {
   const [copied, setCopied] = useState(false);
   const [copiedAttachmentKey, setCopiedAttachmentKey] = useState("");
@@ -591,10 +595,10 @@ const MessageItem = memo(function MessageItem({
             <button
               type="button"
               className={`msg-action-btn ${copied ? "active" : ""}`}
-              title={copied ? "已复制" : "复制"}
+              title={disableAssistantCopy ? "复制已禁用" : copied ? "已复制" : "复制"}
               aria-label="复制"
               onClick={copyContent}
-              disabled={isStreaming}
+              disabled={isStreaming || disableAssistantCopy}
             >
               <Copy size={16} />
             </button>

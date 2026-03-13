@@ -27,7 +27,6 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  UserPlus,
   Users,
   X,
   Image,
@@ -38,6 +37,7 @@ import {
   createAdminChatSession,
   downloadAdminGeneratedImage,
   downloadAdminClassroomHomeworkFile,
+  dissolveAdminGroupChatRoom,
   deleteAdminClassroomTaskFile,
   downloadAdminClassroomLessonFile,
   fetchAdminGeneratedImageGroups,
@@ -395,7 +395,7 @@ export default function TeacherHomePage() {
   const [partyRoomMemberSearchInput, setPartyRoomMemberSearchInput] = useState("");
   const [partyRoomSortBy, setPartyRoomSortBy] = useState("admin-order");
   const [copiedPartyRoomId, setCopiedPartyRoomId] = useState("");
-  const [joiningPartyRoomId, setJoiningPartyRoomId] = useState("");
+  const [dissolvingPartyRoomId, setDissolvingPartyRoomId] = useState("");
 
   const [onlineLoading, setOnlineLoading] = useState(false);
   const [onlineGeneratedAt, setOnlineGeneratedAt] = useState("");
@@ -1663,18 +1663,35 @@ export default function TeacherHomePage() {
     setCopiedPartyRoomId(roomId);
   }
 
-  async function onJoinPartyRoom(room) {
+  async function onDissolvePartyRoom(room) {
     const roomId = String(room?.id || "").trim();
-    const roomCode = String(room?.roomCode || "").trim();
-    if (!roomCode) {
-      setError("该派缺少派号，暂无法加入。");
+    if (!roomId || !adminToken) {
+      setError("无效派信息，暂无法解散。");
       return;
     }
-    setJoiningPartyRoomId(roomId || roomCode);
+
+    const roomName = String(room?.name || "未命名派").trim() || "未命名派";
+    const roomCode = String(room?.roomCode || "").trim();
+
+    const firstConfirmed = window.confirm(
+      `你将解散派「${roomName}」${roomCode ? `（${roomCode}）` : ""}，解散后成员与消息将被清理。`,
+    );
+    if (!firstConfirmed) return;
+
+    const secondConfirmed = window.confirm("请再次确认：确定要永久解散这个派吗？");
+    if (!secondConfirmed) return;
+
+    setError("");
+    setDissolvingPartyRoomId(roomId);
     try {
-      await openTeacherFeature(`/party?joinRoomCode=${encodeURIComponent(roomCode)}`);
+      await dissolveAdminGroupChatRoom(adminToken, roomId);
+      setCopiedPartyRoomId((current) => (current === roomId ? "" : current));
+      await loadPartyRoomManage();
+    } catch (rawError) {
+      if (handleAuthError(rawError)) return;
+      setError(readErrorMessage(rawError));
     } finally {
-      setJoiningPartyRoomId("");
+      setDissolvingPartyRoomId("");
     }
   }
 
@@ -2270,12 +2287,12 @@ export default function TeacherHomePage() {
                 <div className="teacher-panel-actions">
                   <button
                     type="button"
-                    className="teacher-ghost-btn"
+                    className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
                     onClick={() => void loadHomeworkOverview()}
                     disabled={homeworkOverviewLoading}
+                    aria-label={homeworkOverviewLoading ? "Refreshing" : "Refresh homework"}
                   >
                     <RefreshCw size={15} className={homeworkOverviewLoading ? "is-spinning" : ""} />
-                    <span>{homeworkOverviewLoading ? "刷新中..." : "刷新作业统计"}</span>
                   </button>
                 </div>
               </header>
@@ -2487,12 +2504,12 @@ export default function TeacherHomePage() {
                 <div className="teacher-panel-actions">
                   <button
                     type="button"
-                    className="teacher-ghost-btn"
+                    className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
                     onClick={() => void loadImageLibrary()}
                     disabled={imageLibraryLoading}
+                    aria-label={imageLibraryLoading ? "Refreshing" : "Refresh images"}
                   >
                     <RefreshCw size={15} className={imageLibraryLoading ? "is-spinning" : ""} />
-                    <span>{imageLibraryLoading ? "刷新中..." : "刷新图片列表"}</span>
                   </button>
                 </div>
               </header>
@@ -2690,12 +2707,12 @@ export default function TeacherHomePage() {
                 <div className="teacher-panel-actions">
                   <button
                     type="button"
-                    className="teacher-ghost-btn"
+                    className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
                     onClick={() => void loadPartyRoomManage()}
                     disabled={partyRoomManageLoading}
+                    aria-label={partyRoomManageLoading ? "Refreshing" : "Refresh"}
                   >
                     <RefreshCw size={15} className={partyRoomManageLoading ? "is-spinning" : ""} />
-                    <span>{partyRoomManageLoading ? "刷新中..." : "刷新群聊列表"}</span>
                   </button>
                 </div>
               </header>
@@ -2781,7 +2798,7 @@ export default function TeacherHomePage() {
                       const roomId = String(room?.id || "").trim() || `party-room-${roomIndex + 1}`;
                       const members = Array.isArray(room?.members) ? room.members : [];
                       const roomCode = String(room?.roomCode || "").trim();
-                      const joiningThisRoom = joiningPartyRoomId === roomId;
+                      const dissolvingThisRoom = dissolvingPartyRoomId === roomId;
                       return (
                         <article key={roomId} className="teacher-party-room-item">
                           <header className="teacher-party-room-head">
@@ -2797,23 +2814,25 @@ export default function TeacherHomePage() {
                               <div className="teacher-party-room-actions">
                                 <button
                                   type="button"
-                                  className="teacher-ghost-btn teacher-party-room-action-btn"
+                                  className={`teacher-ghost-btn teacher-party-room-action-btn teacher-party-room-action-icon-btn${
+                                    copiedPartyRoomId === roomId ? " is-active" : ""
+                                  }`}
                                   onClick={() => void onCopyPartyRoomCode(room)}
                                   disabled={!roomCode}
+                                  aria-label={copiedPartyRoomId === roomId ? "派号已复制" : "复制派号"}
+                                  title={copiedPartyRoomId === roomId ? "派号已复制" : "复制派号"}
                                 >
                                   <Copy size={13} />
-                                  <span>
-                                    {copiedPartyRoomId === roomId ? "已复制" : "复制派号"}
-                                  </span>
                                 </button>
                                 <button
                                   type="button"
-                                  className="teacher-primary-btn teacher-party-room-action-btn"
-                                  onClick={() => void onJoinPartyRoom(room)}
-                                  disabled={!roomCode || joiningThisRoom}
+                                  className="teacher-ghost-btn teacher-party-room-action-btn teacher-party-room-action-icon-btn teacher-party-room-action-danger-btn"
+                                  onClick={() => void onDissolvePartyRoom(room)}
+                                  disabled={dissolvingThisRoom}
+                                  aria-label="解散派"
+                                  title="解散派"
                                 >
-                                  <UserPlus size={13} />
-                                  <span>{joiningThisRoom ? "加入中..." : "加入派"}</span>
+                                  <Trash2 size={13} />
                                 </button>
                               </div>
                             </div>
@@ -2875,12 +2894,12 @@ export default function TeacherHomePage() {
                 <div className="teacher-panel-actions">
                   <button
                     type="button"
-                    className="teacher-ghost-btn"
+                    className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
                     onClick={() => void loadOnlineSummary()}
                     disabled={onlineLoading}
+                    aria-label={onlineLoading ? "Refreshing" : "Refresh overview"}
                   >
                     <RefreshCw size={15} className={onlineLoading ? "is-spinning" : ""} />
-                    <span>{onlineLoading ? "刷新中..." : "刷新概览"}</span>
                   </button>
                 </div>
               </header>

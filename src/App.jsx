@@ -72,6 +72,14 @@ export default function App() {
           </RequireAuth>
         }
       />
+      <Route
+        path="/image-generation/:libraryView"
+        element={
+          <RequireAuth>
+            <ImageGenerationPage />
+          </RequireAuth>
+        }
+      />
 
       <Route
         path="/party"

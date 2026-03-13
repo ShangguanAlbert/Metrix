@@ -79,6 +79,17 @@
   transition: transform 0.22s ease, opacity 0.2s ease;
 }
 
+.party-mobile-shell .party-side.party-side-mobile-drawer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: #e3eaf6;
+  pointer-events: none;
+}
+
 .party-mobile-shell .party-side.party-side-mobile-drawer.is-drawer-open {
   transform: translateX(0);
   opacity: 1;

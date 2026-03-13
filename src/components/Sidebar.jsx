@@ -526,7 +526,7 @@ export default function Sidebar({
             图片生成
           </button>
           <button className="sidebar-party-entry" onClick={() => onOpenGroupChat?.()}>
-            派 · 协作（BETA）
+            派 · 协作
           </button>
         </div>
 

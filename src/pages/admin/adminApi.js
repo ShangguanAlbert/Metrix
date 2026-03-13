@@ -171,6 +171,13 @@ export function fetchAdminGroupChatRooms(adminToken) {
   return request("/api/auth/admin/group-chat/rooms", adminToken);
 }
 
+export function dissolveAdminGroupChatRoom(adminToken, roomId) {
+  const safeRoomId = String(roomId || "").trim();
+  return request(`/api/auth/admin/group-chat/rooms/${encodeURIComponent(safeRoomId)}`, adminToken, {
+    method: "DELETE",
+  });
+}
+
 export async function uploadAdminClassroomLessonFiles(adminToken, lessonId, files = []) {
   const safeLessonId = String(lessonId || "").trim();
   const safeFiles = Array.isArray(files) ? files.filter(Boolean) : [];
