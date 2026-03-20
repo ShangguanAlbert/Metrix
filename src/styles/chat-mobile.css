@@ -5,6 +5,7 @@
 }
 
 .chat-mobile-shell .chat-layout {
+  height: 100vh;
   height: 100dvh;
   --layout-sidebar-width: 0px;
 }

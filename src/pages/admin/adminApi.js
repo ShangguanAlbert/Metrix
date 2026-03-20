@@ -349,6 +349,38 @@ export async function downloadAdminClassroomHomeworkFile(adminToken, fileId) {
   return { blob, filename };
 }
 
+export async function exportAdminClassroomHomeworkLessonZip(adminToken, lessonId) {
+  const safeLessonId = String(lessonId || "").trim();
+  const resp = await fetch(
+    `/api/auth/admin/classroom-homework/lessons/${encodeURIComponent(safeLessonId)}/export`,
+    {
+      method: "GET",
+      headers: authHeader(adminToken),
+    },
+  );
+
+  if (!resp.ok) {
+    let message = "";
+    try {
+      const data = await resp.json();
+      message = data?.error || data?.message || "";
+    } catch {
+      try {
+        message = await resp.text();
+      } catch {
+        message = "";
+      }
+    }
+    throw new Error(message || `请求失败（${resp.status}）`);
+  }
+
+  const blob = await resp.blob();
+  const filename =
+    readContentDispositionFilename(resp.headers.get("Content-Disposition")) ||
+    "课时作业批量导出.zip";
+  return { blob, filename };
+}
+
 export function exportAdminUsersTxt(adminToken) {
   return request("/api/auth/admin/export/users-txt", adminToken);
 }

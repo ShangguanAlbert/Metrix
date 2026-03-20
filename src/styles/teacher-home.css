@@ -21,6 +21,7 @@
 }
 
 .teacher-home-page:not(.student-home-page) {
+  height: 100vh;
   height: 100dvh;
   padding: 12px;
   box-sizing: border-box;
@@ -926,6 +927,33 @@
   flex-wrap: wrap;
 }
 
+.teacher-lesson-class-select {
+  width: 124px;
+  flex: 0 0 auto;
+}
+
+.teacher-lesson-class-select .portal-select-trigger {
+  min-height: 34px;
+  border-radius: 999px;
+  border-color: #d4deec;
+  background: #f3f6fc;
+  padding: 0 12px;
+  font-size: 14px;
+  color: #1f2a3b;
+}
+
+.teacher-lesson-class-select .portal-select-trigger:hover {
+  border-color: #c2d1e5;
+  background: #ecf2fc;
+}
+
+.teacher-lesson-class-select .portal-select-trigger:focus-visible,
+.teacher-lesson-class-select .portal-select-trigger.open {
+  border-color: #b7c8e2;
+  box-shadow: none;
+  outline: none;
+}
+
 .teacher-lesson-time-trigger {
   min-height: 34px;
   border-radius: 999px;
@@ -1689,6 +1717,146 @@
   color: #b42318;
 }
 
+.teacher-homework-class-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #5f7188;
+}
+
+.teacher-homework-detail-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.teacher-homework-export-btn {
+  min-height: 34px;
+  padding: 0 12px;
+  border-color: #cbdaf0;
+  background: #f3f8ff;
+  color: #1e3a66;
+}
+
+.teacher-homework-export-btn:hover:not(:disabled) {
+  border-color: #a8c2e8;
+  background: #e8f1ff;
+}
+
+.teacher-homework-detail-tools-hint {
+  font-size: 12px;
+  color: #5f7188;
+}
+
+.teacher-homework-missing-block {
+  border: 1px solid #f1d3cc;
+  border-radius: 12px;
+  background: #fff8f7;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.teacher-homework-missing-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.teacher-homework-missing-block strong {
+  font-size: 13px;
+  color: #9f1d16;
+}
+
+.teacher-homework-missing-toggle-btn {
+  border: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  box-shadow: none;
+  color: #9f1d16;
+  line-height: 0;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.24s ease;
+}
+
+.teacher-homework-missing-toggle-btn:hover {
+  color: #7f1710;
+}
+
+.teacher-homework-missing-toggle-btn:focus-visible {
+  outline: none;
+}
+
+.teacher-homework-missing-toggle-btn:focus,
+.teacher-homework-missing-toggle-btn:active {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+
+.teacher-homework-missing-toggle-btn svg {
+  transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.teacher-homework-missing-toggle-btn.expanded svg {
+  transform: rotate(180deg);
+}
+
+.teacher-homework-missing-block p {
+  margin: 0;
+  padding-top: 8px;
+  font-size: 12px;
+  color: #7c3d12;
+}
+
+.teacher-homework-missing-list-collapse {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(-5px);
+  pointer-events: none;
+  transition:
+    max-height 0.46s cubic-bezier(0.2, 0.96, 0.22, 1),
+    opacity 0.26s cubic-bezier(0.33, 1, 0.68, 1),
+    transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.teacher-homework-missing-list-collapse.expanded {
+  max-height: 480px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.teacher-homework-missing-list-inner {
+  padding-top: 8px;
+}
+
+.teacher-homework-missing-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.teacher-homework-missing-chip {
+  border: 1px solid #f1c7c0;
+  border-radius: 999px;
+  background: #fff;
+  color: #9f1d16;
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 4px 10px;
+}
+
 .teacher-homework-table-wrap {
   flex: 1;
   min-height: 0;
@@ -2056,6 +2224,12 @@
 .teacher-party-member-chip.owner {
   color: #fff;
   background: linear-gradient(135deg, #3151a3, #1d3f8a);
+}
+
+.teacher-party-member-chip.tooltip-below .teacher-party-member-tooltip {
+  top: calc(100% + 6px);
+  bottom: auto;
+  transform: translateY(-4px);
 }
 
 .teacher-party-member-name {
@@ -2753,6 +2927,10 @@
     grid-template-columns: 1fr;
   }
 
+  .teacher-lesson-class-select {
+    width: min(168px, 55vw);
+  }
+
   .teacher-task-master {
     height: auto;
     min-height: 0;
@@ -2764,6 +2942,7 @@
   }
 
   .teacher-home-page:not(.student-home-page) {
+    min-height: 100vh;
     min-height: 100dvh;
     padding: 8px;
   }

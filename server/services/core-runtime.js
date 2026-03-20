@@ -60,9 +60,9 @@ import {
   sanitizeTeacherScopeKey,
 } from "../../shared/teacherScopes.js";
 import {
-  FIXED_STUDENT_ACCOUNTS,
   FIXED_STUDENT_ACCOUNT_TAG,
   FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
+  parseFixedStudentAccounts,
 } from "../../shared/fixedStudentAccounts.js";
 
 dotenv.config();
@@ -104,6 +104,10 @@ const TEACHER_SCOPE_LOCKED_AGENT_MAP = Object.freeze({
   "yang-junfeng": "C",
 });
 const CLASS_NAME_JIAOJI_231 = "教技231";
+const CLASS_NAME_810 = "810班";
+const CLASS_NAME_811 = "811班";
+const ADMIN_CLASSROOM_SUPPORTED_CLASS_NAMES = Object.freeze([CLASS_NAME_810, CLASS_NAME_811]);
+const ADMIN_CLASSROOM_DEFAULT_CLASS_NAME = CLASS_NAME_810;
 const CLASSROOM_FIRST_LESSON_DATE = "2026-03-11";
 const CLASSROOM_QUESTIONNAIRE_URL = "https://v.wjx.cn/vm/PQfZjgr.aspx#";
 const ADMIN_CLASSROOM_COURSE_PLAN_MAX_ITEMS = 40;
@@ -156,6 +160,7 @@ const STUDENT_HOMEWORK_OSS_SUB_SCOPE = "student-homework";
 const STUDENT_HOMEWORK_UPLOAD_MAX_FILES = 6;
 const STUDENT_HOMEWORK_MAX_FILES_PER_LESSON_PER_STUDENT = 20;
 const FIXED_ADMIN_ACCOUNTS = Object.freeze(readFixedAdminAccountsFromEnv());
+const FIXED_STUDENT_ACCOUNTS = Object.freeze(readFixedStudentAccountsFromEnv());
 const FIXED_ADMIN_USERNAME_KEYS = new Set(
   FIXED_ADMIN_ACCOUNTS.map((item) =>
     String(item?.username || "")
@@ -1466,6 +1471,7 @@ const adminClassroomCoursePlanSchema = new mongoose.Schema(
   {
     id: { type: String, default: "" },
     courseName: { type: String, default: "" },
+    className: { type: String, default: ADMIN_CLASSROOM_DEFAULT_CLASS_NAME },
     courseTime: { type: String, default: "" },
     courseStartAt: { type: String, default: "" },
     courseEndAt: { type: String, default: "" },
@@ -7347,6 +7353,14 @@ function sortAdminClassroomCoursePlans(plans) {
   return Array.isArray(plans) ? [...plans] : [];
 }
 
+function sanitizeAdminClassroomClassName(value, fallback = ADMIN_CLASSROOM_DEFAULT_CLASS_NAME) {
+  const className = sanitizeText(value, "", 40).replace(/\s+/g, "");
+  if (ADMIN_CLASSROOM_SUPPORTED_CLASS_NAMES.includes(className)) {
+    return className;
+  }
+  return sanitizeText(fallback, ADMIN_CLASSROOM_DEFAULT_CLASS_NAME, 40).replace(/\s+/g, "");
+}
+
 function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
   const source = input && typeof input === "object" ? input : {};
   const taskSource = Array.isArray(source.tasks) ? source.tasks : [];
@@ -7366,6 +7380,9 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
   const homeworkUploadEnabled = true;
   const files = sanitizeAdminClassroomCourseFilesPayload(source.files);
   const courseName = sanitizeText(source.courseName || source.name, "", 80);
+  const className = sanitizeAdminClassroomClassName(
+    source.className || source.targetClassName || source.teachingClassName,
+  );
   const legacyCourseRange = parseAdminClassroomLegacyCourseTimeRange(
     source.courseTime || source.time,
   );
@@ -7403,6 +7420,7 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
   return {
     id: sanitizeId(source.id, `course-${index + 1}`),
     courseName: courseName || `未命名课程 ${index + 1}`,
+    className,
     courseTime,
     courseStartAt,
     courseEndAt,
@@ -12239,6 +12257,17 @@ function readFixedAdminAccountsFromEnv() {
   });
 
   return Array.from(deduped.values());
+}
+
+function readFixedStudentAccountsFromEnv() {
+  const raw = String(process.env.FIXED_STUDENT_ACCOUNTS || "").trim();
+  if (!raw) return [];
+  return parseFixedStudentAccounts(raw, {
+    warningLabel: "FIXED_STUDENT_ACCOUNTS",
+    onWarning: (message) => {
+      console.warn(message);
+    },
+  });
 }
 
 function normalizeUsername(input) {

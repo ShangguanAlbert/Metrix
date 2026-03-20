@@ -16,9 +16,17 @@ export default function useIsMobileViewport() {
     const onChange = (event) => {
       setIsMobile(Boolean(event.matches));
     };
-    mediaQuery.addEventListener("change", onChange);
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", onChange);
+    } else if (typeof mediaQuery.addListener === "function") {
+      mediaQuery.addListener(onChange);
+    }
     return () => {
-      mediaQuery.removeEventListener("change", onChange);
+      if (typeof mediaQuery.removeEventListener === "function") {
+        mediaQuery.removeEventListener("change", onChange);
+      } else if (typeof mediaQuery.removeListener === "function") {
+        mediaQuery.removeListener(onChange);
+      }
     };
   }, []);
 

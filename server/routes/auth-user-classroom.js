@@ -680,6 +680,25 @@ export function registerAuthUserClassroomRoutes(app, deps) {
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
 
+  const CLASSROOM_TARGET_CLASS_NAMES = Object.freeze(["810班", "811班"]);
+  const CLASSROOM_DEFAULT_TARGET_CLASS_NAME = CLASSROOM_TARGET_CLASS_NAMES[0];
+
+  function sanitizeClassroomTargetClassName(value, fallback = CLASSROOM_DEFAULT_TARGET_CLASS_NAME) {
+    const className = sanitizeText(value, "", 40).replace(/\s+/g, "");
+    if (CLASSROOM_TARGET_CLASS_NAMES.includes(className)) return className;
+    return sanitizeText(fallback, CLASSROOM_DEFAULT_TARGET_CLASS_NAME, 40).replace(/\s+/g, "");
+  }
+
+  function sanitizeClassroomUserClassName(value) {
+    const className = sanitizeText(value, "", 40).replace(/\s+/g, "");
+    if (!className) return "";
+    return CLASSROOM_TARGET_CLASS_NAMES.includes(className) ? className : "";
+  }
+
+  function resolveClassroomLessonClassName(lesson) {
+    return sanitizeClassroomTargetClassName(lesson?.className);
+  }
+
   app.get("/api/health", (_, res) => {
     res.json({ ok: true });
   });
@@ -735,9 +754,12 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       const config = await readAdminAgentConfig();
       productImprovementEnabled = !!config.shangguanClassTaskProductImprovementEnabled;
       teacherCoursePlans = sortAdminClassroomCoursePlans(
-        config.teacherCoursePlans.filter((lesson) =>
-          sanitizeRuntimeBoolean(lesson?.enabled, true),
-        ),
+        config.teacherCoursePlans
+          .filter((lesson) => sanitizeRuntimeBoolean(lesson?.enabled, true))
+          .map((lesson) => ({
+            ...lesson,
+            className: resolveClassroomLessonClassName(lesson),
+          })),
       );
     }
 
@@ -769,6 +791,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       .map((lesson) => ({
         id: sanitizeId(lesson?.id, ""),
         courseName: sanitizeText(lesson?.courseName, "", 80),
+        className: resolveClassroomLessonClassName(lesson),
         courseStartAt: sanitizeIsoDate(lesson?.courseStartAt) || "",
         courseEndAt: sanitizeIsoDate(lesson?.courseEndAt) || "",
         courseTime: sanitizeText(lesson?.courseTime, "", 120),
@@ -1603,19 +1626,32 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         : Promise.resolve([]),
     ]);
 
-    const roster = rosterUsers
+    const rosterAll = rosterUsers
       .map((user) => {
         const profile = sanitizeUserProfile(user?.profile);
+        const className = sanitizeClassroomUserClassName(profile.className);
         return {
           userId: sanitizeId(user?._id, ""),
           username: sanitizeText(user?.username, "", 64),
           studentName: sanitizeText(profile.name || user?.username, "", 64),
           studentId: sanitizeText(profile.studentId, "", 20),
-          className: sanitizeText(profile.className, "", 40),
+          className,
         };
       })
       .filter((item) => item.userId)
       .sort(compareClassroomRosterStudent);
+    const userClassByUserId = new Map(rosterAll.map((student) => [student.userId, student.className]));
+    const rosterByClassName = new Map(
+      CLASSROOM_TARGET_CLASS_NAMES.map((className) => [className, []]),
+    );
+    rosterAll.forEach((student) => {
+      const className = sanitizeClassroomUserClassName(student.className);
+      if (!className) return;
+      if (!rosterByClassName.has(className)) {
+        rosterByClassName.set(className, []);
+      }
+      rosterByClassName.get(className).push(student);
+    });
 
     const lessonStudentDocsMap = new Map();
     for (const doc of homeworkDocs) {
@@ -1634,7 +1670,19 @@ export function registerAuthUserClassroomRoutes(app, deps) {
 
     const lessonsOverview = lessons.map((lesson, lessonIndex) => {
       const lessonId = sanitizeId(lesson?.id, "");
-      const perStudentDocs = lessonStudentDocsMap.get(lessonId) || new Map();
+      const lessonClassName = resolveClassroomLessonClassName(lesson);
+      const roster = rosterByClassName.get(lessonClassName) || [];
+      const rosterByUserId = new Map(roster.map((student) => [student.userId, student]));
+      const perStudentDocsRaw = lessonStudentDocsMap.get(lessonId) || new Map();
+      const perStudentDocs = new Map();
+      for (const [studentUserId, docs] of perStudentDocsRaw.entries()) {
+        const sample = Array.isArray(docs) && docs.length > 0 ? docs[0] : {};
+        const docClassName =
+          sanitizeClassroomUserClassName(sample?.className) ||
+          sanitizeClassroomUserClassName(userClassByUserId.get(studentUserId));
+        if (docClassName && docClassName !== lessonClassName) continue;
+        perStudentDocs.set(studentUserId, docs);
+      }
       const studentRows = roster.map((student) => {
         const docs = perStudentDocs.get(student.userId) || [];
         const files = docs.map((doc) => normalizeClassroomHomeworkFileDoc(doc));
@@ -1654,7 +1702,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       const uploadedStudentCount = studentRows.filter((student) => student.submitted).length;
       const missingStudents = studentRows.filter((student) => !student.submitted);
       const unlistedStudents = Array.from(perStudentDocs.entries())
-        .filter(([studentUserId]) => !roster.some((student) => student.userId === studentUserId))
+        .filter(([studentUserId]) => !rosterByUserId.has(studentUserId))
         .map(([studentUserId, docs]) => {
           const sample = docs[0] || {};
           return {
@@ -1674,6 +1722,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         id: lessonId,
         lessonIndex,
         courseName: sanitizeText(lesson?.courseName, "", 80) || `第${lessonIndex + 1}节课`,
+        className: lessonClassName,
         courseStartAt: sanitizeIsoDate(lesson?.courseStartAt) || "",
         courseEndAt: sanitizeIsoDate(lesson?.courseEndAt) || "",
         courseTime: sanitizeText(lesson?.courseTime, "", 120),
@@ -1696,11 +1745,331 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     res.json({
       ok: true,
       teacherScopeKey,
-      rosterTotal: roster.length,
+      rosterTotal: rosterAll.length,
       lessons: lessonsOverview,
       updatedAt: config.updatedAt,
     });
   });
+
+  app.get(
+    "/api/auth/admin/classroom-homework/lessons/:lessonId/export",
+    requireAdminAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+
+      const teacherScopeKey = SHANGGUAN_FUZE_TEACHER_SCOPE_KEY;
+      const config = await readAdminAgentConfig();
+      const lessons = sortAdminClassroomCoursePlans(config.teacherCoursePlans);
+      const lessonIndex = lessons.findIndex(
+        (lesson) => sanitizeId(lesson?.id, "") === lessonId,
+      );
+      if (lessonIndex < 0) {
+        res.status(404).json({ error: "课时不存在或已被删除。" });
+        return;
+      }
+      const lesson = lessons[lessonIndex];
+      const lessonClassName = resolveClassroomLessonClassName(lesson);
+      const lessonName =
+        sanitizeText(lesson?.courseName, "", 80) || `第${Math.max(lessonIndex + 1, 1)}节课`;
+
+      const [rosterUsers, lessonHomeworkDocs] = await Promise.all([
+        AuthUser.find(
+          {
+            role: "user",
+            lockedTeacherScopeKey: teacherScopeKey,
+          },
+          { username: 1, profile: 1, accountTag: 1 },
+        ).lean(),
+        ClassroomHomeworkFile.find({
+          key: ADMIN_CONFIG_KEY,
+          teacherScopeKey,
+          lessonId,
+        })
+          .sort({ studentUserId: 1, uploadedAt: 1, _id: 1 })
+          .lean(),
+      ]);
+
+      const rosterAll = rosterUsers
+        .map((user) => {
+          const profile = sanitizeUserProfile(user?.profile);
+          const className = sanitizeClassroomUserClassName(profile.className);
+          return {
+            userId: sanitizeId(user?._id, ""),
+            username: sanitizeText(user?.username, "", 64),
+            studentName: sanitizeText(profile.name || user?.username, "", 64),
+            studentId: sanitizeText(profile.studentId, "", 20),
+            className,
+          };
+        })
+        .filter((item) => item.userId)
+        .sort(compareClassroomRosterStudent);
+      const roster = rosterAll.filter((student) => student.className === lessonClassName);
+      const userClassByUserId = new Map(rosterAll.map((student) => [student.userId, student.className]));
+      const rosterByUserId = new Map(roster.map((student) => [student.userId, student]));
+      const homeworkDocsByStudentUserId = new Map();
+      lessonHomeworkDocs.forEach((doc) => {
+        const studentUserId = sanitizeId(doc?.studentUserId, "");
+        if (!studentUserId) return;
+        const docClassName =
+          sanitizeClassroomUserClassName(doc?.className) ||
+          sanitizeClassroomUserClassName(userClassByUserId.get(studentUserId));
+        if (docClassName && docClassName !== lessonClassName) return;
+        if (!homeworkDocsByStudentUserId.has(studentUserId)) {
+          homeworkDocsByStudentUserId.set(studentUserId, []);
+        }
+        homeworkDocsByStudentUserId.get(studentUserId).push(doc);
+      });
+
+      const missingStudents = roster.filter(
+        (student) => !homeworkDocsByStudentUserId.has(student.userId),
+      );
+      const submittedStudents = roster.filter((student) =>
+        homeworkDocsByStudentUserId.has(student.userId),
+      );
+      const unlistedStudents = Array.from(homeworkDocsByStudentUserId.entries())
+        .filter(([studentUserId]) => !rosterByUserId.has(studentUserId))
+        .map(([studentUserId, docs]) => {
+          const sample = docs[0] || {};
+          return {
+            userId: studentUserId,
+            studentName:
+              sanitizeText(sample.studentName || sample.studentUsername, "", 64) ||
+              "未登记学生",
+            studentId: sanitizeText(sample.studentId, "", 20),
+            className: sanitizeText(sample.className, "", 40),
+            fileCount: docs.length,
+          };
+        })
+        .sort(compareClassroomRosterStudent);
+
+      function sanitizeHomeworkExportSegment(value, fallback = "unknown") {
+        const safe = String(value || "")
+          .replace(/[\u0000-\u001f\u007f]/g, "")
+          .replace(/[\\/:*?"<>|]/g, "_")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 72);
+        return safe || fallback;
+      }
+
+      function toCsvCell(value) {
+        const text = String(value ?? "");
+        if (!/["\n,]/.test(text)) return text;
+        return `"${text.replace(/"/g, "\"\"")}"`;
+      }
+
+      async function readHomeworkFileBuffer(fileDoc, fallbackName = "作业文件.bin") {
+        const storageType = sanitizeGroupChatFileStorageType(fileDoc?.storageType);
+        const safeFileName = sanitizeGroupChatFileName(
+          fileDoc?.fileName || fallbackName || "作业文件.bin",
+        );
+        const ossKey = sanitizeGroupChatOssObjectKey(fileDoc?.ossKey);
+        if (storageType === "oss" && ossKey) {
+          const downloadUrl = await buildTeacherLessonFileDownloadUrl({
+            ossKey,
+            fileName: safeFileName,
+          });
+          if (downloadUrl) {
+            const response = await fetch(downloadUrl, { method: "GET" });
+            if (!response.ok) {
+              throw new Error(`远端文件拉取失败（${response.status}）`);
+            }
+            const fileArrayBuffer = await response.arrayBuffer();
+            const fileBuffer = Buffer.from(fileArrayBuffer);
+            if (fileBuffer.length > 0) return fileBuffer;
+          }
+        }
+
+        if (Buffer.isBuffer(fileDoc?.binary) && fileDoc.binary.length > 0) {
+          return fileDoc.binary;
+        }
+        throw new Error("文件内容为空。");
+      }
+
+      const exportedAt = new Date();
+      const reportLines = [
+        "EduChat 作业批量导出",
+        `课时：${lessonName}`,
+        `授课班级：${lessonClassName}`,
+        `导出时间：${formatDisplayTime(exportedAt)}`,
+        `应交人数：${roster.length}`,
+        `已交人数：${submittedStudents.length}`,
+        `未交人数：${missingStudents.length}`,
+        `花名册外提交人数：${unlistedStudents.length}`,
+        "",
+        "未交名单：",
+        ...(missingStudents.length > 0
+          ? missingStudents.map((student, index) => {
+              const studentName =
+                sanitizeText(student?.studentName || student?.username, "", 64) || "未命名学生";
+              const studentId = sanitizeText(student?.studentId, "", 20);
+              const className = sanitizeText(student?.className, "", 40);
+              return `${index + 1}. ${studentName}${
+                studentId ? `（${studentId}）` : ""
+              }${className ? ` - ${className}` : ""}`;
+            })
+          : ["无"]),
+      ];
+
+      const csvRows = [
+        [
+          "序号",
+          "学号",
+          "姓名",
+          "班级",
+          "提交状态",
+          "作业份数",
+          "最近提交时间",
+          "是否在花名册",
+        ]
+          .map((cell) => toCsvCell(cell))
+          .join(","),
+      ];
+
+      roster.forEach((student, index) => {
+        const docs = homeworkDocsByStudentUserId.get(student.userId) || [];
+        const latestUploadedAt =
+          docs.length > 0
+            ? sanitizeIsoDate(docs[docs.length - 1]?.uploadedAt) || ""
+            : "";
+        csvRows.push(
+          [
+            index + 1,
+            student.studentId || "",
+            student.studentName || student.username || "",
+            student.className || "",
+            docs.length > 0 ? "已提交" : "未提交",
+            docs.length,
+            latestUploadedAt,
+            "是",
+          ]
+            .map((cell) => toCsvCell(cell))
+            .join(","),
+        );
+      });
+
+      unlistedStudents.forEach((student, index) => {
+        csvRows.push(
+          [
+            roster.length + index + 1,
+            student.studentId || "",
+            student.studentName || "",
+            student.className || "",
+            "已提交",
+            Number(student.fileCount || 0),
+            "",
+            "否",
+          ]
+            .map((cell) => toCsvCell(cell))
+            .join(","),
+        );
+      });
+
+      const zipEntries = [
+        {
+          name: "README.txt",
+          content: reportLines.join("\n"),
+        },
+        {
+          name: "统计/提交统计.csv",
+          content: Buffer.from(`\uFEFF${csvRows.join("\n")}`, "utf8"),
+        },
+      ];
+
+      if (missingStudents.length > 0) {
+        const missingLines = missingStudents.map((student, index) => {
+          const studentName =
+            sanitizeText(student?.studentName || student?.username, "", 64) || "未命名学生";
+          const studentId = sanitizeText(student?.studentId, "", 20);
+          const className = sanitizeText(student?.className, "", 40);
+          return `${index + 1}. ${studentName}${
+            studentId ? `（${studentId}）` : ""
+          }${className ? ` - ${className}` : ""}`;
+        });
+        zipEntries.push({
+          name: "统计/未交名单.txt",
+          content: missingLines.join("\n"),
+        });
+      }
+
+      const fileReadFailedRows = [];
+      let exportedFileCount = 0;
+      let serial = 0;
+      for (const [studentUserId, docs] of homeworkDocsByStudentUserId.entries()) {
+        const rosterStudent = rosterByUserId.get(studentUserId);
+        const sample = docs[0] || {};
+        const studentName =
+          sanitizeText(
+            rosterStudent?.studentName ||
+              sample?.studentName ||
+              sample?.studentUsername ||
+              studentUserId,
+            "",
+            64,
+          ) || "未命名学生";
+        const studentId = sanitizeText(rosterStudent?.studentId || sample?.studentId, "", 20);
+        const studentFolderName = sanitizeHomeworkExportSegment(
+          `${studentName}${studentId ? `-${studentId}` : ""}`,
+          `student-${serial + 1}`,
+        );
+
+        for (let fileIndex = 0; fileIndex < docs.length; fileIndex += 1) {
+          const fileDoc = docs[fileIndex];
+          const normalizedFile = normalizeClassroomHomeworkFileDoc(fileDoc);
+          const safeFileName = sanitizeGroupChatFileName(
+            normalizedFile?.name || fileDoc?.fileName || "作业文件.bin",
+          );
+          const entryName = sanitizeZipEntryName(
+            `作业文件/${studentFolderName}/${String(fileIndex + 1).padStart(2, "0")}-${safeFileName}`,
+            `作业文件/${studentFolderName}/file-${fileIndex + 1}.bin`,
+          );
+          try {
+            const fileBuffer = await readHomeworkFileBuffer(fileDoc, safeFileName);
+            zipEntries.push({ name: entryName, content: fileBuffer });
+            exportedFileCount += 1;
+          } catch (error) {
+            fileReadFailedRows.push(
+              `${studentName} / ${safeFileName}：${error?.message || "读取失败"}`,
+            );
+          }
+        }
+        serial += 1;
+      }
+
+      if (exportedFileCount === 0) {
+        zipEntries.push({
+          name: "作业文件/暂无可导出的作业文件.txt",
+          content: "当前课时暂无可导出的作业文件。",
+        });
+      }
+
+      if (fileReadFailedRows.length > 0) {
+        zipEntries.push({
+          name: "统计/导出失败清单.txt",
+          content: fileReadFailedRows.join("\n"),
+        });
+      }
+
+      const zipBuffer = buildZipBuffer(
+        zipEntries.map((item) => ({
+          name: sanitizeZipEntryName(item?.name, "export.txt"),
+          content: item?.content,
+        })),
+      );
+      const zipFileName = sanitizeGroupChatFileName(
+        `${lessonName}-作业批量导出-${formatFileStamp(exportedAt)}.zip`,
+      );
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", buildAttachmentContentDisposition(zipFileName));
+      res.setHeader("X-Homework-Missing-Count", String(missingStudents.length));
+      res.setHeader("X-Homework-Exported-File-Count", String(exportedFileCount));
+      res.send(zipBuffer);
+    },
+  );
 
   app.get(
     "/api/auth/admin/classroom-homework/files/:fileId/download",

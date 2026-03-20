@@ -1,5 +1,6 @@
 .student-home-page {
   background: #ffffff;
+  height: 100vh;
   height: 100dvh;
   padding: 12px;
   box-sizing: border-box;
@@ -383,6 +384,7 @@
 @media (max-width: 860px) {
   .student-home-page {
     height: auto;
+    min-height: 100vh;
     min-height: 100dvh;
     padding: 8px;
   }

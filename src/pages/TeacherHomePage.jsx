@@ -37,6 +37,7 @@ import {
   createAdminChatSession,
   downloadAdminGeneratedImage,
   downloadAdminClassroomHomeworkFile,
+  exportAdminClassroomHomeworkLessonZip,
   dissolveAdminGroupChatRoom,
   deleteAdminClassroomTaskFile,
   downloadAdminClassroomLessonFile,
@@ -60,6 +61,22 @@ import {
 import "../styles/teacher-home.css";
 
 const TARGET_CLASS_NAMES = Object.freeze(["教技231", "810班", "811班"]);
+const COURSE_TARGET_CLASS_OPTIONS = Object.freeze([
+  { value: "810班", label: "810班" },
+  { value: "811班", label: "811班" },
+]);
+const COURSE_TARGET_CLASS_VALUES = Object.freeze(
+  COURSE_TARGET_CLASS_OPTIONS.map((item) => item.value),
+);
+const COURSE_DEFAULT_CLASS_NAME = COURSE_TARGET_CLASS_OPTIONS[0].value;
+
+function normalizeLessonClassName(value) {
+  const className = String(value || "")
+    .trim()
+    .replace(/\s+/g, "");
+  if (COURSE_TARGET_CLASS_VALUES.includes(className)) return className;
+  return COURSE_DEFAULT_CLASS_NAME;
+}
 
 function readErrorMessage(error) {
   if (!error) return "请求失败，请稍后重试。";
@@ -277,6 +294,7 @@ function forceHomeworkUploadEnabled(plans) {
   const source = Array.isArray(plans) ? plans : [];
   return source.map((lesson) => ({
     ...(lesson && typeof lesson === "object" ? lesson : {}),
+    className: normalizeLessonClassName(lesson?.className),
     homeworkUploadEnabled: true,
   }));
 }
@@ -287,6 +305,7 @@ function buildLessonDraft(lessonIndex = 1) {
   return {
     id: `course-${now}-${Math.round(Math.random() * 1000)}`,
     courseName: `第${lessonIndex}节课`,
+    className: COURSE_DEFAULT_CLASS_NAME,
     courseStartAt: "",
     courseEndAt: "",
     courseTime: "",
@@ -378,7 +397,9 @@ export default function TeacherHomePage() {
   const [homeworkLessons, setHomeworkLessons] = useState([]);
   const [selectedHomeworkLessonId, setSelectedHomeworkLessonId] = useState("");
   const [expandedHomeworkStudentIds, setExpandedHomeworkStudentIds] = useState([]);
+  const [homeworkMissingListExpanded, setHomeworkMissingListExpanded] = useState(false);
   const [downloadingHomeworkFileId, setDownloadingHomeworkFileId] = useState("");
+  const [exportingHomeworkLessonId, setExportingHomeworkLessonId] = useState("");
   const [imageLibraryLoading, setImageLibraryLoading] = useState(false);
   const [imageLibraryUpdatedAt, setImageLibraryUpdatedAt] = useState("");
   const [imageLibraryKeyword, setImageLibraryKeyword] = useState("");
@@ -444,6 +465,7 @@ export default function TeacherHomePage() {
       const data = await fetchAdminClassroomHomeworkOverview(adminToken);
       const lessons = (Array.isArray(data?.lessons) ? data.lessons : []).map((lesson) => ({
         ...(lesson && typeof lesson === "object" ? lesson : {}),
+        className: normalizeLessonClassName(lesson?.className),
         homeworkUploadEnabled: true,
       }));
       setHomeworkLessons(lessons);
@@ -625,6 +647,7 @@ export default function TeacherHomePage() {
 
   useEffect(() => {
     setExpandedHomeworkStudentIds([]);
+    setHomeworkMissingListExpanded(false);
   }, [selectedHomeworkLessonId]);
 
   useEffect(() => {
@@ -1005,6 +1028,13 @@ export default function TeacherHomePage() {
     () => (Array.isArray(selectedHomeworkLesson?.students) ? selectedHomeworkLesson.students : []),
     [selectedHomeworkLesson],
   );
+  const selectedHomeworkMissingStudents = useMemo(
+    () =>
+      Array.isArray(selectedHomeworkLesson?.missingStudents)
+        ? selectedHomeworkLesson.missingStudents
+        : [],
+    [selectedHomeworkLesson],
+  );
 
   useEffect(() => {
     if (selectedCourseTasks.length === 0) {
@@ -1147,12 +1177,16 @@ export default function TeacherHomePage() {
 
   function onUpdateSelectedLesson(patch) {
     if (!selectedCourseId) return;
+    const safePatch = patch && typeof patch === "object" ? { ...patch } : {};
+    if (Object.prototype.hasOwnProperty.call(safePatch, "className")) {
+      safePatch.className = normalizeLessonClassName(safePatch.className);
+    }
     setTeacherCoursePlans((current) =>
       current.map((item) =>
         String(item?.id || "") === String(selectedCourseId || "")
           ? {
               ...item,
-              ...patch,
+              ...safePatch,
             }
           : item,
       ),
@@ -1539,6 +1573,24 @@ export default function TeacherHomePage() {
     }
   }
 
+  async function onExportHomeworkLessonFiles() {
+    if (!adminToken || !selectedHomeworkLesson) return;
+    const lessonId = String(selectedHomeworkLesson.id || "").trim();
+    if (!lessonId) return;
+    setExportingHomeworkLessonId(lessonId);
+    setError("");
+    try {
+      const data = await exportAdminClassroomHomeworkLessonZip(adminToken, lessonId);
+      const fallbackName = `${selectedHomeworkLesson.courseName || "课时"}-作业批量导出.zip`;
+      triggerBrowserDownload(data.blob, data.filename || fallbackName);
+    } catch (rawError) {
+      if (handleAuthError(rawError)) return;
+      setError(readErrorMessage(rawError));
+    } finally {
+      setExportingHomeworkLessonId("");
+    }
+  }
+
   function buildAdminImagePreviewUrl(pathname) {
     const safePath = String(pathname || "").trim();
     const safeToken = String(adminToken || "").trim();
@@ -1877,6 +1929,7 @@ export default function TeacherHomePage() {
                         const courseId = String(course?.id || "");
                         const active = courseId === String(selectedCourseId || "");
                         const tasks = Array.isArray(course?.tasks) ? course.tasks : [];
+                        const lessonClassName = normalizeLessonClassName(course?.className);
                         return (
                           <article
                             key={courseId || `lesson-${index + 1}`}
@@ -1908,7 +1961,7 @@ export default function TeacherHomePage() {
                                   course?.courseTime,
                                 ) || "未设置课时时间"}
                               </p>
-                              <span>{`${tasks.length} 个任务`}</span>
+                              <span>{`${lessonClassName} · ${tasks.length} 个任务`}</span>
                             </button>
                             <div className="teacher-lesson-row-actions">
                               <span className={`teacher-lesson-status${course?.enabled === false ? " closed" : ""}`}>
@@ -1956,6 +2009,16 @@ export default function TeacherHomePage() {
                     <div className="teacher-lesson-detail-toolbar">
                       {selectedCourse ? (
                         <>
+                          <PortalSelect
+                            className="teacher-lesson-class-select"
+                            value={normalizeLessonClassName(selectedCourse.className)}
+                            compact
+                            ariaLabel="选择授课班级"
+                            options={COURSE_TARGET_CLASS_OPTIONS}
+                            onChange={(value) => {
+                              onUpdateSelectedLesson({ className: value });
+                            }}
+                          />
                           <button
                             type="button"
                             className="teacher-ghost-btn teacher-lesson-time-trigger"
@@ -2312,6 +2375,7 @@ export default function TeacherHomePage() {
                       {homeworkLessons.map((lesson, index) => {
                         const lessonId = String(lesson?.id || "");
                         const active = lessonId === String(selectedHomeworkLessonId || "");
+                        const lessonClassName = normalizeLessonClassName(lesson?.className);
                         const studentTotal = Number(lesson?.studentTotal || 0);
                         const uploadedStudentCount = Number(lesson?.uploadedStudentCount || 0);
                         const missingStudentCount = Number(lesson?.missingStudentCount || 0);
@@ -2327,7 +2391,7 @@ export default function TeacherHomePage() {
                             >
                               <strong>{lesson?.courseName || `第${index + 1}节课`}</strong>
                               <p>{`已交 ${uploadedStudentCount}/${studentTotal}`}</p>
-                              <span>{`漏交 ${missingStudentCount} 人`}</span>
+                              <span>{`${lessonClassName} · 漏交 ${missingStudentCount} 人`}</span>
                             </button>
                             <div className="teacher-lesson-row-actions">
                               <span
@@ -2354,6 +2418,9 @@ export default function TeacherHomePage() {
                     <p className="teacher-empty-text">请选择左侧课时查看作业提交详情。</p>
                   ) : (
                     <>
+                      <p className="teacher-homework-class-hint">{`授课班级：${normalizeLessonClassName(
+                        selectedHomeworkLesson?.className,
+                      )}`}</p>
                       <div className="teacher-homework-summary-grid">
                         <article className="teacher-homework-summary-card">
                           <span>应交人数</span>
@@ -2367,6 +2434,77 @@ export default function TeacherHomePage() {
                           <span>漏交人数</span>
                           <strong>{selectedHomeworkLesson.missingStudentCount || 0}</strong>
                         </article>
+                      </div>
+                      <div className="teacher-homework-detail-tools">
+                        <button
+                          type="button"
+                          className="teacher-ghost-btn teacher-homework-export-btn"
+                          onClick={() => void onExportHomeworkLessonFiles()}
+                          disabled={
+                            !selectedHomeworkLesson?.id ||
+                            exportingHomeworkLessonId === String(selectedHomeworkLesson.id || "")
+                          }
+                        >
+                          {exportingHomeworkLessonId === String(selectedHomeworkLesson.id || "") ? (
+                            <RefreshCw size={14} className="is-spinning" />
+                          ) : (
+                            <Download size={14} />
+                          )}
+                          <span>批量导出本节作业</span>
+                        </button>
+                        <span className="teacher-homework-detail-tools-hint">
+                          {`将下载本节课所有已提交文件，并附带未交统计（${selectedHomeworkMissingStudents.length} 人）。`}
+                        </span>
+                      </div>
+                      <div className="teacher-homework-missing-block">
+                        <div className="teacher-homework-missing-head">
+                          <strong>{`未交名单（${selectedHomeworkMissingStudents.length}）`}</strong>
+                          {selectedHomeworkMissingStudents.length > 0 ? (
+                            <button
+                              type="button"
+                              className={`teacher-homework-missing-toggle-btn${
+                                homeworkMissingListExpanded ? " expanded" : ""
+                              }`}
+                              onClick={() => {
+                                setHomeworkMissingListExpanded((current) => !current);
+                              }}
+                              aria-expanded={homeworkMissingListExpanded}
+                              aria-label={homeworkMissingListExpanded ? "收起未交名单" : "展开未交名单"}
+                            >
+                              <ChevronDown size={16} />
+                            </button>
+                          ) : null}
+                        </div>
+                        {selectedHomeworkMissingStudents.length === 0 ? (
+                          <p>本节课作业已全部提交。</p>
+                        ) : (
+                          <div
+                            className={`teacher-homework-missing-list-collapse${
+                              homeworkMissingListExpanded ? " expanded" : ""
+                            }`}
+                          >
+                            <div className="teacher-homework-missing-list-inner">
+                              <div className="teacher-homework-missing-chip-list">
+                                {selectedHomeworkMissingStudents.map((student, studentIndex) => {
+                                  const studentKey = resolveHomeworkStudentRowKey(student, studentIndex);
+                                  const studentName =
+                                    String(student?.studentName || "").trim() ||
+                                    String(student?.username || "").trim() ||
+                                    "未命名学生";
+                                  const studentId = String(student?.studentId || "").trim();
+                                  return (
+                                    <span
+                                      key={`${studentKey}-${studentIndex + 1}`}
+                                      className="teacher-homework-missing-chip"
+                                    >
+                                      {studentId ? `${studentName}（${studentId}）` : studentName}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <div className="teacher-homework-table-wrap">
                         <table className="teacher-homework-table">
@@ -2850,7 +2988,9 @@ export default function TeacherHomePage() {
                                 return (
                                   <span
                                     key={memberId}
-                                    className={`teacher-party-member-chip${isOwner ? " owner" : ""}`}
+                                    className={`teacher-party-member-chip${isOwner ? " owner" : ""}${
+                                      roomIndex === 0 ? " tooltip-below" : ""
+                                    }`}
                                     title={formatPartyMemberDetail(member)}
                                   >
                                     {isOwner ? <Crown size={12} /> : null}
