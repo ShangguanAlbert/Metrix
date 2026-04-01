@@ -621,6 +621,28 @@ export default function ImageGenerationDesktopPage({
     }
     return "chat";
   }, [location.search]);
+  const teacherHomePanelParam = useMemo(() => {
+    try {
+      const params = new URLSearchParams(String(location.search || ""));
+      return String(params.get("teacherPanel") || "").trim().toLowerCase();
+    } catch {
+      return "";
+    }
+  }, [location.search]);
+  const teacherHomeExportContext = useMemo(() => {
+    try {
+      const params = new URLSearchParams(String(location.search || ""));
+      return {
+        exportTeacherScopeKey: String(params.get("exportTeacherScopeKey") || "").trim(),
+        exportDate: String(params.get("exportDate") || "").trim(),
+      };
+    } catch {
+      return {
+        exportTeacherScopeKey: "",
+        exportDate: "",
+      };
+    }
+  }, [location.search]);
   const backButtonLabel = returnTarget === "teacher-home" ? "返回教师主页" : "返回";
   const termsContent = IMAGE_TERMS_CONTENT;
   const termsHash = IMAGE_TERMS_HASH;
@@ -917,7 +939,18 @@ export default function ImageGenerationDesktopPage({
       return;
     }
     if (returnTarget === "teacher-home") {
-      navigate(withAuthSlot("/admin/settings"));
+      const params = new URLSearchParams();
+      if (teacherHomePanelParam) {
+        params.set("teacherPanel", teacherHomePanelParam);
+      }
+      if (teacherHomeExportContext.exportTeacherScopeKey) {
+        params.set("exportTeacherScopeKey", teacherHomeExportContext.exportTeacherScopeKey);
+      }
+      if (teacherHomeExportContext.exportDate) {
+        params.set("exportDate", teacherHomeExportContext.exportDate);
+      }
+      const query = params.toString() ? `/admin/settings?${params.toString()}` : "/admin/settings";
+      navigate(withAuthSlot(query));
       return;
     }
     const storedContext = loadImageReturnContext();

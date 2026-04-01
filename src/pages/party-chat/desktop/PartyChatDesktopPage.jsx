@@ -169,6 +169,28 @@ export default function PartyChatDesktopPage({
     }
     return "chat";
   }, [location.search]);
+  const teacherHomePanelParam = useMemo(() => {
+    try {
+      const params = new URLSearchParams(String(location.search || ""));
+      return String(params.get("teacherPanel") || "").trim().toLowerCase();
+    } catch {
+      return "";
+    }
+  }, [location.search]);
+  const teacherHomeExportContext = useMemo(() => {
+    try {
+      const params = new URLSearchParams(String(location.search || ""));
+      return {
+        exportTeacherScopeKey: String(params.get("exportTeacherScopeKey") || "").trim(),
+        exportDate: String(params.get("exportDate") || "").trim(),
+      };
+    } catch {
+      return {
+        exportTeacherScopeKey: "",
+        exportDate: "",
+      };
+    }
+  }, [location.search]);
   const quickJoinRoomCode = useMemo(() => {
     try {
       const params = new URLSearchParams(String(location.search || ""));
@@ -1274,12 +1296,24 @@ export default function PartyChatDesktopPage({
     const backPath = returnTarget === "mode-selection"
       ? "/mode-selection"
       : returnTarget === "teacher-home"
-        ? "/admin/settings"
+        ? (() => {
+            const params = new URLSearchParams();
+            if (teacherHomePanelParam) {
+              params.set("teacherPanel", teacherHomePanelParam);
+            }
+            if (teacherHomeExportContext.exportTeacherScopeKey) {
+              params.set("exportTeacherScopeKey", teacherHomeExportContext.exportTeacherScopeKey);
+            }
+            if (teacherHomeExportContext.exportDate) {
+              params.set("exportDate", teacherHomeExportContext.exportDate);
+            }
+            return params.toString() ? `/admin/settings?${params.toString()}` : "/admin/settings";
+          })()
         : "/chat";
     navigate(withAuthSlot(backPath), {
       replace: true,
     });
-  }, [navigate, returnTarget]);
+  }, [navigate, returnTarget, teacherHomeExportContext.exportDate, teacherHomeExportContext.exportTeacherScopeKey, teacherHomePanelParam]);
 
   const mergeMessages = useCallback((roomId, incoming, { replace = false } = {}) => {
     const safeRoomId = String(roomId || "").trim();

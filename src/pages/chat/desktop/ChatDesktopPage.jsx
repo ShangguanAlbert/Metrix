@@ -330,6 +330,30 @@ function resolveChatReturnTarget(search = "") {
   return "chat";
 }
 
+function resolveTeacherHomePanelParam(search = "") {
+  try {
+    const params = new URLSearchParams(String(search || ""));
+    return String(params.get("teacherPanel") || "").trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function resolveTeacherHomeExportContext(search = "") {
+  try {
+    const params = new URLSearchParams(String(search || ""));
+    return {
+      exportTeacherScopeKey: String(params.get("exportTeacherScopeKey") || "").trim(),
+      exportDate: String(params.get("exportDate") || "").trim(),
+    };
+  } catch {
+    return {
+      exportTeacherScopeKey: "",
+      exportDate: "",
+    };
+  }
+}
+
 function fillTeacherHomeDefaultUserInfo(profile) {
   const source = sanitizeUserInfo(profile);
   const gender = GENDER_OPTIONS.includes(source.gender)
@@ -653,6 +677,14 @@ export default function ChatDesktopPage() {
   const location = useLocation();
   const returnTarget = useMemo(
     () => resolveChatReturnTarget(location.search),
+    [location.search],
+  );
+  const teacherHomePanelParam = useMemo(
+    () => resolveTeacherHomePanelParam(location.search),
+    [location.search],
+  );
+  const teacherHomeExportContext = useMemo(
+    () => resolveTeacherHomeExportContext(location.search),
     [location.search],
   );
   const logoutText = returnTarget === "mode-selection"
@@ -1008,7 +1040,18 @@ export default function ChatDesktopPage() {
       saveImageReturnContext(context);
     }
     const nextReturnTarget = returnTarget === "teacher-home" ? "teacher-home" : "chat";
-    navigate(withAuthSlot(`/image-generation?returnTo=${nextReturnTarget}`), {
+    const params = new URLSearchParams();
+    params.set("returnTo", nextReturnTarget);
+    if (nextReturnTarget === "teacher-home" && teacherHomePanelParam) {
+      params.set("teacherPanel", teacherHomePanelParam);
+    }
+    if (nextReturnTarget === "teacher-home" && teacherHomeExportContext.exportTeacherScopeKey) {
+      params.set("exportTeacherScopeKey", teacherHomeExportContext.exportTeacherScopeKey);
+    }
+    if (nextReturnTarget === "teacher-home" && teacherHomeExportContext.exportDate) {
+      params.set("exportDate", teacherHomeExportContext.exportDate);
+    }
+    navigate(withAuthSlot(`/image-generation?${params.toString()}`), {
       state: {
         returnContext: context,
       },
@@ -1017,7 +1060,18 @@ export default function ChatDesktopPage() {
 
   function onOpenGroupChat() {
     const nextReturnTarget = returnTarget === "teacher-home" ? "teacher-home" : "chat";
-    navigate(withAuthSlot(`/party?returnTo=${nextReturnTarget}`));
+    const params = new URLSearchParams();
+    params.set("returnTo", nextReturnTarget);
+    if (nextReturnTarget === "teacher-home" && teacherHomePanelParam) {
+      params.set("teacherPanel", teacherHomePanelParam);
+    }
+    if (nextReturnTarget === "teacher-home" && teacherHomeExportContext.exportTeacherScopeKey) {
+      params.set("exportTeacherScopeKey", teacherHomeExportContext.exportTeacherScopeKey);
+    }
+    if (nextReturnTarget === "teacher-home" && teacherHomeExportContext.exportDate) {
+      params.set("exportDate", teacherHomeExportContext.exportDate);
+    }
+    navigate(withAuthSlot(`/party?${params.toString()}`));
   }
 
   function onDeleteSession(sessionId) {
@@ -2008,7 +2062,18 @@ export default function ChatDesktopPage() {
       return;
     }
     if (returnTarget === "teacher-home") {
-      navigate(withAuthSlot("/admin/settings"), { replace: true });
+      const params = new URLSearchParams();
+      if (teacherHomePanelParam) {
+        params.set("teacherPanel", teacherHomePanelParam);
+      }
+      if (teacherHomeExportContext.exportTeacherScopeKey) {
+        params.set("exportTeacherScopeKey", teacherHomeExportContext.exportTeacherScopeKey);
+      }
+      if (teacherHomeExportContext.exportDate) {
+        params.set("exportDate", teacherHomeExportContext.exportDate);
+      }
+      const query = params.toString() ? `/admin/settings?${params.toString()}` : "/admin/settings";
+      navigate(withAuthSlot(query), { replace: true });
       return;
     }
     clearUserAuthSession();
