@@ -58,7 +58,8 @@ async function request(path, adminToken, options = {}) {
 
   const data = await readJson(resp);
   if (!resp.ok) {
-    const message = data?.error || data?.message || `请求失败（${resp.status}）`;
+    const message =
+      data?.error || data?.message || `请求失败（${resp.status}）`;
     throw new Error(message);
   }
   return data;
@@ -83,27 +84,48 @@ export function createAdminUserDirectoryUser(adminToken, payload = {}) {
   });
 }
 
-export function createAdminUserDirectoryClassCategory(adminToken, payload = {}) {
-  return request("/api/auth/admin/user-directory/class-categories", adminToken, {
-    method: "POST",
-    body: JSON.stringify(payload && typeof payload === "object" ? payload : {}),
-  });
+export function createAdminUserDirectoryClassCategory(
+  adminToken,
+  payload = {},
+) {
+  return request(
+    "/api/auth/admin/user-directory/class-categories",
+    adminToken,
+    {
+      method: "POST",
+      body: JSON.stringify(
+        payload && typeof payload === "object" ? payload : {},
+      ),
+    },
+  );
 }
 
 export function updateAdminUserDirectoryUser(adminToken, userId, payload) {
   const safeUserId = String(userId || "").trim();
-  return request(`/api/auth/admin/user-directory/users/${encodeURIComponent(safeUserId)}`, adminToken, {
-    method: "PUT",
-    body: JSON.stringify(payload && typeof payload === "object" ? payload : {}),
-  });
+  return request(
+    `/api/auth/admin/user-directory/users/${encodeURIComponent(safeUserId)}`,
+    adminToken,
+    {
+      method: "PUT",
+      body: JSON.stringify(
+        payload && typeof payload === "object" ? payload : {},
+      ),
+    },
+  );
 }
 
 export function deleteAdminUserDirectoryUser(adminToken, userId, payload = {}) {
   const safeUserId = String(userId || "").trim();
-  return request(`/api/auth/admin/user-directory/users/${encodeURIComponent(safeUserId)}`, adminToken, {
-    method: "DELETE",
-    body: JSON.stringify(payload && typeof payload === "object" ? payload : {}),
-  });
+  return request(
+    `/api/auth/admin/user-directory/users/${encodeURIComponent(safeUserId)}`,
+    adminToken,
+    {
+      method: "DELETE",
+      body: JSON.stringify(
+        payload && typeof payload === "object" ? payload : {},
+      ),
+    },
+  );
 }
 
 export function mergeAdminUserDirectoryUsers(adminToken, payload = {}) {
@@ -129,6 +151,22 @@ export function fetchAdminGeneratedImageGroups(adminToken, keyword = "") {
   return request(path, adminToken);
 }
 
+export function backfillAdminGeneratedImageThumbnails(
+  adminToken,
+  payload = {},
+) {
+  return request(
+    "/api/auth/admin/images/history/backfill-thumbnails",
+    adminToken,
+    {
+      method: "POST",
+      body: JSON.stringify(
+        payload && typeof payload === "object" ? payload : {},
+      ),
+    },
+  );
+}
+
 export async function downloadAdminGeneratedImage(adminToken, imageId) {
   const safeImageId = String(imageId || "").trim();
   const resp = await fetch(
@@ -138,7 +176,9 @@ export async function downloadAdminGeneratedImage(adminToken, imageId) {
       headers: authHeader(adminToken),
     },
   );
-  const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
+  const contentType = String(
+    resp.headers.get("content-type") || "",
+  ).toLowerCase();
 
   if (!resp.ok) {
     let message = "";
@@ -232,9 +272,13 @@ export function fetchAdminAgentLabAccessGrants(adminToken) {
 
 export function deleteAdminAgentLabAccessGrant(adminToken, userId) {
   const safeUserId = String(userId || "").trim();
-  return request(`/api/auth/admin/agent-lab/access-grants/${encodeURIComponent(safeUserId)}`, adminToken, {
-    method: "DELETE",
-  });
+  return request(
+    `/api/auth/admin/agent-lab/access-grants/${encodeURIComponent(safeUserId)}`,
+    adminToken,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 export function resetAdminAgentLabRoom(adminToken) {
@@ -278,12 +322,20 @@ export function createAdminGroupChatRoom(adminToken, payload = {}) {
 
 export function dissolveAdminGroupChatRoom(adminToken, roomId) {
   const safeRoomId = String(roomId || "").trim();
-  return request(`/api/auth/admin/group-chat/rooms/${encodeURIComponent(safeRoomId)}`, adminToken, {
-    method: "DELETE",
-  });
+  return request(
+    `/api/auth/admin/group-chat/rooms/${encodeURIComponent(safeRoomId)}`,
+    adminToken,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
-export async function uploadAdminClassroomLessonFiles(adminToken, lessonId, files = []) {
+export async function uploadAdminClassroomLessonFiles(
+  adminToken,
+  lessonId,
+  files = [],
+) {
   const safeLessonId = String(lessonId || "").trim();
   const safeFiles = Array.isArray(files) ? files.filter(Boolean) : [];
   const formData = new FormData();
@@ -301,7 +353,8 @@ export async function uploadAdminClassroomLessonFiles(adminToken, lessonId, file
   );
   const data = await readJson(resp);
   if (!resp.ok) {
-    const message = data?.error || data?.message || `请求失败（${resp.status}）`;
+    const message =
+      data?.error || data?.message || `请求失败（${resp.status}）`;
     throw new Error(message);
   }
   return data;
@@ -333,7 +386,8 @@ export async function uploadAdminClassroomTaskFiles(
   );
   const data = await readJson(resp);
   if (!resp.ok) {
-    const message = data?.error || data?.message || `请求失败（${resp.status}）`;
+    const message =
+      data?.error || data?.message || `请求失败（${resp.status}）`;
     throw new Error(message);
   }
   return data;
@@ -351,7 +405,12 @@ export function deleteAdminClassroomLessonFile(adminToken, lessonId, fileId) {
   );
 }
 
-export function deleteAdminClassroomTaskFile(adminToken, lessonId, taskId, fileId) {
+export function deleteAdminClassroomTaskFile(
+  adminToken,
+  lessonId,
+  taskId,
+  fileId,
+) {
   const safeLessonId = String(lessonId || "").trim();
   const safeTaskId = String(taskId || "").trim();
   const safeFileId = String(fileId || "").trim();
@@ -373,7 +432,9 @@ export async function downloadAdminClassroomLessonFile(adminToken, fileId) {
       headers: authHeader(adminToken),
     },
   );
-  const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
+  const contentType = String(
+    resp.headers.get("content-type") || "",
+  ).toLowerCase();
 
   if (!resp.ok) {
     let message = "";
@@ -396,7 +457,8 @@ export async function downloadAdminClassroomLessonFile(adminToken, fileId) {
     if (downloadUrl) {
       return {
         downloadUrl,
-        filename: String(data?.fileName || "课程文件.bin").trim() || "课程文件.bin",
+        filename:
+          String(data?.fileName || "课程文件.bin").trim() || "课程文件.bin",
         mimeType: String(data?.mimeType || ""),
       };
     }
@@ -418,7 +480,9 @@ export async function downloadAdminClassroomHomeworkFile(adminToken, fileId) {
       headers: authHeader(adminToken),
     },
   );
-  const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
+  const contentType = String(
+    resp.headers.get("content-type") || "",
+  ).toLowerCase();
 
   if (!resp.ok) {
     let message = "";
@@ -441,7 +505,8 @@ export async function downloadAdminClassroomHomeworkFile(adminToken, fileId) {
     if (downloadUrl) {
       return {
         downloadUrl,
-        filename: String(data?.fileName || "作业文件.bin").trim() || "作业文件.bin",
+        filename:
+          String(data?.fileName || "作业文件.bin").trim() || "作业文件.bin",
         mimeType: String(data?.mimeType || ""),
       };
     }
@@ -454,7 +519,10 @@ export async function downloadAdminClassroomHomeworkFile(adminToken, fileId) {
   return { blob, filename };
 }
 
-export async function exportAdminClassroomHomeworkLessonZip(adminToken, lessonId) {
+export async function exportAdminClassroomHomeworkLessonZip(
+  adminToken,
+  lessonId,
+) {
   const safeLessonId = String(lessonId || "").trim();
   const resp = await fetch(
     `/api/auth/admin/classroom-homework/lessons/${encodeURIComponent(safeLessonId)}/export`,
@@ -491,13 +559,23 @@ export function exportAdminUsersTxt(adminToken) {
 }
 
 export function exportAdminChatsTxt(adminToken, teacherScopeKey) {
-  return request(withTeacherScopeQuery("/api/auth/admin/export/chats-txt", teacherScopeKey), adminToken);
+  return request(
+    withTeacherScopeQuery("/api/auth/admin/export/chats-txt", teacherScopeKey),
+    adminToken,
+  );
 }
 
-export function exportAdminGroupChatsTxt(adminToken, teacherScopeKey, options = {}) {
+export function exportAdminGroupChatsTxt(
+  adminToken,
+  teacherScopeKey,
+  options = {},
+) {
   return request(
     withExportDateQuery(
-      withTeacherScopeQuery("/api/auth/admin/export/group-chats-txt", teacherScopeKey),
+      withTeacherScopeQuery(
+        "/api/auth/admin/export/group-chats-txt",
+        teacherScopeKey,
+      ),
       options?.exportDate,
     ),
     adminToken,
@@ -506,12 +584,19 @@ export function exportAdminGroupChatsTxt(adminToken, teacherScopeKey, options = 
 
 export function exportAdminGeneratedImagesTxt(adminToken, teacherScopeKey) {
   return request(
-    withTeacherScopeQuery("/api/auth/admin/export/generated-images-txt", teacherScopeKey),
+    withTeacherScopeQuery(
+      "/api/auth/admin/export/generated-images-txt",
+      teacherScopeKey,
+    ),
     adminToken,
   );
 }
 
-export async function exportAdminChatsZip(adminToken, teacherScopeKey, options = {}) {
+export async function exportAdminChatsZip(
+  adminToken,
+  teacherScopeKey,
+  options = {},
+) {
   const path = withExportDateQuery(
     withTeacherScopeQuery("/api/auth/admin/export/chats-zip", teacherScopeKey),
     options?.exportDate,
@@ -545,7 +630,10 @@ export async function exportAdminChatsZip(adminToken, teacherScopeKey, options =
 
 export async function exportAdminAllRecordsZip(adminToken, teacherScopeKey) {
   const resp = await fetch(
-    withTeacherScopeQuery("/api/auth/admin/export/all-records-zip", teacherScopeKey),
+    withTeacherScopeQuery(
+      "/api/auth/admin/export/all-records-zip",
+      teacherScopeKey,
+    ),
     {
       headers: authHeader(adminToken),
     },
@@ -574,14 +662,21 @@ export async function exportAdminAllRecordsZip(adminToken, teacherScopeKey) {
 }
 
 export function deleteAllUserChats(adminToken, teacherScopeKey) {
-  return request(withTeacherScopeQuery("/api/auth/admin/chats", teacherScopeKey), adminToken, {
-    method: "DELETE",
-  });
+  return request(
+    withTeacherScopeQuery("/api/auth/admin/chats", teacherScopeKey),
+    adminToken,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
-export async function streamAdminAgentDebug(adminToken, payload, handlers = {}) {
-  const safePayload =
-    payload && typeof payload === "object" ? payload : {};
+export async function streamAdminAgentDebug(
+  adminToken,
+  payload,
+  handlers = {},
+) {
+  const safePayload = payload && typeof payload === "object" ? payload : {};
   const agentId = String(safePayload.agentId || "A")
     .trim()
     .toUpperCase();
@@ -591,9 +686,11 @@ export async function streamAdminAgentDebug(adminToken, payload, handlers = {}) 
     : "/api/auth/admin/agent-debug-stream";
   const runtimeKey = isAgentE ? "runtimeOverride" : "runtimeConfig";
   const runtimePayload =
-    safePayload.runtimeOverride && typeof safePayload.runtimeOverride === "object"
+    safePayload.runtimeOverride &&
+    typeof safePayload.runtimeOverride === "object"
       ? safePayload.runtimeOverride
-      : safePayload.runtimeConfig && typeof safePayload.runtimeConfig === "object"
+      : safePayload.runtimeConfig &&
+          typeof safePayload.runtimeConfig === "object"
         ? safePayload.runtimeConfig
         : {};
   const files = Array.isArray(safePayload.files)
@@ -602,7 +699,9 @@ export async function streamAdminAgentDebug(adminToken, payload, handlers = {}) 
   const volcengineFileRefs = Array.isArray(safePayload.volcengineFileRefs)
     ? safePayload.volcengineFileRefs.filter(Boolean)
     : [];
-  const preparedAttachmentRefs = Array.isArray(safePayload.preparedAttachmentRefs)
+  const preparedAttachmentRefs = Array.isArray(
+    safePayload.preparedAttachmentRefs,
+  )
     ? safePayload.preparedAttachmentRefs.filter(Boolean)
     : [];
   const sessionId = String(safePayload.sessionId || "").trim();
@@ -610,7 +709,11 @@ export async function streamAdminAgentDebug(adminToken, payload, handlers = {}) 
   let body;
   let headers;
 
-  if (files.length > 0 || volcengineFileRefs.length > 0 || preparedAttachmentRefs.length > 0) {
+  if (
+    files.length > 0 ||
+    volcengineFileRefs.length > 0 ||
+    preparedAttachmentRefs.length > 0
+  ) {
     const formData = new FormData();
     formData.append("agentId", agentId);
     if (sessionId) {
@@ -627,7 +730,10 @@ export async function streamAdminAgentDebug(adminToken, payload, handlers = {}) 
       formData.append("volcengineFileRefs", JSON.stringify(volcengineFileRefs));
     }
     if (preparedAttachmentRefs.length > 0) {
-      formData.append("preparedAttachmentRefs", JSON.stringify(preparedAttachmentRefs));
+      formData.append(
+        "preparedAttachmentRefs",
+        JSON.stringify(preparedAttachmentRefs),
+      );
     }
     files.forEach((file) => {
       formData.append("files", file);
@@ -718,7 +824,8 @@ export async function uploadAdminVolcengineDebugFiles(
   });
   const data = await readJson(resp);
   if (!resp.ok) {
-    const message = data?.error || data?.message || `请求失败（${resp.status}）`;
+    const message =
+      data?.error || data?.message || `请求失败（${resp.status}）`;
     throw new Error(message);
   }
   return data;
@@ -743,7 +850,8 @@ export async function prepareAdminDebugAttachments(
   });
   const data = await readJson(resp);
   if (!resp.ok) {
-    const message = data?.error || data?.message || `请求失败（${resp.status}）`;
+    const message =
+      data?.error || data?.message || `请求失败（${resp.status}）`;
     throw new Error(message);
   }
   return data;

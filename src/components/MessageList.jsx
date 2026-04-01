@@ -1,5 +1,4 @@
 import {
-  ChevronDown,
   Copy,
   Forward,
   RotateCcw,
@@ -23,6 +22,7 @@ import rehypeRaw from "rehype-raw";
 import { useSessionStreamDraft } from "../pages/chat/streamDraftStore.js";
 
 const MARKDOWN_REMARK_PLUGINS = [[remarkGfm, { singleTilde: false }]];
+const REASONING_TOGGLE_ANIMATION_MS = 280;
 
 const MARKDOWN_COMPONENTS = {
   a: ({ node, ...props }) => {
@@ -207,7 +207,7 @@ const MessageList = forwardRef(function MessageList({
           suppressLatestStateUntilRef.current = 0;
           reasoningToggleTimerRef.current = 0;
           checkIsAtLatest();
-        }, 160);
+        }, REASONING_TOGGLE_ANIMATION_MS);
       });
     });
   }, [checkIsAtLatest, setLatestState]);
@@ -468,6 +468,71 @@ const MessageList = forwardRef(function MessageList({
 
 export default MessageList;
 
+const ReasoningDisclosure = memo(function ReasoningDisclosure({
+  reasoningMarkdown,
+  onReasoningToggle,
+}) {
+  const [open, setOpen] = useState(false);
+  const [contentHeight, setContentHeight] = useState(0);
+  const contentRef = useRef(null);
+
+  useEffect(() => {
+    const updateHeight = () => {
+      const nextHeight = contentRef.current?.scrollHeight || 0;
+      setContentHeight(nextHeight);
+    };
+
+    updateHeight();
+
+    if (typeof ResizeObserver !== "function" || !contentRef.current) {
+      return undefined;
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateHeight();
+    });
+    observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, [reasoningMarkdown]);
+
+  const handleToggle = useCallback(() => {
+    onReasoningToggle?.();
+    setOpen((current) => !current);
+  }, [onReasoningToggle]);
+
+  return (
+    <div
+      className={`reasoning-panel${open ? " is-open" : ""}`}
+      style={{ "--reasoning-content-height": `${contentHeight}px` }}
+    >
+      <button
+        type="button"
+        className="reasoning-summary"
+        aria-expanded={open}
+        onClick={handleToggle}
+      >
+        <span className="reasoning-summary-icon" aria-hidden="true">
+          <Sparkles size={18} />
+        </span>
+        <span className="reasoning-summary-chip">
+          <span>{open ? "隐藏思路" : "显示思路"}</span>
+        </span>
+      </button>
+      <div className="reasoning-collapse" aria-hidden={!open}>
+        <div ref={contentRef} className="reasoning-content">
+          <ReactMarkdown
+            remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+            rehypePlugins={[rehypeRaw]}
+            components={MARKDOWN_COMPONENTS}
+          >
+            {reasoningMarkdown}
+          </ReactMarkdown>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 const MessageItem = memo(function MessageItem({
   m,
   isStreaming,
@@ -562,34 +627,10 @@ const MessageItem = memo(function MessageItem({
     <div className={`msg ${m.role}`}>
       <div className={`msg-bubble ${m.role}`}>
         {reasoningMarkdown.trim() && (
-          <details className="reasoning-panel">
-            <summary
-              className="reasoning-summary"
-              onPointerDownCapture={() => onReasoningToggle?.()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  onReasoningToggle?.();
-                }
-              }}
-            >
-              <span className="reasoning-summary-icon" aria-hidden="true">
-                <Sparkles size={18} />
-              </span>
-              <span className="reasoning-summary-chip">
-                <span>显示思路</span>
-                <ChevronDown size={18} className="reasoning-summary-caret" />
-              </span>
-            </summary>
-            <div className="reasoning-content">
-              <ReactMarkdown
-                remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-                rehypePlugins={[rehypeRaw]}
-                components={MARKDOWN_COMPONENTS}
-              >
-                {reasoningMarkdown}
-              </ReactMarkdown>
-            </div>
-          </details>
+          <ReasoningDisclosure
+            reasoningMarkdown={reasoningMarkdown}
+            onReasoningToggle={onReasoningToggle}
+          />
         )}
 
         {m.attachments?.length > 0 && (

@@ -1,9 +1,16 @@
-import { Settings } from "lucide-react";
+import {
+  FolderPlus,
+  ImagePlus,
+  MessageSquarePlus,
+  MessagesSquare,
+  Settings,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const SIDEBAR_ROW_ENTER_MS = 560;
 const SIDEBAR_ROW_EXIT_MS = 420;
+const SIDEBAR_MENU_ANIMATION_MS = 180;
 
 export default function Sidebar({
   sessions,
@@ -36,6 +43,7 @@ export default function Sidebar({
   const [menuSessionId, setMenuSessionId] = useState("");
   const [moveMenuSessionId, setMoveMenuSessionId] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null);
+  const [closingMenuState, setClosingMenuState] = useState(null);
 
   const [batchMode, setBatchMode] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState([]);
@@ -43,10 +51,13 @@ export default function Sidebar({
   const [enteringSessionIds, setEnteringSessionIds] = useState([]);
   const [exitingSessionIds, setExitingSessionIds] = useState([]);
   const expectInsertAnimationRef = useRef(false);
-  const previousSessionIdsRef = useRef(new Set(sessions.map((item) => item.id)));
+  const previousSessionIdsRef = useRef(
+    new Set(sessions.map((item) => item.id)),
+  );
   const enterTimersRef = useRef(new Map());
   const exitTimersRef = useRef(new Map());
   const batchDeleteTimerRef = useRef(0);
+  const menuCloseTimerRef = useRef(0);
 
   const grouped = useMemo(() => {
     const map = new Map();
@@ -73,21 +84,34 @@ export default function Sidebar({
     return {
       groups: Array.from(map.values()).map((g) => ({
         ...g,
-        sessions: [...g.sessions].sort((a, b) => Number(b.pinned) - Number(a.pinned)),
+        sessions: [...g.sessions].sort(
+          (a, b) => Number(b.pinned) - Number(a.pinned),
+        ),
       })),
-      ungrouped: [...ungrouped].sort((a, b) => Number(b.pinned) - Number(a.pinned)),
+      ungrouped: [...ungrouped].sort(
+        (a, b) => Number(b.pinned) - Number(a.pinned),
+      ),
     };
   }, [groups, sessions]);
 
   const groupMoveOptions = useMemo(
-    () => [{ id: "", name: "未分组" }, ...groups.map((g) => ({ id: g.id, name: g.name }))],
+    () => [
+      { id: "", name: "未分组" },
+      ...groups.map((g) => ({ id: g.id, name: g.name })),
+    ],
     [groups],
   );
 
-  const currentMenuSession = useMemo(
-    () => sessions.find((s) => s.id === menuSessionId) || null,
-    [sessions, menuSessionId],
+  const renderedMenuSessionId = menuSessionId || closingMenuState?.sessionId || "";
+  const renderedMoveMenuSessionId = menuSessionId
+    ? moveMenuSessionId
+    : (closingMenuState?.moveMenuSessionId ?? "");
+  const renderedMenuAnchor = menuSessionId ? menuAnchor : (closingMenuState?.anchor ?? null);
+  const renderedMenuSession = useMemo(
+    () => sessions.find((s) => s.id === renderedMenuSessionId) || null,
+    [sessions, renderedMenuSessionId],
   );
+  const isMenuClosing = !menuSessionId && !!closingMenuState;
   const selectedSessionIdSet = useMemo(() => {
     const valid = new Set(sessions.map((s) => s.id));
     return new Set(selectedSessionIds.filter((id) => valid.has(id)));
@@ -105,27 +129,31 @@ export default function Sidebar({
     [exitingSessionIds],
   );
   const menuPosition = useMemo(() => {
-    if (!menuSessionId || !menuAnchor) {
+    if (!renderedMenuSessionId || !renderedMenuAnchor) {
       return { top: 0, left: 0 };
     }
 
     const padding = 8;
     const gap = 6;
-    const menuWidth = moveMenuSessionId === menuSessionId ? 220 : 190;
-    const menuHeight = moveMenuSessionId === menuSessionId ? 320 : 210;
+    const menuWidth = renderedMoveMenuSessionId === renderedMenuSessionId ? 220 : 190;
+    const menuHeight = renderedMoveMenuSessionId === renderedMenuSessionId ? 320 : 210;
 
     const left = Math.max(
       padding,
-      Math.min(menuAnchor.right - menuWidth, window.innerWidth - menuWidth - padding),
+      Math.min(
+        renderedMenuAnchor.right - menuWidth,
+        window.innerWidth - menuWidth - padding,
+      ),
     );
 
-    const shouldOpenUp = menuAnchor.bottom + gap + menuHeight > window.innerHeight - padding;
+    const shouldOpenUp =
+      renderedMenuAnchor.bottom + gap + menuHeight > window.innerHeight - padding;
     const top = shouldOpenUp
-      ? Math.max(padding, menuAnchor.top - menuHeight - gap)
-      : menuAnchor.bottom + gap;
+      ? Math.max(padding, renderedMenuAnchor.top - menuHeight - gap)
+      : renderedMenuAnchor.bottom + gap;
 
     return { top, left };
-  }, [menuSessionId, menuAnchor, moveMenuSessionId]);
+  }, [renderedMenuSessionId, renderedMenuAnchor, renderedMoveMenuSessionId]);
 
   function resetCreateGroupForm() {
     setGroupName("");
@@ -143,7 +171,25 @@ export default function Sidebar({
     resetCreateGroupForm();
   }
 
+  function clearMenuCloseTimer() {
+    if (!menuCloseTimerRef.current) return;
+    window.clearTimeout(menuCloseTimerRef.current);
+    menuCloseTimerRef.current = 0;
+  }
+
   function closeChatMenu() {
+    if (menuSessionId && menuAnchor) {
+      setClosingMenuState({
+        sessionId: menuSessionId,
+        moveMenuSessionId,
+        anchor: menuAnchor,
+      });
+      clearMenuCloseTimer();
+      menuCloseTimerRef.current = window.setTimeout(() => {
+        setClosingMenuState(null);
+        menuCloseTimerRef.current = 0;
+      }, SIDEBAR_MENU_ANIMATION_MS);
+    }
     setMenuSessionId("");
     setMoveMenuSessionId("");
     setMenuAnchor(null);
@@ -199,6 +245,8 @@ export default function Sidebar({
       return;
     }
 
+    clearMenuCloseTimer();
+    setClosingMenuState(null);
     const rect = triggerEl.getBoundingClientRect();
     setMenuAnchor({
       top: rect.top,
@@ -244,7 +292,8 @@ export default function Sidebar({
 
   function toggleBatchSelect(sessionId) {
     setSelectedSessionIds((prev) => {
-      if (prev.includes(sessionId)) return prev.filter((id) => id !== sessionId);
+      if (prev.includes(sessionId))
+        return prev.filter((id) => id !== sessionId);
       return [...prev, sessionId];
     });
   }
@@ -285,13 +334,16 @@ export default function Sidebar({
     exitBatchMode();
   }
 
-
   useEffect(() => {
     if (!menuSessionId) return;
 
     function onDocMouseDown(e) {
       const t = e.target;
-      if (t.closest(".sidebar-row-menu") || t.closest(".sidebar-item-menu-trigger")) return;
+      if (
+        t.closest(".sidebar-row-menu") ||
+        t.closest(".sidebar-item-menu-trigger")
+      )
+        return;
       closeChatMenu();
     }
 
@@ -355,12 +407,15 @@ export default function Sidebar({
         clearTimeout(batchDeleteTimerRef.current);
         batchDeleteTimerRef.current = 0;
       }
+      clearMenuCloseTimer();
     },
     [],
   );
 
   function renderSessionRow(session) {
     const isMenuOpen = menuSessionId === session.id;
+    const isRenderedMenu =
+      isMenuOpen || closingMenuState?.sessionId === session.id;
     const isChecked = selectedSessionIdSet.has(session.id);
     const isEntering = enteringSessionIdSet.has(session.id);
     const isExiting = exitingSessionIdSet.has(session.id);
@@ -412,11 +467,11 @@ export default function Sidebar({
               ⋯
             </button>
 
-            {isMenuOpen &&
-              currentMenuSession &&
+            {isRenderedMenu &&
+              renderedMenuSession?.id === session.id &&
               createPortal(
                 <div
-                  className="sidebar-row-menu"
+                  className={`sidebar-row-menu${isMenuClosing ? " is-closing" : ""}`}
                   role="menu"
                   style={{ top: menuPosition.top, left: menuPosition.left }}
                 >
@@ -424,7 +479,7 @@ export default function Sidebar({
                     className="sidebar-row-menu-item danger"
                     type="button"
                     onClick={() => {
-                      triggerDeleteSession(currentMenuSession.id);
+                      triggerDeleteSession(renderedMenuSession.id);
                     }}
                   >
                     删除
@@ -435,22 +490,26 @@ export default function Sidebar({
                     type="button"
                     onClick={() =>
                       setMoveMenuSessionId((id) =>
-                        id === currentMenuSession.id ? "" : currentMenuSession.id,
+                        id === renderedMenuSession.id
+                          ? ""
+                          : renderedMenuSession.id,
                       )
                     }
                   >
                     把聊天移动到某个组
                   </button>
 
-                  {moveMenuSessionId === currentMenuSession.id && (
+                  {renderedMoveMenuSessionId === renderedMenuSession.id && (
                     <div className="sidebar-row-submenu">
                       {groupMoveOptions.map((g) => (
                         <button
                           key={g.id || "ungrouped"}
                           className="sidebar-row-submenu-item"
                           type="button"
-                          disabled={(currentMenuSession.groupId || "") === g.id}
-                          onClick={() => moveToGroup(currentMenuSession.id, g.id)}
+                          disabled={(renderedMenuSession.groupId || "") === g.id}
+                          onClick={() =>
+                            moveToGroup(renderedMenuSession.id, g.id)
+                          }
                         >
                           {g.name}
                         </button>
@@ -461,7 +520,7 @@ export default function Sidebar({
                   <button
                     className="sidebar-row-menu-item"
                     type="button"
-                    onClick={() => startRename(currentMenuSession)}
+                    onClick={() => startRename(renderedMenuSession)}
                   >
                     重命名
                   </button>
@@ -470,17 +529,17 @@ export default function Sidebar({
                     className="sidebar-row-menu-item"
                     type="button"
                     onClick={() => {
-                      onToggleSessionPin?.(currentMenuSession.id);
+                      onToggleSessionPin?.(renderedMenuSession.id);
                       closeChatMenu();
                     }}
                   >
-                    {currentMenuSession.pinned ? "取消置顶" : "置顶"}
+                    {renderedMenuSession.pinned ? "取消置顶" : "置顶"}
                   </button>
 
                   <button
                     className="sidebar-row-menu-item"
                     type="button"
-                    onClick={() => enterBatchMode(currentMenuSession.id)}
+                    onClick={() => enterBatchMode(renderedMenuSession.id)}
                   >
                     批量选择
                   </button>
@@ -513,26 +572,44 @@ export default function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
-        <div className="sidebar-actions">
-          <div className="sidebar-actions-row">
-            <button className="sidebar-new" onClick={handleNewChatClick}>
-              + 新聊天
-            </button>
-            <button className="sidebar-create-group" onClick={openCreateGroup}>
-              + 新建分组
-            </button>
+        <div className="sidebar-brand-row">
+          <div className="sidebar-brand-mark">元</div>
+          <div className="sidebar-brand-copy">
+            <strong className="sidebar-brand-title">元协坊</strong>
+            <span className="sidebar-brand-subtitle">对话与创作工作台</span>
           </div>
-          <button className="sidebar-image-entry" onClick={() => onOpenImageGeneration?.()}>
-            图片生成
+        </div>
+        <div className="sidebar-actions sidebar-actions-primary">
+          <button className="sidebar-new" onClick={handleNewChatClick}>
+            <MessageSquarePlus size={17} />
+            <span>新聊天</span>
           </button>
-          <button className="sidebar-party-entry" onClick={() => onOpenGroupChat?.()}>
-            派 · 协作
+        </div>
+        <div className="sidebar-workbench">
+          <div className="sidebar-section-label">工作台</div>
+          <div className="sidebar-actions">
+          <button
+            className="sidebar-image-entry"
+            onClick={() => onOpenImageGeneration?.()}
+          >
+            <ImagePlus size={17} />
+            <span>图片生成</span>
           </button>
+          <button
+            className="sidebar-party-entry"
+            onClick={() => onOpenGroupChat?.()}
+          >
+            <MessagesSquare size={17} />
+            <span>派 · 协作</span>
+          </button>
+        </div>
         </div>
 
         {batchMode && (
           <div className="sidebar-batch-bar">
-            <p className="sidebar-batch-count">已选择 {selectedSessionIdList.length} 项</p>
+            <p className="sidebar-batch-count">
+              已选择 {selectedSessionIdList.length} 项
+            </p>
             <div className="sidebar-batch-actions">
               <button
                 className="sidebar-batch-btn danger"
@@ -552,7 +629,11 @@ export default function Sidebar({
                 移动到组
               </button>
 
-              <button className="sidebar-batch-btn" type="button" onClick={exitBatchMode}>
+              <button
+                className="sidebar-batch-btn"
+                type="button"
+                onClick={exitBatchMode}
+              >
                 取消
               </button>
             </div>
@@ -582,7 +663,8 @@ export default function Sidebar({
           setShowBatchMove(false);
         }}
       >
-        {grouped.ungrouped.length > 0 && (
+        <section className="sidebar-list-section">
+          <div className="sidebar-section-label">对话</div>
           <section className="sidebar-group">
             <div className="sidebar-group-head">
               <div className="sidebar-group-title-wrap">
@@ -590,40 +672,70 @@ export default function Sidebar({
               </div>
             </div>
 
-            <div className="sidebar-group-list">{grouped.ungrouped.map((s) => renderSessionRow(s))}</div>
-          </section>
-        )}
-
-        {grouped.groups.map((g) => (
-          <section key={g.id} className="sidebar-group">
-            <div className="sidebar-group-head">
-              <div className="sidebar-group-title-wrap">
-                <p className="sidebar-group-name">{g.name}</p>
-                {g.description && (
-                  <p className="sidebar-group-desc" title={g.description}>
-                    {g.description}
-                  </p>
-                )}
-              </div>
-
-              {!batchMode && (
-                <button
-                  className="sidebar-group-delete"
-                  type="button"
-                  onClick={() => onDeleteGroup?.(g.id)}
-                >
-                  删除组
-                </button>
+            <div className="sidebar-group-list">
+              {grouped.ungrouped.length > 0 ? (
+                grouped.ungrouped.map((s) => renderSessionRow(s))
+              ) : (
+                <p className="sidebar-empty-group">暂无未分组聊天</p>
               )}
             </div>
-
-            <div className="sidebar-group-list">
-              {g.sessions.length === 0 && <p className="sidebar-empty-group">此分组暂无聊天</p>}
-
-              {g.sessions.map((s) => renderSessionRow(s))}
-            </div>
           </section>
-        ))}
+        </section>
+
+        <section className="sidebar-list-section">
+          <div className="sidebar-section-head">
+            <div className="sidebar-section-label">分组</div>
+            {!batchMode && (
+              <button
+                className="sidebar-section-action"
+                type="button"
+                onClick={openCreateGroup}
+              >
+                <FolderPlus size={14} />
+                <span>新建</span>
+              </button>
+            )}
+          </div>
+
+          {grouped.groups.length > 0 ? (
+            grouped.groups.map((g) => (
+              <section key={g.id} className="sidebar-group">
+                <div className="sidebar-group-head">
+                  <div className="sidebar-group-title-wrap">
+                    <p className="sidebar-group-name">{g.name}</p>
+                    {g.description && (
+                      <p className="sidebar-group-desc" title={g.description}>
+                        {g.description}
+                      </p>
+                    )}
+                  </div>
+
+                  {!batchMode && (
+                    <button
+                      className="sidebar-group-delete"
+                      type="button"
+                      onClick={() => onDeleteGroup?.(g.id)}
+                    >
+                      删除组
+                    </button>
+                  )}
+                </div>
+
+                <div className="sidebar-group-list">
+                  {g.sessions.length === 0 && (
+                    <p className="sidebar-empty-group">此分组暂无聊天</p>
+                  )}
+
+                  {g.sessions.map((s) => renderSessionRow(s))}
+                </div>
+              </section>
+            ))
+          ) : (
+            <p className="sidebar-empty-group sidebar-empty-groups">
+              还没有分组，先开始聊天，之后再整理也不迟。
+            </p>
+          )}
+        </section>
       </div>
 
       <div className="sidebar-bottom">
@@ -634,14 +746,20 @@ export default function Sidebar({
         >
           <Settings size={16} strokeWidth={2} />
           <span>用户信息</span>
-          <span className={`sidebar-user-info-status ${hasUserInfo ? "filled" : ""}`}>
+          <span
+            className={`sidebar-user-info-status ${hasUserInfo ? "filled" : ""}`}
+          >
             {hasUserInfo ? "已填写" : "未填写"}
           </span>
         </button>
       </div>
 
       {showCreateGroup && (
-        <div className="modal-overlay" role="presentation" onClick={closeCreateGroup}>
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={closeCreateGroup}
+        >
           <div
             className="group-modal"
             role="dialog"
@@ -650,7 +768,10 @@ export default function Sidebar({
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="group-modal-title">创建分组</h3>
-            <form onSubmit={handleCreateGroupSubmit} className="group-modal-form">
+            <form
+              onSubmit={handleCreateGroupSubmit}
+              className="group-modal-form"
+            >
               <label className="group-modal-label" htmlFor="group-name-input">
                 分组名称
               </label>
@@ -688,7 +809,10 @@ export default function Sidebar({
                 >
                   取消
                 </button>
-                <button type="submit" className="group-modal-btn group-modal-btn-primary">
+                <button
+                  type="submit"
+                  className="group-modal-btn group-modal-btn-primary"
+                >
                   创建
                 </button>
               </div>
@@ -698,7 +822,11 @@ export default function Sidebar({
       )}
 
       {showRenameModal && (
-        <div className="modal-overlay" role="presentation" onClick={closeRenameModal}>
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={closeRenameModal}
+        >
           <div
             className="group-modal"
             role="dialog"
@@ -708,7 +836,10 @@ export default function Sidebar({
           >
             <h3 className="group-modal-title">重命名聊天</h3>
             <form onSubmit={submitRename} className="group-modal-form">
-              <label className="group-modal-label" htmlFor="rename-session-input">
+              <label
+                className="group-modal-label"
+                htmlFor="rename-session-input"
+              >
                 聊天名称
               </label>
               <input
@@ -722,7 +853,9 @@ export default function Sidebar({
                 maxLength={60}
                 autoFocus
               />
-              {renameError && <p className="group-modal-error">{renameError}</p>}
+              {renameError && (
+                <p className="group-modal-error">{renameError}</p>
+              )}
 
               <div className="group-modal-actions">
                 <button
@@ -732,7 +865,10 @@ export default function Sidebar({
                 >
                   取消
                 </button>
-                <button type="submit" className="group-modal-btn group-modal-btn-primary">
+                <button
+                  type="submit"
+                  className="group-modal-btn group-modal-btn-primary"
+                >
                   保存
                 </button>
               </div>
@@ -740,7 +876,6 @@ export default function Sidebar({
           </div>
         </div>
       )}
-
     </aside>
   );
 }

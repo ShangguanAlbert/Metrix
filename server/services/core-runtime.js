@@ -4,7 +4,13 @@ import multer from "multer";
 import dotenv from "dotenv";
 import http from "node:http";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile as readFileAsync, rm, writeFile as writeFileAsync } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile as readFileAsync,
+  rm,
+  writeFile as writeFileAsync,
+} from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import crypto from "node:crypto";
@@ -15,6 +21,7 @@ import XLSX from "xlsx";
 import { PDFParse } from "pdf-parse";
 import mongoose from "mongoose";
 import OSS from "ali-oss";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { WebSocketServer } from "ws";
 import { SYSTEM_PROMPT_LEAK_PROTECTION_TOP_PROMPT } from "../prompts/leakProtectionPrompt.js";
 import { PROMPT_LEAK_PROBE_KEYWORDS } from "../prompts/leakProtectionKeywords.js";
@@ -106,7 +113,10 @@ const TEACHER_SCOPE_LOCKED_AGENT_MAP = Object.freeze({
 const CLASS_NAME_JIAOJI_231 = "教技231";
 const CLASS_NAME_810 = "810班";
 const CLASS_NAME_811 = "811班";
-const ADMIN_CLASSROOM_SUPPORTED_CLASS_NAMES = Object.freeze([CLASS_NAME_810, CLASS_NAME_811]);
+const ADMIN_CLASSROOM_SUPPORTED_CLASS_NAMES = Object.freeze([
+  CLASS_NAME_810,
+  CLASS_NAME_811,
+]);
 const ADMIN_CLASSROOM_DEFAULT_CLASS_NAME = CLASS_NAME_810;
 const CLASSROOM_FIRST_LESSON_DATE = "2026-03-11";
 const CLASSROOM_QUESTIONNAIRE_URL = "https://v.wjx.cn/vm/PQfZjgr.aspx#";
@@ -145,6 +155,8 @@ const UPLOADED_FILE_CONTEXT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const GENERATED_IMAGE_HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const GENERATED_IMAGE_HISTORY_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const GENERATED_IMAGE_HISTORY_FETCH_TIMEOUT_MS = 15 * 1000;
+const GENERATED_IMAGE_THUMBNAIL_MAX_EDGE = 360;
+const GENERATED_IMAGE_THUMBNAIL_MIME_TYPE = "image/webp";
 const GROUP_CHAT_MAX_CREATED_ROOMS_PER_USER = 2;
 const GROUP_CHAT_MAX_JOINED_ROOMS_PER_USER = 8;
 const GROUP_CHAT_MAX_MEMBERS_PER_ROOM = 10;
@@ -226,7 +238,10 @@ if (!groupChatOssClient) {
   console.warn(
     "[group-chat-file-storage] OSS 未启用，群聊文件将继续写入 MongoDB（Buffer）。",
   );
-} else if (groupChatOssConfig?.networkMode === "internal_prefer" && groupChatOssFallbackClient) {
+} else if (
+  groupChatOssConfig?.networkMode === "internal_prefer" &&
+  groupChatOssFallbackClient
+) {
   const fallbackHost =
     groupChatOssFallbackClient?.options?.endpoint?.host ||
     groupChatOssFallbackClient?.options?.endpoint?.hostname ||
@@ -235,7 +250,9 @@ if (!groupChatOssClient) {
     `[group-chat-file-storage] OSS 已启用：优先走内网；若连接超时将自动回退公网重试（fallback=${fallbackHost || "public-endpoint"}）。`,
   );
 } else if (groupChatOssConfig?.networkMode === "internal_prefer") {
-  console.log("[group-chat-file-storage] OSS 已启用：优先走内网（公网回退未启用）。");
+  console.log(
+    "[group-chat-file-storage] OSS 已启用：优先走内网（公网回退未启用）。",
+  );
 } else if (groupChatOssConfig?.networkMode === "internal_only") {
   console.log("[group-chat-file-storage] OSS 已启用：仅走内网（不回退公网）。");
 } else {
@@ -726,7 +743,11 @@ const VOLCENGINE_WEB_SEARCH_MODEL_CAPABILITIES = Object.freeze([
   },
   {
     id: "doubao-seed-1-6-251015",
-    aliases: ["doubao-seed-1-6-251015", "doubao-seed-1-6-250615", "doubao-seed-1-6"],
+    aliases: [
+      "doubao-seed-1-6-251015",
+      "doubao-seed-1-6-250615",
+      "doubao-seed-1-6",
+    ],
     supportsThinking: true,
   },
   {
@@ -736,7 +757,11 @@ const VOLCENGINE_WEB_SEARCH_MODEL_CAPABILITIES = Object.freeze([
   },
   {
     id: "deepseek-v3-1-terminus",
-    aliases: ["deepseek-v3-1-terminus", "deepseek-v3-1-250821", "deepseek-v3-1"],
+    aliases: [
+      "deepseek-v3-1-terminus",
+      "deepseek-v3-1-250821",
+      "deepseek-v3-1",
+    ],
     supportsThinking: true,
   },
   {
@@ -1072,6 +1097,9 @@ const generatedImageHistorySchema = new mongoose.Schema(
     imageMimeType: { type: String, default: "" },
     imageSize: { type: Number, default: 0 },
     imageData: { type: Buffer, default: Buffer.alloc(0) },
+    thumbnailMimeType: { type: String, default: "" },
+    thumbnailSize: { type: Number, default: 0 },
+    thumbnailData: { type: Buffer, default: Buffer.alloc(0) },
     responseFormat: { type: String, default: "url" },
     size: { type: String, default: "" },
     model: { type: String, default: "" },
@@ -1137,7 +1165,8 @@ groupChatRoomSchema.index(
 );
 
 const GroupChatRoom =
-  mongoose.models.GroupChatRoom || mongoose.model("GroupChatRoom", groupChatRoomSchema);
+  mongoose.models.GroupChatRoom ||
+  mongoose.model("GroupChatRoom", groupChatRoomSchema);
 
 const groupChatMessageReactionSchema = new mongoose.Schema(
   {
@@ -1311,7 +1340,10 @@ const runtimeConfigSchema = new mongoose.Schema(
       type: String,
       default: DEFAULT_AGENT_RUNTIME_CONFIG.creativityMode,
     },
-    temperature: { type: Number, default: DEFAULT_AGENT_RUNTIME_CONFIG.temperature },
+    temperature: {
+      type: Number,
+      default: DEFAULT_AGENT_RUNTIME_CONFIG.temperature,
+    },
     topP: { type: Number, default: DEFAULT_AGENT_RUNTIME_CONFIG.topP },
     frequencyPenalty: {
       type: Number,
@@ -1427,7 +1459,9 @@ const runtimeConfigSchema = new mongoose.Schema(
     },
     aliyunSearchAssignedSiteList: {
       type: [String],
-      default: () => [...DEFAULT_AGENT_RUNTIME_CONFIG.aliyunSearchAssignedSiteList],
+      default: () => [
+        ...DEFAULT_AGENT_RUNTIME_CONFIG.aliyunSearchAssignedSiteList,
+      ],
     },
     aliyunSearchPromptIntervene: {
       type: String,
@@ -1439,7 +1473,8 @@ const runtimeConfigSchema = new mongoose.Schema(
     },
     aliyunResponsesEnableCodeInterpreter: {
       type: Boolean,
-      default: DEFAULT_AGENT_RUNTIME_CONFIG.aliyunResponsesEnableCodeInterpreter,
+      default:
+        DEFAULT_AGENT_RUNTIME_CONFIG.aliyunResponsesEnableCodeInterpreter,
     },
     aliyunFileProcessMode: {
       type: String,
@@ -1584,7 +1619,8 @@ const adminConfigSchema = new mongoose.Schema(
 );
 
 const AdminConfig =
-  mongoose.models.AdminConfig || mongoose.model("AdminConfig", adminConfigSchema);
+  mongoose.models.AdminConfig ||
+  mongoose.model("AdminConfig", adminConfigSchema);
 const adminClassroomLessonFileSchema = new mongoose.Schema(
   {
     key: { type: String, default: ADMIN_CONFIG_KEY, index: true },
@@ -1614,7 +1650,11 @@ const AdminClassroomLessonFile =
 const classroomHomeworkFileSchema = new mongoose.Schema(
   {
     key: { type: String, default: ADMIN_CONFIG_KEY, index: true },
-    teacherScopeKey: { type: String, default: SHANGGUAN_FUZE_TEACHER_SCOPE_KEY, index: true },
+    teacherScopeKey: {
+      type: String,
+      default: SHANGGUAN_FUZE_TEACHER_SCOPE_KEY,
+      index: true,
+    },
     fileId: { type: String, required: true, unique: true, index: true },
     lessonId: { type: String, default: "", index: true },
     lessonName: { type: String, default: "" },
@@ -1645,7 +1685,6 @@ const ClassroomHomeworkFile =
   mongoose.model("ClassroomHomeworkFile", classroomHomeworkFileSchema);
 const AgentEConfig = createAgentEConfigModel(mongoose);
 
-
 function normalizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
 
@@ -1661,7 +1700,8 @@ function normalizeMessages(messages) {
       content: normalizeMessageContent(m.content),
     }))
     .filter(
-      (m) => hasUsableMessageContent(m.content) || (m.role === "user" && !!m.id),
+      (m) =>
+        hasUsableMessageContent(m.content) || (m.role === "user" && !!m.id),
     );
 }
 
@@ -1802,78 +1842,84 @@ function isImageUploadFile(file) {
 function cloneNormalizedMessageContent(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return content.map((part) => {
-    const type = String(part?.type || "")
-      .trim()
-      .toLowerCase();
-    if (type === "text") {
-      return { type: "text", text: String(part?.text || "") };
-    }
-    if (type === "input_file" || type === "input_video" || type === "input_image") {
-      const fileId = String(part?.file_id || part?.fileId || "").trim();
-      if (fileId) {
-        return { type, file_id: fileId };
+  return content
+    .map((part) => {
+      const type = String(part?.type || "")
+        .trim()
+        .toLowerCase();
+      if (type === "text") {
+        return { type: "text", text: String(part?.text || "") };
       }
-    }
-
-    if (type === "file_url" || type === "input_file_url") {
-      const fileUrl = extractAliyunFileUrl(part);
-      if (fileUrl) {
-        const payload = { url: fileUrl };
-        const safeMime = sanitizeGroupChatFileMimeType(
-          part?.file_url?.mime_type ||
-            part?.file_url?.mimeType ||
-            part?.mime_type ||
-            part?.mimeType ||
-            part?.mimetype ||
-            "",
-        );
-        if (safeMime && safeMime !== "application/octet-stream") {
-          payload.mime_type = safeMime;
+      if (
+        type === "input_file" ||
+        type === "input_video" ||
+        type === "input_image"
+      ) {
+        const fileId = String(part?.file_id || part?.fileId || "").trim();
+        if (fileId) {
+          return { type, file_id: fileId };
         }
-        const safeName = sanitizeText(
-          part?.file_url?.name ||
-            part?.file_url?.filename ||
-            part?.name ||
-            part?.filename ||
+      }
+
+      if (type === "file_url" || type === "input_file_url") {
+        const fileUrl = extractAliyunFileUrl(part);
+        if (fileUrl) {
+          const payload = { url: fileUrl };
+          const safeMime = sanitizeGroupChatFileMimeType(
+            part?.file_url?.mime_type ||
+              part?.file_url?.mimeType ||
+              part?.mime_type ||
+              part?.mimeType ||
+              part?.mimetype ||
+              "",
+          );
+          if (safeMime && safeMime !== "application/octet-stream") {
+            payload.mime_type = safeMime;
+          }
+          const safeName = sanitizeText(
+            part?.file_url?.name ||
+              part?.file_url?.filename ||
+              part?.name ||
+              part?.filename ||
+              "",
             "",
-          "",
-          180,
-        );
-        if (safeName) {
-          payload.name = safeName;
+            180,
+          );
+          if (safeName) {
+            payload.name = safeName;
+          }
+          return { type: "file_url", file_url: payload };
         }
-        return { type: "file_url", file_url: payload };
       }
-    }
-    const imageUrl = extractInputImageUrl(part);
-    if (imageUrl) {
-      return { type: "image_url", image_url: { url: imageUrl } };
-    }
-
-    if (type === "file") {
-      const filePayload = normalizeOpenRouterFilePart(part);
-      if (filePayload) {
-        return { type: "file", file: filePayload };
+      const imageUrl = extractInputImageUrl(part);
+      if (imageUrl) {
+        return { type: "image_url", image_url: { url: imageUrl } };
       }
-    }
 
-    if (type === "input_audio") {
-      const audioPayload = normalizeOpenRouterAudioPart(part);
-      if (audioPayload) {
-        return { type: "input_audio", input_audio: audioPayload };
+      if (type === "file") {
+        const filePayload = normalizeOpenRouterFilePart(part);
+        if (filePayload) {
+          return { type: "file", file: filePayload };
+        }
       }
-    }
 
-    if (type === "video_url") {
-      const videoUrl = extractInputVideoUrl(part);
-      if (videoUrl) {
-        return { type: "video_url", video_url: { url: videoUrl } };
+      if (type === "input_audio") {
+        const audioPayload = normalizeOpenRouterAudioPart(part);
+        if (audioPayload) {
+          return { type: "input_audio", input_audio: audioPayload };
+        }
       }
-    }
 
-    return null;
-  }).filter(Boolean);
+      if (type === "video_url") {
+        const videoUrl = extractInputVideoUrl(part);
+        if (videoUrl) {
+          return { type: "video_url", video_url: { url: videoUrl } };
+        }
+      }
+
+      return null;
+    })
+    .filter(Boolean);
 }
 
 function resolveUploadedFileContextIdentity({ userId, sessionId, messageId }) {
@@ -1907,7 +1953,12 @@ function normalizeUploadedFileContextOssFiles(value) {
     .map((item) => ({
       fileName: sanitizeGroupChatFileName(item?.fileName),
       mimeType: sanitizeGroupChatFileMimeType(item?.mimeType),
-      size: sanitizeRuntimeInteger(item?.size, 0, 0, GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES),
+      size: sanitizeRuntimeInteger(
+        item?.size,
+        0,
+        0,
+        GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES,
+      ),
       source: sanitizeUploadedFileContextOssSource(item?.source),
       ossKey: sanitizeGroupChatOssObjectKey(item?.ossKey),
       ossBucket: sanitizeAliyunOssBucket(item?.ossBucket),
@@ -1928,9 +1979,11 @@ function resolveUploadedContextOssFileForInputFile(file, ossFiles = []) {
   return (
     safeList.find((item) => {
       const sameName =
-        sanitizeGroupChatFileName(item?.fileName) === fallbackName && !!fallbackName;
+        sanitizeGroupChatFileName(item?.fileName) === fallbackName &&
+        !!fallbackName;
       const sameSize =
-        Number(item?.size || 0) === fallbackSize && Number.isFinite(fallbackSize);
+        Number(item?.size || 0) === fallbackSize &&
+        Number.isFinite(fallbackSize);
       const sameMime =
         sanitizeGroupChatFileMimeType(item?.mimeType || "") === fallbackMime &&
         !!fallbackMime;
@@ -2007,7 +2060,9 @@ async function saveUploadedFileContext({
   const normalized = normalizeMessageContent(content);
   if (!hasUsableMessageContent(normalized)) return;
   const clonedContent = cloneNormalizedMessageContent(normalized);
-  const safePreparedTokens = sanitizePreparedAttachmentTokens(preparedAttachmentTokens);
+  const safePreparedTokens = sanitizePreparedAttachmentTokens(
+    preparedAttachmentTokens,
+  );
   const safeOssFiles = dedupeUploadedFileContextOssFiles(ossFiles);
 
   try {
@@ -2100,7 +2155,10 @@ async function buildAliyunDashScopeMediaPartsFromOssFiles(
     const isVideo = mime.startsWith("video/");
     if (!isImage && !isVideo) {
       if (!allowNativeDocuments) continue;
-      if (shouldForceAliyunDashScopeLocalParseForFile({ ext, mime, buffer: null })) continue;
+      if (
+        shouldForceAliyunDashScopeLocalParseForFile({ ext, mime, buffer: null })
+      )
+        continue;
     }
 
     const url = await resolveAliyunDashScopeAttachmentUrl({
@@ -2142,9 +2200,12 @@ async function buildAliyunDashScopeRehydratedContent(
   const clonedBase = hasUsableMessageContent(normalized)
     ? cloneNormalizedMessageContent(normalized)
     : "";
-  const mediaParts = await buildAliyunDashScopeMediaPartsFromOssFiles(ossFiles, {
-    includeNativeDocuments,
-  });
+  const mediaParts = await buildAliyunDashScopeMediaPartsFromOssFiles(
+    ossFiles,
+    {
+      includeNativeDocuments,
+    },
+  );
   if (mediaParts.length === 0) {
     return clonedBase;
   }
@@ -2177,13 +2238,15 @@ async function rehydrateUploadedFileContexts(
     aliyunFileProcessMode,
   );
   const shouldKeepOnlyLatestAliyunFileContext =
-    safeProvider === "aliyun" && resolveAliyunProtocol(safeProtocol) === "dashscope";
+    safeProvider === "aliyun" &&
+    resolveAliyunProtocol(safeProtocol) === "dashscope";
   const shouldRefreshAliyunMediaUrls =
     safeProvider === "aliyun" &&
     resolveAliyunProtocol(safeProtocol) === "dashscope" &&
     !!resolveAliyunModelPolicy(model)?.supported;
   const includeAliyunNativeDocuments =
-    shouldRefreshAliyunMediaUrls && safeAliyunFileProcessMode === "native_oss_url";
+    shouldRefreshAliyunMediaUrls &&
+    safeAliyunFileProcessMode === "native_oss_url";
 
   const targets = [];
   const messageIds = [];
@@ -2241,7 +2304,9 @@ async function rehydrateUploadedFileContexts(
       Array.isArray(doc?.preparedAttachmentTokens) &&
       doc.preparedAttachmentTokens.length > 0
     ) {
-      const tokenRefs = doc.preparedAttachmentTokens.map((token) => ({ token }));
+      const tokenRefs = doc.preparedAttachmentTokens.map((token) => ({
+        token,
+      }));
       const preparedResolution = resolvePreparedAttachmentRefsFromCache({
         refs: tokenRefs,
         userId: safeUserId,
@@ -2252,7 +2317,9 @@ async function rehydrateUploadedFileContexts(
       });
       const preparedParts = Array.isArray(preparedResolution?.entries)
         ? preparedResolution.entries.flatMap((entry) =>
-            cloneNormalizedMessageContent(normalizeMessageContent(entry?.parts)),
+            cloneNormalizedMessageContent(
+              normalizeMessageContent(entry?.parts),
+            ),
           )
         : [];
       if (preparedParts.length > 0) {
@@ -2321,7 +2388,9 @@ function sanitizePreparedAttachmentRefsPayload(input) {
   const dedup = new Set();
   const list = [];
   source.slice(0, CHAT_PREPARED_ATTACHMENT_MAX_REFS).forEach((item) => {
-    const token = sanitizePreparedAttachmentToken(item?.token || item?.preparedToken);
+    const token = sanitizePreparedAttachmentToken(
+      item?.token || item?.preparedToken,
+    );
     if (!token || dedup.has(token)) return;
     dedup.add(token);
     list.push({
@@ -2339,16 +2408,24 @@ function sanitizePreparedAttachmentRefsPayload(input) {
   return list;
 }
 
-function sanitizePreparedAttachmentTokens(input, maxCount = CHAT_PREPARED_ATTACHMENT_MAX_REFS) {
+function sanitizePreparedAttachmentTokens(
+  input,
+  maxCount = CHAT_PREPARED_ATTACHMENT_MAX_REFS,
+) {
   const source = Array.isArray(input) ? input : [];
   const dedup = new Set();
   const tokens = [];
-  source.slice(0, Math.max(0, Number(maxCount) || CHAT_PREPARED_ATTACHMENT_MAX_REFS)).forEach((item) => {
-    const token = sanitizePreparedAttachmentToken(item);
-    if (!token || dedup.has(token)) return;
-    dedup.add(token);
-    tokens.push(token);
-  });
+  source
+    .slice(
+      0,
+      Math.max(0, Number(maxCount) || CHAT_PREPARED_ATTACHMENT_MAX_REFS),
+    )
+    .forEach((item) => {
+      const token = sanitizePreparedAttachmentToken(item);
+      if (!token || dedup.has(token)) return;
+      dedup.add(token);
+      tokens.push(token);
+    });
   return tokens;
 }
 
@@ -2363,15 +2440,22 @@ function pruneExpiredChatPreparedAttachmentCache(now = Date.now()) {
   }
 }
 
-function trimChatPreparedAttachmentCache(maxItems = CHAT_PREPARED_ATTACHMENT_CACHE_MAX_ITEMS) {
-  const safeLimit = Math.max(40, Number(maxItems) || CHAT_PREPARED_ATTACHMENT_CACHE_MAX_ITEMS);
+function trimChatPreparedAttachmentCache(
+  maxItems = CHAT_PREPARED_ATTACHMENT_CACHE_MAX_ITEMS,
+) {
+  const safeLimit = Math.max(
+    40,
+    Number(maxItems) || CHAT_PREPARED_ATTACHMENT_CACHE_MAX_ITEMS,
+  );
   if (chatPreparedAttachmentCache.size <= safeLimit) return;
 
-  const sorted = Array.from(chatPreparedAttachmentCache.entries()).sort((a, b) => {
-    const aCreated = Number(a?.[1]?.createdAtMs) || 0;
-    const bCreated = Number(b?.[1]?.createdAtMs) || 0;
-    return aCreated - bCreated;
-  });
+  const sorted = Array.from(chatPreparedAttachmentCache.entries()).sort(
+    (a, b) => {
+      const aCreated = Number(a?.[1]?.createdAtMs) || 0;
+      const bCreated = Number(b?.[1]?.createdAtMs) || 0;
+      return aCreated - bCreated;
+    },
+  );
   const removeCount = Math.max(0, sorted.length - safeLimit);
   for (let idx = 0; idx < removeCount; idx += 1) {
     const token = sorted[idx]?.[0];
@@ -2381,7 +2465,9 @@ function trimChatPreparedAttachmentCache(maxItems = CHAT_PREPARED_ATTACHMENT_CAC
 }
 
 function createChatPreparedAttachmentToken() {
-  return sanitizePreparedAttachmentToken(crypto.randomBytes(20).toString("hex"));
+  return sanitizePreparedAttachmentToken(
+    crypto.randomBytes(20).toString("hex"),
+  );
 }
 
 function savePreparedAttachmentToCache({
@@ -2399,14 +2485,21 @@ function savePreparedAttachmentToCache({
   const safeUserId = sanitizeId(userId, "");
   if (!safeUserId) return "";
 
-  const normalizedParts = cloneNormalizedMessageContent(normalizeMessageContent(parts));
-  if (!Array.isArray(normalizedParts) || normalizedParts.length === 0) return "";
+  const normalizedParts = cloneNormalizedMessageContent(
+    normalizeMessageContent(parts),
+  );
+  if (!Array.isArray(normalizedParts) || normalizedParts.length === 0)
+    return "";
 
   pruneExpiredChatPreparedAttachmentCache();
   trimChatPreparedAttachmentCache();
 
   let token = createChatPreparedAttachmentToken();
-  for (let attempt = 0; attempt < 3 && (!token || chatPreparedAttachmentCache.has(token)); attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < 3 && (!token || chatPreparedAttachmentCache.has(token));
+    attempt += 1
+  ) {
     token = createChatPreparedAttachmentToken();
   }
   if (!token || chatPreparedAttachmentCache.has(token)) return "";
@@ -2424,7 +2517,12 @@ function savePreparedAttachmentToCache({
     agentId: safeAgentId,
     fileName: sanitizeGroupChatFileName(fileName),
     mimeType: sanitizeGroupChatFileMimeType(mimeType),
-    size: sanitizeRuntimeInteger(size, 0, 0, GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES),
+    size: sanitizeRuntimeInteger(
+      size,
+      0,
+      0,
+      GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES,
+    ),
     parts: normalizedParts,
     extra: extra && typeof extra === "object" ? extra : {},
     createdAtMs: now,
@@ -2491,7 +2589,9 @@ function resolvePreparedAttachmentRefsFromCache({
       return;
     }
 
-    const normalizedParts = cloneNormalizedMessageContent(normalizeMessageContent(cached.parts));
+    const normalizedParts = cloneNormalizedMessageContent(
+      normalizeMessageContent(cached.parts),
+    );
     if (!Array.isArray(normalizedParts) || normalizedParts.length === 0) {
       missing.push(ref);
       return;
@@ -2507,7 +2607,8 @@ function resolvePreparedAttachmentRefsFromCache({
         GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES,
       ),
       parts: normalizedParts,
-      extra: cached.extra && typeof cached.extra === "object" ? cached.extra : {},
+      extra:
+        cached.extra && typeof cached.extra === "object" ? cached.extra : {},
     });
   });
 
@@ -2516,7 +2617,12 @@ function resolvePreparedAttachmentRefsFromCache({
 
 function attachVolcengineFileRefsToLatestUserMessage(messages, fileRefs) {
   const safeRefs = sanitizeVolcengineFileRefsPayload(fileRefs);
-  if (safeRefs.length === 0 || !Array.isArray(messages) || messages.length === 0) return null;
+  if (
+    safeRefs.length === 0 ||
+    !Array.isArray(messages) ||
+    messages.length === 0
+  )
+    return null;
 
   let idx = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -2540,7 +2646,12 @@ function attachVolcengineFileRefsToLatestUserMessage(messages, fileRefs) {
     const type = String(part?.type || "")
       .trim()
       .toLowerCase();
-    if (type !== "input_file" && type !== "input_image" && type !== "input_video") return;
+    if (
+      type !== "input_file" &&
+      type !== "input_image" &&
+      type !== "input_video"
+    )
+      return;
     const fileId = String(part?.file_id || part?.fileId || "").trim();
     if (!fileId) return;
     existingRefKeys.add(`${type}::${fileId}`);
@@ -2564,7 +2675,10 @@ function attachVolcengineFileRefsToLatestUserMessage(messages, fileRefs) {
   };
 }
 
-function attachPreparedAttachmentPartsToLatestUserMessage(messages, preparedEntries = []) {
+function attachPreparedAttachmentPartsToLatestUserMessage(
+  messages,
+  preparedEntries = [],
+) {
   const safeEntries = Array.isArray(preparedEntries) ? preparedEntries : [];
   if (safeEntries.length === 0) return null;
   const msg = resolveLatestUserMessage(messages);
@@ -2640,16 +2754,19 @@ function stripAliyunDocumentUrlPartsFromMessages(messages) {
         content: normalized,
       };
     }
-    const filtered = (Array.isArray(normalized) ? normalized : []).filter((part) => {
-      const type = String(part?.type || "")
-        .trim()
-        .toLowerCase();
-      return type !== "file_url" && type !== "input_file_url";
-    });
+    const filtered = (Array.isArray(normalized) ? normalized : []).filter(
+      (part) => {
+        const type = String(part?.type || "")
+          .trim()
+          .toLowerCase();
+        return type !== "file_url" && type !== "input_file_url";
+      },
+    );
     return {
       id: sanitizeId(msg?.id, ""),
       role: msg?.role,
-      content: filtered.length > 0 ? cloneNormalizedMessageContent(filtered) : "",
+      content:
+        filtered.length > 0 ? cloneNormalizedMessageContent(filtered) : "",
     };
   });
   return normalizeMessages(stripped);
@@ -2660,7 +2777,11 @@ function isAliyunDashScopeUnsupportedNativeFileErrorText(text) {
     .trim()
     .toLowerCase();
   if (!safe) return false;
-  if (safe.includes("contentitem.init() got an unexpected keyword argument 'file_path'")) {
+  if (
+    safe.includes(
+      "contentitem.init() got an unexpected keyword argument 'file_path'",
+    )
+  ) {
     return true;
   }
   if (safe.includes("contentitem.init()") && safe.includes("file_path")) {
@@ -2725,7 +2846,10 @@ function resolveOpenRouterVideoMime({ mime, ext }) {
   if (normalizedMime.startsWith("video/")) {
     if (normalizedMime.includes("mp4")) return "video/mp4";
     if (normalizedMime.includes("mpeg")) return "video/mpeg";
-    if (normalizedMime.includes("quicktime") || normalizedMime.includes("mov")) {
+    if (
+      normalizedMime.includes("quicktime") ||
+      normalizedMime.includes("mov")
+    ) {
       return "video/mov";
     }
     if (normalizedMime.includes("webm")) return "video/webm";
@@ -2742,7 +2866,9 @@ function resolveOpenRouterVideoMime({ mime, ext }) {
 }
 
 async function buildOpenRouterFileInputPart(file, { ossFile = null } = {}) {
-  const safeBuffer = Buffer.isBuffer(file?.buffer) ? file.buffer : Buffer.from([]);
+  const safeBuffer = Buffer.isBuffer(file?.buffer)
+    ? file.buffer
+    : Buffer.from([]);
   if (safeBuffer.length === 0) return null;
 
   const mime = String(file?.mimetype || "")
@@ -2784,12 +2910,16 @@ async function buildOpenRouterFileInputPart(file, { ossFile = null } = {}) {
   }
 
   const videoMime = resolveOpenRouterVideoMime({ mime, ext });
-  if (videoMime && OPENROUTER_VIDEO_EXTENSIONS.has(videoMime.replace("video/", ""))) {
+  if (
+    videoMime &&
+    OPENROUTER_VIDEO_EXTENSIONS.has(videoMime.replace("video/", ""))
+  ) {
     const videoUrlFromOss = await resolveAliyunDashScopeAttachmentUrl({
       ossFile,
       fallbackFileName: safeName,
     });
-    const videoUrl = videoUrlFromOss || buildDataUrlForBuffer(safeBuffer, videoMime);
+    const videoUrl =
+      videoUrlFromOss || buildDataUrlForBuffer(safeBuffer, videoMime);
     if (!videoUrl) return null;
     return { type: "video_url", video_url: { url: videoUrl } };
   }
@@ -2839,7 +2969,9 @@ async function resolveAliyunDashScopeAttachmentUrl({
   };
   if (!ossFile || typeof ossFile !== "object") return "";
   const ossKey = sanitizeGroupChatOssObjectKey(ossFile?.ossKey);
-  const fileName = sanitizeGroupChatFileName(ossFile?.fileName || fallbackFileName);
+  const fileName = sanitizeGroupChatFileName(
+    ossFile?.fileName || fallbackFileName,
+  );
   if (ossKey) {
     const signedUrl = await buildGroupChatFileSignedDownloadUrl({
       ossKey,
@@ -2851,7 +2983,11 @@ async function resolveAliyunDashScopeAttachmentUrl({
   return normalizePublicUrl(ossFile?.fileUrl);
 }
 
-function buildAliyunDashScopeDocumentUrlPart({ url = "", mime = "", fileName = "" } = {}) {
+function buildAliyunDashScopeDocumentUrlPart({
+  url = "",
+  mime = "",
+  fileName = "",
+} = {}) {
   const safeUrl = sanitizeGroupChatHttpUrl(url);
   if (!safeUrl) return null;
 
@@ -2867,7 +3003,11 @@ function buildAliyunDashScopeDocumentUrlPart({ url = "", mime = "", fileName = "
   return { type: "file_url", file_url: filePayload };
 }
 
-function shouldForceAliyunDashScopeLocalParseForFile({ ext = "", mime = "", buffer = null } = {}) {
+function shouldForceAliyunDashScopeLocalParseForFile({
+  ext = "",
+  mime = "",
+  buffer = null,
+} = {}) {
   if (isPdfFile(ext, mime)) return true;
   if (isWordFile(ext, mime)) return true;
   if (isExcelFile(ext, mime)) return true;
@@ -2884,11 +3024,19 @@ async function renderPdfToAliyunDashScopeImagesWithPython({
   const safeInputPath = String(inputPath || "").trim();
   const safeOutputDir = String(outputDir || "").trim();
   if (!safeInputPath || !safeOutputDir) {
-    return { ok: false, pageCount: 0, renderedPaths: [], error: "missing pdf path" };
+    return {
+      ok: false,
+      pageCount: 0,
+      renderedPaths: [],
+      error: "missing pdf path",
+    };
   }
 
   const safeMaxPages = Math.max(1, Math.min(50, Number(maxPages) || 1));
-  const safeDpi = Math.max(96, Math.min(300, Number(dpi) || ALIYUN_DASHSCOPE_PDF_RENDER_DPI));
+  const safeDpi = Math.max(
+    96,
+    Math.min(300, Number(dpi) || ALIYUN_DASHSCOPE_PDF_RENDER_DPI),
+  );
   const scriptPath = ALIYUN_DASHSCOPE_PDF_RENDER_SCRIPT_PATH;
   if (!existsSync(scriptPath)) {
     return {
@@ -2956,7 +3104,9 @@ async function buildAliyunDashScopePdfImageParts(
     ossScope = CHAT_PREPARED_PDF_IMAGE_OSS_SCOPE,
   } = {},
 ) {
-  const safeBuffer = Buffer.isBuffer(file?.buffer) ? file.buffer : Buffer.from([]);
+  const safeBuffer = Buffer.isBuffer(file?.buffer)
+    ? file.buffer
+    : Buffer.from([]);
   if (safeBuffer.length === 0) {
     return { parts: [], pageCount: 0, error: "empty pdf buffer", ossFiles: [] };
   }
@@ -2988,7 +3138,9 @@ async function buildAliyunDashScopePdfImageParts(
     const baseName = safeName.replace(/\.[a-z0-9]+$/i, "") || "document";
     for (let idx = 0; idx < rendered.renderedPaths.length; idx += 1) {
       const renderedPath = rendered.renderedPaths[idx];
-      const imageBuffer = await readFileAsync(renderedPath).catch(() => Buffer.from([]));
+      const imageBuffer = await readFileAsync(renderedPath).catch(() =>
+        Buffer.from([]),
+      );
       if (!imageBuffer.length) continue;
 
       const uploaded = await uploadBufferToGroupChatOss({
@@ -3073,7 +3225,9 @@ async function buildAliyunDashScopeFileInputParts(
     aliyunFileProcessMode = "local_parse",
   } = {},
 ) {
-  const safeBuffer = Buffer.isBuffer(file?.buffer) ? file.buffer : Buffer.from([]);
+  const safeBuffer = Buffer.isBuffer(file?.buffer)
+    ? file.buffer
+    : Buffer.from([]);
   if (safeBuffer.length === 0) return [];
 
   const mime = String(file?.mimetype || "")
@@ -3125,11 +3279,19 @@ async function buildAliyunDashScopeFileInputParts(
     return [];
   }
 
-  if (shouldForceAliyunDashScopeLocalParseForFile({ ext, mime, buffer: safeBuffer })) {
+  if (
+    shouldForceAliyunDashScopeLocalParseForFile({
+      ext,
+      mime,
+      buffer: safeBuffer,
+    })
+  ) {
     return [];
   }
 
-  const normalizedFileMode = sanitizeAliyunFileProcessMode(aliyunFileProcessMode);
+  const normalizedFileMode = sanitizeAliyunFileProcessMode(
+    aliyunFileProcessMode,
+  );
   if (normalizedFileMode === "native_oss_url") {
     const urlFromOss = await resolveAliyunDashScopeAttachmentUrl({
       ossFile,
@@ -3237,7 +3399,8 @@ async function attachFilesToLatestUserMessageForAliyunDashScope(
   for (let idx = 0; idx < files.length; idx += 1) {
     const file = files[idx];
     const ossFile =
-      safeOssFiles[idx] || resolveUploadedContextOssFileForInputFile(file, safeOssFiles);
+      safeOssFiles[idx] ||
+      resolveUploadedContextOssFileForInputFile(file, safeOssFiles);
     const resolvedParts = await buildAliyunDashScopeFileInputParts(file, {
       ossFile,
       userId,
@@ -3419,7 +3582,8 @@ async function streamAgentResponse({
   const systemPrompt = hasSystemPromptOverride
     ? String(systemPromptOverride || "")
     : await getSystemPromptByAgent(agentId);
-  const config = runtimeConfig || (await getResolvedAgentRuntimeConfig(agentId));
+  const config =
+    runtimeConfig || (await getResolvedAgentRuntimeConfig(agentId));
   const provider = providerOverride
     ? normalizeProvider(providerOverride)
     : getProviderByAgent(agentId, config);
@@ -3454,7 +3618,9 @@ async function streamAgentResponse({
     config?.thinkingEffort,
     DEFAULT_AGENT_RUNTIME_CONFIG.thinkingEffort,
   );
-  const reasoningEffortRequested = thinkingEnabled ? configuredThinkingEffort : "none";
+  const reasoningEffortRequested = thinkingEnabled
+    ? configuredThinkingEffort
+    : "none";
   const reasoning = resolveReasoningPolicy(
     model,
     reasoningEffortRequested,
@@ -3481,7 +3647,8 @@ async function streamAgentResponse({
 
   let safeMessages = normalizeMessages(messages);
   let filesForLocalAttach = Array.isArray(files) ? files.filter(Boolean) : [];
-  let effectiveVolcengineFileRefs = sanitizeVolcengineFileRefsPayload(volcengineFileRefs);
+  let effectiveVolcengineFileRefs =
+    sanitizeVolcengineFileRefsPayload(volcengineFileRefs);
   const effectivePreparedAttachmentRefs = sanitizePreparedAttachmentRefsPayload(
     preparedAttachmentRefs,
   );
@@ -3496,7 +3663,9 @@ async function streamAgentResponse({
           agentId,
         })
       : { entries: [], missing: [], mismatched: [] };
-  const preparedAttachmentEntries = Array.isArray(preparedAttachmentResolution?.entries)
+  const preparedAttachmentEntries = Array.isArray(
+    preparedAttachmentResolution?.entries,
+  )
     ? preparedAttachmentResolution.entries
     : [];
   if (
@@ -3518,12 +3687,14 @@ async function streamAgentResponse({
     (filesForLocalAttach.length > 0 || effectiveVolcengineFileRefs.length > 0)
   ) {
     res.status(400).json({
-      error: "火山引擎图片/文件仅支持 Responses 协议 Files API，请将 protocol 切换为 responses 后重试。",
+      error:
+        "火山引擎图片/文件仅支持 Responses 协议 Files API，请将 protocol 切换为 responses 后重试。",
     });
     return;
   }
   const hasLocalImageUpload =
-    attachUploadedFiles && filesForLocalAttach.some((file) => isImageUploadFile(file));
+    attachUploadedFiles &&
+    filesForLocalAttach.some((file) => isImageUploadFile(file));
   if (hasLocalImageUpload && !groupChatOssClient) {
     res.status(500).json({
       error: "图片附件需要先上传到阿里云 OSS，当前 OSS 未配置。",
@@ -3538,8 +3709,12 @@ async function streamAgentResponse({
     const hasImageInput =
       hasImageInputInMessages(safeMessages) ||
       filesForLocalAttach.some((file) => isImageUploadFile(file)) ||
-      effectiveVolcengineFileRefs.some((item) => item.inputType === "input_image") ||
-      preparedAttachmentEntries.some((item) => messageContainsImageInput(item?.parts));
+      effectiveVolcengineFileRefs.some(
+        (item) => item.inputType === "input_image",
+      ) ||
+      preparedAttachmentEntries.some((item) =>
+        messageContainsImageInput(item?.parts),
+      );
     if (hasImageInput) {
       res.status(400).json({
         error: "当前阿里云 MiniMax 模型不支持图片输入，请仅发送文本内容。",
@@ -3552,7 +3727,9 @@ async function streamAgentResponse({
     attachUploadedFiles &&
     (filesForLocalAttach.length > 0 || hasPreparedAttachmentEntries)
   ) {
-    safeMessages = [{ role: "user", content: "请基于附件内容进行分析和回答。" }];
+    safeMessages = [
+      { role: "user", content: "请基于附件内容进行分析和回答。" },
+    ];
   }
 
   if (safeMessages.length === 0) {
@@ -3564,7 +3741,10 @@ async function streamAgentResponse({
     shouldKeepOnlyLatestAliyunFileContext &&
     attachUploadedFiles &&
     (filesForLocalAttach.length > 0 || hasPreparedAttachmentEntries);
-  if (shouldUsePersistentFileContext && !shouldSkipPersistentFileContextRehydrate) {
+  if (
+    shouldUsePersistentFileContext &&
+    !shouldSkipPersistentFileContextRehydrate
+  ) {
     await rehydrateUploadedFileContexts(safeMessages, {
       userId: storageUserId,
       sessionId,
@@ -3703,7 +3883,11 @@ async function streamAgentResponse({
   }
 
   let uploadedContextOssFiles = [];
-  if (attachUploadedFiles && filesForLocalAttach.length > 0 && groupChatOssClient) {
+  if (
+    attachUploadedFiles &&
+    filesForLocalAttach.length > 0 &&
+    groupChatOssClient
+  ) {
     try {
       uploadedContextOssFiles = await uploadChatAttachmentsToOss({
         files: filesForLocalAttach,
@@ -3753,10 +3937,11 @@ async function streamAgentResponse({
     }
   }
   if (attachUploadedFiles && hasPreparedAttachmentEntries) {
-    const preparedContextRecord = attachPreparedAttachmentPartsToLatestUserMessage(
-      requestMessages,
-      preparedAttachmentEntries,
-    );
+    const preparedContextRecord =
+      attachPreparedAttachmentPartsToLatestUserMessage(
+        requestMessages,
+        preparedAttachmentEntries,
+      );
     if (!preparedContextRecord) {
       res.status(400).json({
         error: "PDF 预处理内容不可用，请重新上传后再试。",
@@ -3861,7 +4046,6 @@ async function streamAgentResponse({
 
   let payload = null;
   if (provider === "aliyun") {
-
     if (protocol === "responses") {
       payload = buildAliyunResponsesPayload({
         model,
@@ -3933,7 +4117,8 @@ async function streamAgentResponse({
   let endpoint =
     provider === "aliyun" && protocol === "dashscope"
       ? useAliyunDashScopeMultimodalEndpoint
-        ? providerConfig.dashscopeMultimodalEndpoint || providerConfig.dashscopeEndpoint
+        ? providerConfig.dashscopeMultimodalEndpoint ||
+          providerConfig.dashscopeEndpoint
         : providerConfig.dashscopeEndpoint
       : protocol === "responses"
         ? providerConfig.responsesEndpoint
@@ -3949,7 +4134,8 @@ async function streamAgentResponse({
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
-  const safeMetaExtras = metaExtras && typeof metaExtras === "object" ? metaExtras : {};
+  const safeMetaExtras =
+    metaExtras && typeof metaExtras === "object" ? metaExtras : {};
   writeEvent(res, "meta", {
     provider,
     protocol,
@@ -3965,10 +4151,12 @@ async function streamAgentResponse({
     webSearchEnabled: webSearchRuntime.enabled,
     webSearchThinkingPromptInjected: webSearchRuntime.injectThinkingPrompt,
     aliyunDashscopeMultimodalEndpointUsed: useAliyunDashScopeMultimodalEndpoint,
-    aliyunFileProcessModeApplied: provider === "aliyun" ? aliyunFileProcessMode : "",
+    aliyunFileProcessModeApplied:
+      provider === "aliyun" ? aliyunFileProcessMode : "",
     smartContextRequested: smartContextRuntime.requested,
     smartContextEnabled: smartContextRuntime.enabled,
-    smartContextUsePreviousResponseId: smartContextRuntime.usePreviousResponseId,
+    smartContextUsePreviousResponseId:
+      smartContextRuntime.usePreviousResponseId,
     smartContextSessionId: smartContextRuntime.sessionId,
     promptLeakGuardEnabled,
     promptLeakDetected,
@@ -3983,7 +4171,8 @@ async function streamAgentResponse({
     if (aliyunNativeFileFallbackAttempted) return false;
     if (provider !== "aliyun" || protocol !== "dashscope") return false;
     if (aliyunFileProcessMode !== "native_oss_url") return false;
-    if (!isAliyunDashScopeUnsupportedNativeFileErrorText(triggerText)) return false;
+    if (!isAliyunDashScopeUnsupportedNativeFileErrorText(triggerText))
+      return false;
     aliyunNativeFileFallbackAttempted = true;
 
     const retryMessages = stripAliyunDocumentUrlPartsFromMessages(
@@ -4014,10 +4203,11 @@ async function streamAgentResponse({
         }
       }
       if (hasPreparedAttachmentEntries) {
-        const retryPreparedRecord = attachPreparedAttachmentPartsToLatestUserMessage(
-          retryMessages,
-          preparedAttachmentEntries,
-        );
+        const retryPreparedRecord =
+          attachPreparedAttachmentPartsToLatestUserMessage(
+            retryMessages,
+            preparedAttachmentEntries,
+          );
         if (retryPreparedRecord) {
           retryUploadedContextRecord = retryPreparedRecord;
         }
@@ -4025,7 +4215,10 @@ async function streamAgentResponse({
       if (retryUploadedContextRecord) {
         uploadedFileContextRecord = retryUploadedContextRecord;
       }
-      if (shouldUsePersistentFileContext && retryUploadedContextRecord?.messageId) {
+      if (
+        shouldUsePersistentFileContext &&
+        retryUploadedContextRecord?.messageId
+      ) {
         await saveUploadedFileContext({
           userId: storageUserId,
           sessionId,
@@ -4059,19 +4252,25 @@ async function streamAgentResponse({
       temperature: aliyunSharedSampling?.temperature,
       topP: aliyunSharedSampling?.topP,
     });
-    useAliyunDashScopeMultimodalEndpoint = shouldUseAliyunDashScopeMultimodalEndpoint({
-      model,
-      messages: providerMessages,
-    });
+    useAliyunDashScopeMultimodalEndpoint =
+      shouldUseAliyunDashScopeMultimodalEndpoint({
+        model,
+        messages: providerMessages,
+      });
     endpoint = useAliyunDashScopeMultimodalEndpoint
-      ? providerConfig.dashscopeMultimodalEndpoint || providerConfig.dashscopeEndpoint
+      ? providerConfig.dashscopeMultimodalEndpoint ||
+        providerConfig.dashscopeEndpoint
       : providerConfig.dashscopeEndpoint;
     if (!endpoint) return false;
 
     try {
       upstream = await sendProviderRequestWithRetry({
         endpoint,
-        headers: buildProviderHeaders(provider, providerConfig.apiKey, protocol),
+        headers: buildProviderHeaders(
+          provider,
+          providerConfig.apiKey,
+          protocol,
+        ),
         body: JSON.stringify(payload),
         provider,
         protocol,
@@ -4118,7 +4317,11 @@ async function streamAgentResponse({
 
   if (!upstream.ok || !upstream.body) {
     let detail = await safeReadText(upstream);
-    console.error(`[${provider}/${protocol}] upstream error:`, upstream.status, detail);
+    console.error(
+      `[${provider}/${protocol}] upstream error:`,
+      upstream.status,
+      detail,
+    );
     await tryAliyunDashScopeNativeFileFallback(detail);
     if (!upstream.ok || !upstream.body) {
       detail = await safeReadText(upstream);
@@ -4155,9 +4358,14 @@ async function streamAgentResponse({
         writeEvent,
       });
     } else if (protocol === "responses") {
-      responsesResult = await pipeResponsesSse(upstream, res, reasoning.enabled, {
-        emitSearchUsage: webSearchRuntime.enabled,
-      });
+      responsesResult = await pipeResponsesSse(
+        upstream,
+        res,
+        reasoning.enabled,
+        {
+          emitSearchUsage: webSearchRuntime.enabled,
+        },
+      );
     } else {
       await pipeOpenRouterSse(upstream, res, reasoning.enabled);
     }
@@ -4195,8 +4403,13 @@ async function streamAgentResponse({
         finalError = retryError;
       }
     }
-    console.error(`[${provider}/${protocol}] stream handling failed:`, finalError);
-    writeEvent(res, "error", { message: finalError?.message || "stream failed" });
+    console.error(
+      `[${provider}/${protocol}] stream handling failed:`,
+      finalError,
+    );
+    writeEvent(res, "error", {
+      message: finalError?.message || "stream failed",
+    });
   } finally {
     res.end();
   }
@@ -4295,7 +4508,11 @@ async function streamSeedreamImageGeneration({
 
   if (!upstream.ok) {
     const detail = await safeReadText(upstream);
-    console.error("[volcengine/images] upstream error:", upstream.status, detail);
+    console.error(
+      "[volcengine/images] upstream error:",
+      upstream.status,
+      detail,
+    );
     writeEvent(res, "error", {
       message: formatProviderUpstreamError(
         "volcengine",
@@ -4532,7 +4749,9 @@ async function buildSeedreamFileImageInputs({ files, chatStorageUserId = "" }) {
 
     const ext = resolveFileExtensionByMimeType(mime, "png");
     const fallbackName = `seedream-input-${idx + 1}.${ext}`;
-    const safeFileName = sanitizeGroupChatFileName(file?.originalname || fallbackName);
+    const safeFileName = sanitizeGroupChatFileName(
+      file?.originalname || fallbackName,
+    );
     try {
       const uploaded = await uploadBufferToGroupChatOss({
         scope: IMAGE_GENERATION_INPUT_OSS_SCOPE,
@@ -4697,7 +4916,8 @@ async function pipeVolcengineImageGenerationSse(upstream, res, handlers = {}) {
 
     if (type === "image_generation.partial_failed") {
       sawAnyImageEvent = true;
-      const fallbackImageIndex = imageEntries.length > 0 ? imageEntries[0].imageIndex : 0;
+      const fallbackImageIndex =
+        imageEntries.length > 0 ? imageEntries[0].imageIndex : 0;
       const errorObj =
         json?.error && typeof json.error === "object" ? json.error : {};
       const code = sanitizeText(errorObj.code, "", 120);
@@ -4802,7 +5022,11 @@ async function pipeVolcengineImageGenerationSse(upstream, res, handlers = {}) {
   }
 }
 
-function emitSeedreamImageGenerationNonStreamEvents(result, res, handlers = {}) {
+function emitSeedreamImageGenerationNonStreamEvents(
+  result,
+  res,
+  handlers = {},
+) {
   const payload = result && typeof result === "object" ? result : {};
   const model = sanitizeText(payload?.model, "", 160);
   const created = Number.isFinite(Number(payload?.created))
@@ -4906,7 +5130,9 @@ function normalizeGeneratedImageStorageType(value) {
 }
 
 function normalizeGeneratedImageMimeType(value) {
-  const type = normalizeSeedreamImageMimeType(String(value || "").split(";")[0]);
+  const type = normalizeSeedreamImageMimeType(
+    String(value || "").split(";")[0],
+  );
   if (type) return type;
   return "";
 }
@@ -4927,7 +5153,11 @@ function extractGeneratedImageDataBuffer(value) {
           return Buffer.from(binaryValue);
         }
         if (ArrayBuffer.isView(binaryValue)) {
-          return Buffer.from(binaryValue.buffer, binaryValue.byteOffset, binaryValue.byteLength);
+          return Buffer.from(
+            binaryValue.buffer,
+            binaryValue.byteOffset,
+            binaryValue.byteLength,
+          );
         }
         if (binaryValue instanceof ArrayBuffer) {
           return Buffer.from(binaryValue);
@@ -4949,7 +5179,11 @@ function extractGeneratedImageDataBuffer(value) {
         value.buffer.byteLength,
       );
       const position = Number(value?.position);
-      if (Number.isFinite(position) && position > 0 && position < nestedBuffer.length) {
+      if (
+        Number.isFinite(position) &&
+        position > 0 &&
+        position < nestedBuffer.length
+      ) {
         return nestedBuffer.subarray(0, position);
       }
       return nestedBuffer;
@@ -4964,14 +5198,17 @@ function extractGeneratedImageDataBuffer(value) {
 function parseGeneratedImageDataUrl(value) {
   const text = String(value || "").trim();
   if (!text) return null;
-  const match = text.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i);
+  const match = text.match(
+    /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i,
+  );
   if (!match || !match[1] || !match[2]) return null;
   const mimeType = normalizeGeneratedImageMimeType(match[1]);
   if (!mimeType) return null;
 
   try {
     const data = Buffer.from(match[2].replace(/\s+/g, ""), "base64");
-    if (!data.length || data.length > GENERATED_IMAGE_HISTORY_MAX_IMAGE_BYTES) return null;
+    if (!data.length || data.length > GENERATED_IMAGE_HISTORY_MAX_IMAGE_BYTES)
+      return null;
     return {
       mimeType,
       data,
@@ -4988,11 +5225,20 @@ function buildGeneratedImageHistoryContentPath(imageId) {
   return `/api/images/history/${encodeURIComponent(safeImageId)}/content`;
 }
 
-function buildAdminGeneratedImageHistoryContentPath(imageId, { download = false } = {}) {
+function buildAdminGeneratedImageHistoryContentPath(
+  imageId,
+  { download = false } = {},
+) {
   const safeImageId = sanitizeId(imageId, "");
   if (!safeImageId) return "";
   const basePath = `/api/auth/admin/images/history/${encodeURIComponent(safeImageId)}/content`;
   return download ? `${basePath}?download=1` : basePath;
+}
+
+function buildAdminGeneratedImageHistoryThumbnailPath(imageId) {
+  const safeImageId = sanitizeId(imageId, "");
+  if (!safeImageId) return "";
+  return `/api/auth/admin/images/history/${encodeURIComponent(safeImageId)}/thumbnail`;
 }
 
 function parseTeacherScopedStorageUserId(storageUserId) {
@@ -5058,18 +5304,24 @@ async function fetchGeneratedImageBinaryFromUrl(imageUrl) {
   }
   if (!response?.ok) return null;
 
-  const mimeType = normalizeGeneratedImageMimeType(response.headers.get("content-type"));
+  const mimeType = normalizeGeneratedImageMimeType(
+    response.headers.get("content-type"),
+  );
   if (!mimeType) return null;
 
   const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > GENERATED_IMAGE_HISTORY_MAX_IMAGE_BYTES) {
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > GENERATED_IMAGE_HISTORY_MAX_IMAGE_BYTES
+  ) {
     return null;
   }
 
   try {
     const arrayBuffer = await response.arrayBuffer();
     const data = Buffer.from(arrayBuffer || new ArrayBuffer(0));
-    if (!data.length || data.length > GENERATED_IMAGE_HISTORY_MAX_IMAGE_BYTES) return null;
+    if (!data.length || data.length > GENERATED_IMAGE_HISTORY_MAX_IMAGE_BYTES)
+      return null;
     return {
       mimeType,
       data,
@@ -5086,6 +5338,127 @@ async function buildGeneratedImageBinaryPayload(imageUrl) {
   return fetchGeneratedImageBinaryFromUrl(imageUrl);
 }
 
+async function buildGeneratedImageThumbnailPayloadFromBuffer(dataBuffer) {
+  const safeBuffer = extractGeneratedImageDataBuffer(dataBuffer);
+  if (!safeBuffer.length) return null;
+
+  try {
+    const image = await loadImage(safeBuffer);
+    const width = Math.max(1, Number(image?.width || image?.naturalWidth || 0));
+    const height = Math.max(
+      1,
+      Number(image?.height || image?.naturalHeight || 0),
+    );
+    if (!width || !height) return null;
+
+    const scale = Math.min(
+      1,
+      GENERATED_IMAGE_THUMBNAIL_MAX_EDGE / Math.max(width, height),
+    );
+    const targetWidth = Math.max(1, Math.round(width * scale));
+    const targetHeight = Math.max(1, Math.round(height * scale));
+    const canvas = createCanvas(targetWidth, targetHeight);
+    const context = canvas.getContext("2d");
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+    const thumbnailData = canvas.toBuffer(GENERATED_IMAGE_THUMBNAIL_MIME_TYPE);
+    if (!Buffer.isBuffer(thumbnailData) || !thumbnailData.length) return null;
+
+    return {
+      mimeType: GENERATED_IMAGE_THUMBNAIL_MIME_TYPE,
+      data: thumbnailData,
+      size: thumbnailData.length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function buildGeneratedImageBinaryPayloadFromDoc(doc) {
+  const imageBuffer = extractGeneratedImageDataBuffer(doc?.imageData);
+  const imageMimeType =
+    normalizeGeneratedImageMimeType(doc?.imageMimeType) || "image/png";
+  if (imageBuffer.length > 0) {
+    return {
+      mimeType: imageMimeType,
+      data: imageBuffer,
+      size: imageBuffer.length,
+    };
+  }
+
+  const ossKey = sanitizeGroupChatOssObjectKey(doc?.ossKey);
+  if (ossKey) {
+    let resolvedOssUrl = "";
+    if (
+      groupChatOssClient &&
+      groupChatOssConfig &&
+      !groupChatOssConfig.publicRead
+    ) {
+      try {
+        resolvedOssUrl = sanitizeGroupChatHttpUrl(
+          await groupChatOssClient.asyncSignatureUrl(ossKey, {
+            method: "GET",
+            expires: groupChatOssConfig.signedUrlTtlSeconds,
+          }),
+        );
+      } catch {
+        resolvedOssUrl = "";
+      }
+    }
+    const directOssUrl =
+      resolvedOssUrl ||
+      sanitizeGroupChatHttpUrl(doc?.imageUrl) ||
+      buildGroupChatOssObjectUrl(ossKey);
+    const ossPayload = await buildGeneratedImageBinaryPayload(directOssUrl);
+    if (ossPayload) return ossPayload;
+  }
+
+  const fallbackUrl = normalizeGeneratedImageStoreUrl(doc?.imageUrl || "");
+  if (!fallbackUrl) return null;
+  return buildGeneratedImageBinaryPayload(fallbackUrl);
+}
+
+async function ensureGeneratedImageHistoryThumbnail(doc) {
+  const thumbnailBuffer = extractGeneratedImageDataBuffer(doc?.thumbnailData);
+  const thumbnailMimeType =
+    normalizeGeneratedImageMimeType(doc?.thumbnailMimeType) ||
+    GENERATED_IMAGE_THUMBNAIL_MIME_TYPE;
+  if (thumbnailBuffer.length > 0) {
+    return {
+      mimeType: thumbnailMimeType,
+      data: thumbnailBuffer,
+      size: thumbnailBuffer.length,
+    };
+  }
+
+  const sourcePayload = await buildGeneratedImageBinaryPayloadFromDoc(doc);
+  if (!sourcePayload?.data?.length) return null;
+
+  const thumbnailPayload = await buildGeneratedImageThumbnailPayloadFromBuffer(
+    sourcePayload.data,
+  );
+  if (!thumbnailPayload?.data?.length) return null;
+
+  try {
+    await GeneratedImageHistory.updateOne(
+      { _id: doc?._id },
+      {
+        $set: {
+          thumbnailMimeType: thumbnailPayload.mimeType,
+          thumbnailSize: thumbnailPayload.size,
+          thumbnailData: thumbnailPayload.data,
+        },
+      },
+    );
+  } catch (error) {
+    console.warn(
+      `[image-generation] 生成历史缩略图写回失败（image=${sanitizeId(doc?._id, "")}）：`,
+      error?.message || error,
+    );
+  }
+
+  return thumbnailPayload;
+}
+
 async function saveGeneratedImageHistory({
   userId,
   prompt,
@@ -5097,7 +5470,8 @@ async function saveGeneratedImageHistory({
   if (!safeUserId) return;
 
   const safePrompt = sanitizeText(prompt, "", 2000);
-  const safeResponseFormat = normalizeGeneratedImageHistoryResponseFormat(responseFormat);
+  const safeResponseFormat =
+    normalizeGeneratedImageHistoryResponseFormat(responseFormat);
   const safeModel = sanitizeText(model, "", 160);
   const sourceImages = Array.isArray(images) ? images : [];
   if (sourceImages.length === 0) return;
@@ -5111,11 +5485,25 @@ async function saveGeneratedImageHistory({
         if (!imageUrl) return null;
 
         const binaryPayload = await buildGeneratedImageBinaryPayload(imageUrl);
-        const hasBinary = !!binaryPayload?.size && Buffer.isBuffer(binaryPayload?.data);
+        const hasBinary =
+          !!binaryPayload?.size && Buffer.isBuffer(binaryPayload?.data);
+        const thumbnailPayload = hasBinary
+          ? await buildGeneratedImageThumbnailPayloadFromBuffer(
+              binaryPayload.data,
+            )
+          : null;
         let uploadedToOss = null;
         if (hasBinary && groupChatOssClient && groupChatOssConfig) {
-          const ext = resolveFileExtensionByMimeType(binaryPayload?.mimeType, "png");
-          const imageIndex = sanitizeRuntimeInteger(item?.imageIndex, 0, 0, 9999);
+          const ext = resolveFileExtensionByMimeType(
+            binaryPayload?.mimeType,
+            "png",
+          );
+          const imageIndex = sanitizeRuntimeInteger(
+            item?.imageIndex,
+            0,
+            0,
+            9999,
+          );
           const outputFileName = `seedream-output-${imageIndex + 1}.${ext}`;
           try {
             uploadedToOss = await uploadBufferToGroupChatOss({
@@ -5137,14 +5525,26 @@ async function saveGeneratedImageHistory({
         return {
           userId: safeUserId,
           prompt: safePrompt,
-          imageUrl: sanitizeGroupChatHttpUrl(uploadedToOss?.fileUrl) || imageUrl,
-          imageStorageType: uploadedToOss ? "oss" : hasBinary ? "binary" : "remote",
+          imageUrl:
+            sanitizeGroupChatHttpUrl(uploadedToOss?.fileUrl) || imageUrl,
+          imageStorageType: uploadedToOss
+            ? "oss"
+            : hasBinary
+              ? "binary"
+              : "remote",
           ossKey: sanitizeGroupChatOssObjectKey(uploadedToOss?.ossKey),
           ossBucket: sanitizeAliyunOssBucket(uploadedToOss?.ossBucket),
           ossRegion: sanitizeAliyunOssRegion(uploadedToOss?.ossRegion),
           imageMimeType: hasBinary ? binaryPayload.mimeType : "",
           imageSize: hasBinary ? binaryPayload.size : 0,
-          imageData: uploadedToOss ? Buffer.alloc(0) : hasBinary ? binaryPayload.data : Buffer.alloc(0),
+          imageData: uploadedToOss
+            ? Buffer.alloc(0)
+            : hasBinary
+              ? binaryPayload.data
+              : Buffer.alloc(0),
+          thumbnailMimeType: thumbnailPayload?.mimeType || "",
+          thumbnailSize: thumbnailPayload?.size || 0,
+          thumbnailData: thumbnailPayload?.data || Buffer.alloc(0),
           responseFormat: safeResponseFormat,
           size: sanitizeText(item?.size, "", 80),
           model: sanitizeText(item?.model, safeModel, 160),
@@ -5175,8 +5575,11 @@ function toGeneratedImageHistoryItem(doc) {
   return {
     id,
     prompt: sanitizeText(doc?.prompt, "", 2000),
-    url: storedContentPath || normalizeGeneratedImageStoreUrl(doc?.imageUrl || ""),
-    responseFormat: normalizeGeneratedImageHistoryResponseFormat(doc?.responseFormat),
+    url:
+      storedContentPath || normalizeGeneratedImageStoreUrl(doc?.imageUrl || ""),
+    responseFormat: normalizeGeneratedImageHistoryResponseFormat(
+      doc?.responseFormat,
+    ),
     size: sanitizeText(doc?.size, "", 80),
     model: sanitizeText(doc?.model, "", 160),
     createdAt: sanitizeIsoDate(doc?.createdAt) || new Date().toISOString(),
@@ -5198,7 +5601,10 @@ function toAdminGeneratedImageHistoryItem(doc) {
     teacherScopeKey: parsedUser.teacherScopeKey,
     teacherScopeLabel: getTeacherScopeLabel(parsedUser.teacherScopeKey),
     previewPath: buildAdminGeneratedImageHistoryContentPath(id),
-    downloadPath: buildAdminGeneratedImageHistoryContentPath(id, { download: true }),
+    thumbnailPath: buildAdminGeneratedImageHistoryThumbnailPath(id),
+    downloadPath: buildAdminGeneratedImageHistoryContentPath(id, {
+      download: true,
+    }),
   };
 }
 
@@ -5369,7 +5775,8 @@ function buildResponsesRequestPayload({
   forceStore = false,
 }) {
   const input = buildResponsesInputItems(messages);
-  const supportsReasoningEffort = supportsVolcengineResponsesReasoningEffort(model);
+  const supportsReasoningEffort =
+    supportsVolcengineResponsesReasoningEffort(model);
   const payload = {
     model,
     stream: true,
@@ -5547,7 +5954,9 @@ function resolveVolcengineWebSearchCapability(model) {
     return { supported: false, supportsThinking: false, matchedModelId: "" };
   }
 
-  const modelsFromEnv = readModelAllowlistFromEnv("VOLCENGINE_WEB_SEARCH_MODELS");
+  const modelsFromEnv = readModelAllowlistFromEnv(
+    "VOLCENGINE_WEB_SEARCH_MODELS",
+  );
   if (modelsFromEnv.length > 0) {
     const supported = modelsFromEnv.some((alias) =>
       matchModelCandidates(candidates, alias),
@@ -5561,7 +5970,9 @@ function resolveVolcengineWebSearchCapability(model) {
     );
     const supportsThinking =
       thinkingFromEnv.length > 0
-        ? thinkingFromEnv.some((alias) => matchModelCandidates(candidates, alias))
+        ? thinkingFromEnv.some((alias) =>
+            matchModelCandidates(candidates, alias),
+          )
         : true;
     return { supported: true, supportsThinking, matchedModelId: "env" };
   }
@@ -5638,7 +6049,9 @@ function matchModelCandidates(candidates, aliasRaw) {
     .trim()
     .toLowerCase();
   if (!alias) return false;
-  return candidates.some((candidate) => candidate === alias || candidate.includes(alias));
+  return candidates.some(
+    (candidate) => candidate === alias || candidate.includes(alias),
+  );
 }
 
 function resolveRuntimeTokenProfileByModel(model) {
@@ -5691,7 +6104,8 @@ function buildResponsesInputItems(messages) {
       const role = String(message?.role || "")
         .trim()
         .toLowerCase();
-      if (role !== "user" && role !== "assistant" && role !== "system") return null;
+      if (role !== "user" && role !== "assistant" && role !== "system")
+        return null;
 
       const content = normalizeResponsesMessageContent(message?.content);
       if (typeof content === "string" && !content.trim()) return null;
@@ -5703,7 +6117,11 @@ function buildResponsesInputItems(messages) {
 
   if (items.length === 0) return "";
 
-  if (items.length === 1 && items[0].role === "user" && typeof items[0].content === "string") {
+  if (
+    items.length === 1 &&
+    items[0].role === "user" &&
+    typeof items[0].content === "string"
+  ) {
     return items[0].content;
   }
 
@@ -5774,7 +6192,11 @@ function keepVolcengineResponsesFileRefsOnly(content) {
       }
       return;
     }
-    if (type === "input_image" || type === "input_file" || type === "input_video") {
+    if (
+      type === "input_image" ||
+      type === "input_file" ||
+      type === "input_video"
+    ) {
       const fileId = String(part?.file_id || part?.fileId || "").trim();
       if (fileId) {
         parts.push({ type, file_id: fileId });
@@ -5866,7 +6288,11 @@ function extractAliyunFileUrl(part) {
 function normalizeOpenRouterFilePart(part) {
   const file = part?.file && typeof part.file === "object" ? part.file : {};
   const rawFileData =
-    file.file_data ?? file.fileData ?? file.url ?? part?.file_data ?? part?.fileData;
+    file.file_data ??
+    file.fileData ??
+    file.url ??
+    part?.file_data ??
+    part?.fileData;
   const fileData = String(rawFileData || "").trim();
   if (!fileData) return null;
 
@@ -5922,7 +6348,9 @@ function supportsVolcengineResponsesReasoningEffort(model) {
     "doubao-seed-1-6-251015",
   ];
 
-  const fromEnv = String(process.env.VOLCENGINE_RESPONSES_REASONING_MODELS || "")
+  const fromEnv = String(
+    process.env.VOLCENGINE_RESPONSES_REASONING_MODELS || "",
+  )
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
@@ -5940,7 +6368,11 @@ function resolveRequestProtocol(requestedProtocol, provider, model = "") {
   const protocol = sanitizeRuntimeProtocol(requestedProtocol);
 
   if (provider === "volcengine") {
-    return { supported: true, value: "responses", forced: protocol !== "responses" };
+    return {
+      supported: true,
+      value: "responses",
+      forced: protocol !== "responses",
+    };
   }
 
   if (provider === "aliyun") {
@@ -6068,7 +6500,8 @@ async function resolveSmartContextRuntime({
   const sameProvider = ref.provider === provider;
   const sameProtocol = ref.protocol === protocol;
   const sameAgent = !ref.agentId || ref.agentId === sanitizeAgent(agentId);
-  const canContinue = safeContextMode === "append" && sameProvider && sameProtocol && sameAgent;
+  const canContinue =
+    safeContextMode === "append" && sameProvider && sameProtocol && sameAgent;
   if (!canContinue) return runtime;
 
   runtime.usePreviousResponseId = true;
@@ -6093,7 +6526,10 @@ async function readSessionContextRef({
     { userId: safeUserId },
     { sessionContextRefs: 1, teacherStates: 1 },
   ).lean();
-  const refs = readTeacherScopedSessionContextRefs(stateDoc, safeTeacherScopeKey);
+  const refs = readTeacherScopedSessionContextRefs(
+    stateDoc,
+    safeTeacherScopeKey,
+  );
   const raw = refs[safeSessionId];
   if (!raw || typeof raw !== "object") return null;
 
@@ -6223,7 +6659,12 @@ function shouldResetSmartContextReference(status, detail) {
 
 function pickRecentUserRounds(messages, maxRounds = 10) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
-  const safeRounds = sanitizeRuntimeInteger(maxRounds, 10, 1, RUNTIME_CONTEXT_ROUNDS_MAX);
+  const safeRounds = sanitizeRuntimeInteger(
+    maxRounds,
+    10,
+    1,
+    RUNTIME_CONTEXT_ROUNDS_MAX,
+  );
 
   let seenUser = 0;
   let startIdx = 0;
@@ -6284,15 +6725,21 @@ function classifyVolcengineFileInputType(file) {
 
   if (mime.includes("pdf") || ext === "pdf") return "input_file";
   if (mime.startsWith("image/")) return "input_image";
-  if (mime.startsWith("video/") || VIDEO_EXTENSIONS.has(ext)) return "input_video";
+  if (mime.startsWith("video/") || VIDEO_EXTENSIONS.has(ext))
+    return "input_video";
   return "";
 }
 
 function normalizeMultipartUploadFile(file) {
   const rawFile = file && typeof file === "object" ? file : null;
   if (!rawFile) return null;
-  const normalizedOriginalName = normalizeMultipartFileName(rawFile.originalname);
-  if (normalizedOriginalName && normalizedOriginalName !== rawFile.originalname) {
+  const normalizedOriginalName = normalizeMultipartFileName(
+    rawFile.originalname,
+  );
+  if (
+    normalizedOriginalName &&
+    normalizedOriginalName !== rawFile.originalname
+  ) {
     return { ...rawFile, originalname: normalizedOriginalName };
   }
   return rawFile;
@@ -6358,7 +6805,9 @@ async function uploadVolcengineFileAndWaitActive({
 }) {
   const safeFileName = String(file?.originalname || "upload.bin");
   const safeMime = String(file?.mimetype || "application/octet-stream");
-  const safeBuffer = Buffer.isBuffer(file?.buffer) ? file.buffer : Buffer.from([]);
+  const safeBuffer = Buffer.isBuffer(file?.buffer)
+    ? file.buffer
+    : Buffer.from([]);
   const form = new FormData();
   form.append("purpose", "user_data");
   form.append("file", new Blob([safeBuffer], { type: safeMime }), safeFileName);
@@ -6385,13 +6834,20 @@ async function uploadVolcengineFileAndWaitActive({
       body: form,
     });
   } catch (error) {
-    throw new Error(`火山 Files API 上传失败: ${error?.message || "network error"}`);
+    throw new Error(
+      `火山 Files API 上传失败: ${error?.message || "network error"}`,
+    );
   }
 
   const uploadDetail = await uploadResp.text();
   if (!uploadResp.ok) {
     throw new Error(
-      formatProviderUpstreamError("volcengine", "files", uploadResp.status, uploadDetail),
+      formatProviderUpstreamError(
+        "volcengine",
+        "files",
+        uploadResp.status,
+        uploadDetail,
+      ),
     );
   }
 
@@ -6421,7 +6877,11 @@ async function waitForVolcengineFileActive({ fileId, filesEndpoint, apiKey }) {
   let lastStatus = "processing";
 
   while (Date.now() < deadline) {
-    const meta = await retrieveVolcengineFileMeta({ fileId, filesEndpoint, apiKey });
+    const meta = await retrieveVolcengineFileMeta({
+      fileId,
+      filesEndpoint,
+      apiKey,
+    });
     const status = String(meta?.status || "")
       .trim()
       .toLowerCase();
@@ -6453,12 +6913,16 @@ async function retrieveVolcengineFileMeta({ fileId, filesEndpoint, apiKey }) {
       },
     });
   } catch (error) {
-    throw new Error(`查询文件状态失败（${fileId}）：${error?.message || "network error"}`);
+    throw new Error(
+      `查询文件状态失败（${fileId}）：${error?.message || "network error"}`,
+    );
   }
 
   const detail = await resp.text();
   if (!resp.ok) {
-    throw new Error(formatProviderUpstreamError("volcengine", "files", resp.status, detail));
+    throw new Error(
+      formatProviderUpstreamError("volcengine", "files", resp.status, detail),
+    );
   }
 
   try {
@@ -6652,7 +7116,8 @@ async function pipeOpenRouterSse(upstream, res, reasoningEnabled) {
     }
 
     const choice = json?.choices?.[0] || {};
-    const delta = choice?.delta && typeof choice.delta === "object" ? choice.delta : {};
+    const delta =
+      choice?.delta && typeof choice.delta === "object" ? choice.delta : {};
 
     const contentDeltaText =
       extractDeltaText(delta.content) ||
@@ -6744,7 +7209,11 @@ async function pipeResponsesSse(
       .trim()
       .toLowerCase();
     if (!responseId) {
-      responseId = sanitizeText(json?.response?.id || json?.response_id, "", 160);
+      responseId = sanitizeText(
+        json?.response?.id || json?.response_id,
+        "",
+        160,
+      );
     }
     const deltaText = extractDeltaText(json?.delta);
     const doneText = extractDeltaText(json?.text);
@@ -6804,12 +7273,18 @@ async function pipeResponsesSse(
     }
 
     if (type === "response.completed") {
-      responseId = sanitizeText(json?.response?.id || responseId, responseId, 160);
+      responseId = sanitizeText(
+        json?.response?.id || responseId,
+        responseId,
+        160,
+      );
       writeEvent(res, "usage", {
         usage: extractResponsesTokenUsage(json?.response),
       });
       if (!sawContent) {
-        const completedText = extractResponsesOutputTextFromCompleted(json?.response);
+        const completedText = extractResponsesOutputTextFromCompleted(
+          json?.response,
+        );
         if (completedText) {
           sawContent = true;
           writeEvent(res, "token", { text: completedText });
@@ -6829,7 +7304,11 @@ async function pipeResponsesSse(
         writeEvent(res, "token", { text: citationsAppendix });
       }
       if (emitSearchUsage) {
-        writeEvent(res, "search_usage", extractResponsesWebSearchUsage(json?.response));
+        writeEvent(
+          res,
+          "search_usage",
+          extractResponsesWebSearchUsage(json?.response),
+        );
       }
       return true;
     }
@@ -6874,7 +7353,8 @@ function extractResponsesOutputTextFromCompleted(responseObj) {
     if (!item || item.type !== "message") return;
     const content = Array.isArray(item.content) ? item.content : [];
     content.forEach((part) => {
-      if (!part || (part.type !== "output_text" && part.type !== "text")) return;
+      if (!part || (part.type !== "output_text" && part.type !== "text"))
+        return;
       const text = extractDeltaText(part.text || part.content || "");
       if (text) chunks.push(text);
     });
@@ -6891,7 +7371,8 @@ function extractResponsesReasoningTextFromCompleted(responseObj) {
     if (!item || item.type !== "reasoning") return;
     const summary = Array.isArray(item.summary) ? item.summary : [];
     summary.forEach((part) => {
-      if (!part || (part.type !== "summary_text" && part.type !== "text")) return;
+      if (!part || (part.type !== "summary_text" && part.type !== "text"))
+        return;
       const text = extractDeltaText(part.text || part.content || "");
       if (text) chunks.push(text);
     });
@@ -6905,7 +7386,9 @@ function outputTextAlreadyContainsReferences(text) {
   if (!normalized) return false;
   return (
     /\[\^[^\]]+\]:/u.test(normalized) ||
-    /\n#{0,3}\s*(?:参考链接|参考资料|参考来源|参考文献|sources?|references?)\s*[:：]/iu.test(normalized) ||
+    /\n#{0,3}\s*(?:参考链接|参考资料|参考来源|参考文献|sources?|references?)\s*[:：]/iu.test(
+      normalized,
+    ) ||
     /\n#{0,3}\s*footnotes\s*$/imu.test(normalized)
   );
 }
@@ -6922,7 +7405,9 @@ function extractResponsesUrlCitations(responseObj) {
     seenUrls.add(url);
     citations.push({
       url,
-      title: sanitizeText(raw.title || raw.text || raw.label, "", 200) || simplifyCitationUrl(url),
+      title:
+        sanitizeText(raw.title || raw.text || raw.label, "", 200) ||
+        simplifyCitationUrl(url),
     });
   };
 
@@ -6934,7 +7419,9 @@ function extractResponsesUrlCitations(responseObj) {
     }
     if (typeof value !== "object") return;
 
-    const directAnnotations = Array.isArray(value.annotations) ? value.annotations : [];
+    const directAnnotations = Array.isArray(value.annotations)
+      ? value.annotations
+      : [];
     directAnnotations.forEach((item) => {
       if (!item || typeof item !== "object") return;
       if (item.type === "url_citation" || item.url || item.uri) {
@@ -6959,7 +7446,11 @@ function extractResponsesUrlCitations(responseObj) {
 }
 
 function formatResponsesCitationAppendix(responseObj) {
-  if (outputTextAlreadyContainsReferences(extractResponsesOutputTextFromCompleted(responseObj))) {
+  if (
+    outputTextAlreadyContainsReferences(
+      extractResponsesOutputTextFromCompleted(responseObj),
+    )
+  ) {
     return "";
   }
 
@@ -7177,12 +7668,15 @@ function extractOpenRouterStreamErrorMessage(payload) {
     .toLowerCase();
   const errorValue = payload?.error;
   const hasErrorField =
-    typeof errorValue === "string" || (errorValue && typeof errorValue === "object");
+    typeof errorValue === "string" ||
+    (errorValue && typeof errorValue === "object");
   const typeLooksError = type === "error" || type === "response.failed";
   if (!hasErrorField && !typeLooksError) return "";
 
   const nestedMessage =
-    typeof errorValue === "string" ? errorValue : sanitizeText(errorValue?.message, "", 800);
+    typeof errorValue === "string"
+      ? errorValue
+      : sanitizeText(errorValue?.message, "", 800);
   const topMessage = sanitizeText(payload?.message, "", 800);
   const message = nestedMessage || topMessage || "OpenRouter 流式调用失败";
   const code = sanitizeText(
@@ -7317,7 +7811,10 @@ async function getResolvedAgentRuntimeConfig(agentId) {
   if (targetAgent === AGENT_E_ID) {
     try {
       const agentEConfig = await readAgentEConfig();
-      return sanitizeAgentERuntime(agentEConfig?.runtime, agentEConfig?.runtime);
+      return sanitizeAgentERuntime(
+        agentEConfig?.runtime,
+        agentEConfig?.runtime,
+      );
     } catch (error) {
       console.error("Failed to load agent E runtime config:", error);
       return sanitizeAgentERuntime();
@@ -7326,7 +7823,9 @@ async function getResolvedAgentRuntimeConfig(agentId) {
   try {
     const config = await readAdminAgentConfig();
     const resolved = resolveAgentRuntimeConfigs(config.runtimeConfigs);
-    return resolved[targetAgent] || normalizeRuntimeConfigFromPreset({}, targetAgent);
+    return (
+      resolved[targetAgent] || normalizeRuntimeConfigFromPreset({}, targetAgent)
+    );
   } catch (error) {
     console.error("Failed to load admin runtime configs:", error);
     return normalizeRuntimeConfigFromPreset({}, targetAgent);
@@ -7388,11 +7887,7 @@ function sanitizeAdminClassroomTaskPayload(input, index = 0) {
     type === "link"
       ? source.content || source.url
       : source.content || source.text || source.description;
-  const content = sanitizeText(
-    rawContent,
-    "",
-    type === "link" ? 500 : 1200,
-  );
+  const content = sanitizeText(rawContent, "", type === "link" ? 500 : 1200);
   const files = sanitizeAdminClassroomCourseFilesPayload(source.files);
 
   return {
@@ -7407,11 +7902,16 @@ function sanitizeAdminClassroomTaskPayload(input, index = 0) {
 
 function sanitizeAdminClassroomCourseFilePayload(input, index = 0) {
   const source = input && typeof input === "object" ? input : {};
-  const fileId = sanitizeId(source.id || source.fileId, `lesson-file-${index + 1}`);
+  const fileId = sanitizeId(
+    source.id || source.fileId,
+    `lesson-file-${index + 1}`,
+  );
   const fileName = sanitizeGroupChatFileName(
     source.name || source.fileName || `课程文件-${index + 1}`,
   );
-  const mimeType = sanitizeGroupChatFileMimeType(source.mimeType || source.type);
+  const mimeType = sanitizeGroupChatFileMimeType(
+    source.mimeType || source.type,
+  );
   const size = sanitizeRuntimeInteger(source.size, 0, 0, MAX_FILE_SIZE_BYTES);
   const uploadedAt = sanitizeIsoDate(source.uploadedAt) || "";
   if (!fileId || !fileName) return null;
@@ -7431,7 +7931,8 @@ function sanitizeAdminClassroomCourseFilesPayload(input) {
   const seenIds = new Set();
   for (
     let index = 0;
-    index < source.length && files.length < ADMIN_CLASSROOM_COURSE_FILE_MAX_ITEMS;
+    index < source.length &&
+    files.length < ADMIN_CLASSROOM_COURSE_FILE_MAX_ITEMS;
     index += 1
   ) {
     const file = sanitizeAdminClassroomCourseFilePayload(source[index], index);
@@ -7469,11 +7970,17 @@ function parseAdminClassroomLegacyCourseTimeRange(value) {
   const [, year, month, day, startTime, endTime] = match;
   const dateText = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
   const startAt = sanitizeIsoDate(`${dateText}T${startTime}:00`) || "";
-  const endAt = endTime ? sanitizeIsoDate(`${dateText}T${endTime}:00`) || "" : "";
+  const endAt = endTime
+    ? sanitizeIsoDate(`${dateText}T${endTime}:00`) || ""
+    : "";
   return { startAt, endAt };
 }
 
-function buildAdminClassroomCourseTimeText(courseStartAt, courseEndAt, fallback = "") {
+function buildAdminClassroomCourseTimeText(
+  courseStartAt,
+  courseEndAt,
+  fallback = "",
+) {
   const startDate = courseStartAt ? new Date(courseStartAt) : null;
   if (!startDate || Number.isNaN(startDate.getTime())) {
     return sanitizeText(fallback, "", 100);
@@ -7506,12 +8013,18 @@ function sortAdminClassroomCoursePlans(plans) {
   return Array.isArray(plans) ? [...plans] : [];
 }
 
-function sanitizeAdminClassroomClassName(value, fallback = ADMIN_CLASSROOM_DEFAULT_CLASS_NAME) {
+function sanitizeAdminClassroomClassName(
+  value,
+  fallback = ADMIN_CLASSROOM_DEFAULT_CLASS_NAME,
+) {
   const className = sanitizeText(value, "", 40).replace(/\s+/g, "");
   if (ADMIN_CLASSROOM_SUPPORTED_CLASS_NAMES.includes(className)) {
     return className;
   }
-  return sanitizeText(fallback, ADMIN_CLASSROOM_DEFAULT_CLASS_NAME, 40).replace(/\s+/g, "");
+  return sanitizeText(fallback, ADMIN_CLASSROOM_DEFAULT_CLASS_NAME, 40).replace(
+    /\s+/g,
+    "",
+  );
 }
 
 function sanitizeAdminSeatLayoutClassName(value) {
@@ -7553,12 +8066,17 @@ function sanitizeAdminClassroomSeatLayoutsByClassPayload(input) {
   const entries = Object.entries(source);
   for (
     let index = 0;
-    index < entries.length && index < ADMIN_CLASSROOM_SEAT_LAYOUT_MAX_CLASS_COUNT;
+    index < entries.length &&
+    index < ADMIN_CLASSROOM_SEAT_LAYOUT_MAX_CLASS_COUNT;
     index += 1
   ) {
     const [className, layout] = entries[index];
     const safeClassName = sanitizeAdminSeatLayoutClassName(className);
-    if (!safeClassName || Object.prototype.hasOwnProperty.call(result, safeClassName)) continue;
+    if (
+      !safeClassName ||
+      Object.prototype.hasOwnProperty.call(result, safeClassName)
+    )
+      continue;
     result[safeClassName] = sanitizeAdminClassroomSeatLayoutPayload(layout);
   }
   return result;
@@ -7566,7 +8084,11 @@ function sanitizeAdminClassroomSeatLayoutsByClassPayload(input) {
 
 function sanitizeAdminClassroomDisciplineBehaviorPayload(input, index = 0) {
   const source = input && typeof input === "object" ? input : {};
-  const label = sanitizeText(source.label || source.name || source.title, "", 40);
+  const label = sanitizeText(
+    source.label || source.name || source.title,
+    "",
+    40,
+  );
   if (!label) return null;
   return {
     id: sanitizeId(source.id || source.key, `discipline-behavior-${index + 1}`),
@@ -7582,14 +8104,26 @@ function sanitizeAdminClassroomDisciplineCustomBehaviorsPayload(input) {
   const seenLabels = new Set();
   for (
     let index = 0;
-    index < source.length && behaviors.length < ADMIN_CLASSROOM_DISCIPLINE_MAX_CUSTOM_BEHAVIORS;
+    index < source.length &&
+    behaviors.length < ADMIN_CLASSROOM_DISCIPLINE_MAX_CUSTOM_BEHAVIORS;
     index += 1
   ) {
-    const behavior = sanitizeAdminClassroomDisciplineBehaviorPayload(source[index], index);
+    const behavior = sanitizeAdminClassroomDisciplineBehaviorPayload(
+      source[index],
+      index,
+    );
     if (!behavior) continue;
     const behaviorId = sanitizeId(behavior.id, "");
-    const labelKey = String(behavior.label || "").trim().toLowerCase();
-    if (!behaviorId || seenIds.has(behaviorId) || !labelKey || seenLabels.has(labelKey)) continue;
+    const labelKey = String(behavior.label || "")
+      .trim()
+      .toLowerCase();
+    if (
+      !behaviorId ||
+      seenIds.has(behaviorId) ||
+      !labelKey ||
+      seenLabels.has(labelKey)
+    )
+      continue;
     seenIds.add(behaviorId);
     seenLabels.add(labelKey);
     behaviors.push(behavior);
@@ -7609,12 +8143,16 @@ function sanitizeAdminClassroomDisciplineStudentRecordPayload(input) {
   const entries = Object.entries(rawCounts);
   for (
     let index = 0;
-    index < entries.length && index < ADMIN_CLASSROOM_DISCIPLINE_MAX_BEHAVIORS_PER_STUDENT;
+    index < entries.length &&
+    index < ADMIN_CLASSROOM_DISCIPLINE_MAX_BEHAVIORS_PER_STUDENT;
     index += 1
   ) {
     const [behaviorId, rawCount] = entries[index];
     const safeBehaviorId = sanitizeId(behaviorId, "");
-    if (!safeBehaviorId || Object.prototype.hasOwnProperty.call(countsByBehavior, safeBehaviorId)) {
+    if (
+      !safeBehaviorId ||
+      Object.prototype.hasOwnProperty.call(countsByBehavior, safeBehaviorId)
+    ) {
       continue;
     }
     const count = sanitizeRuntimeInteger(
@@ -7639,14 +8177,21 @@ function sanitizeAdminClassroomDisciplineRecordsByLessonPayload(input) {
   const lessonEntries = Object.entries(source);
   for (
     let lessonIndex = 0;
-    lessonIndex < lessonEntries.length && lessonIndex < ADMIN_CLASSROOM_COURSE_PLAN_MAX_ITEMS;
+    lessonIndex < lessonEntries.length &&
+    lessonIndex < ADMIN_CLASSROOM_COURSE_PLAN_MAX_ITEMS;
     lessonIndex += 1
   ) {
     const [lessonId, rawLessonRecords] = lessonEntries[lessonIndex];
     const safeLessonId = sanitizeId(lessonId, "");
-    if (!safeLessonId || Object.prototype.hasOwnProperty.call(result, safeLessonId)) continue;
+    if (
+      !safeLessonId ||
+      Object.prototype.hasOwnProperty.call(result, safeLessonId)
+    )
+      continue;
     const lessonRecordsSource =
-      rawLessonRecords && typeof rawLessonRecords === "object" ? rawLessonRecords : {};
+      rawLessonRecords && typeof rawLessonRecords === "object"
+        ? rawLessonRecords
+        : {};
     const normalizedLessonRecords = {};
     const studentEntries = Object.entries(lessonRecordsSource);
     for (
@@ -7659,7 +8204,10 @@ function sanitizeAdminClassroomDisciplineRecordsByLessonPayload(input) {
       const safeStudentUserId = sanitizeId(studentUserId, "");
       if (
         !safeStudentUserId ||
-        Object.prototype.hasOwnProperty.call(normalizedLessonRecords, safeStudentUserId)
+        Object.prototype.hasOwnProperty.call(
+          normalizedLessonRecords,
+          safeStudentUserId,
+        )
       ) {
         continue;
       }
@@ -7693,10 +8241,14 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
 
   for (
     let taskIndex = 0;
-    taskIndex < taskSource.length && tasks.length < ADMIN_CLASSROOM_COURSE_TASK_MAX_ITEMS;
+    taskIndex < taskSource.length &&
+    tasks.length < ADMIN_CLASSROOM_COURSE_TASK_MAX_ITEMS;
     taskIndex += 1
   ) {
-    const task = sanitizeAdminClassroomTaskPayload(taskSource[taskIndex], taskIndex);
+    const task = sanitizeAdminClassroomTaskPayload(
+      taskSource[taskIndex],
+      taskIndex,
+    );
     if (!task) continue;
     tasks.push(task);
   }
@@ -7764,7 +8316,8 @@ function sanitizeAdminClassroomCoursePlansPayload(input) {
   const plans = [];
   for (
     let index = 0;
-    index < source.length && plans.length < ADMIN_CLASSROOM_COURSE_PLAN_MAX_ITEMS;
+    index < source.length &&
+    plans.length < ADMIN_CLASSROOM_COURSE_PLAN_MAX_ITEMS;
     index += 1
   ) {
     const plan = sanitizeAdminClassroomCoursePlanPayload(source[index], index);
@@ -7785,7 +8338,9 @@ function createClassroomHomeworkFileId() {
 function normalizeAdminClassroomLessonFileDoc(doc) {
   return {
     id: sanitizeId(doc?.fileId || doc?.id, ""),
-    name: sanitizeGroupChatFileName(doc?.fileName || doc?.name || "课程文件.bin"),
+    name: sanitizeGroupChatFileName(
+      doc?.fileName || doc?.name || "课程文件.bin",
+    ),
     mimeType: sanitizeGroupChatFileMimeType(doc?.mimeType),
     size: sanitizeRuntimeInteger(doc?.size, 0, 0, MAX_FILE_SIZE_BYTES),
     uploadedAt: sanitizeIsoDate(doc?.uploadedAt) || "",
@@ -7795,7 +8350,9 @@ function normalizeAdminClassroomLessonFileDoc(doc) {
 function normalizeClassroomHomeworkFileDoc(doc) {
   return {
     id: sanitizeId(doc?.fileId || doc?.id, ""),
-    name: sanitizeGroupChatFileName(doc?.fileName || doc?.name || "作业文件.bin"),
+    name: sanitizeGroupChatFileName(
+      doc?.fileName || doc?.name || "作业文件.bin",
+    ),
     originalName: sanitizeGroupChatFileName(doc?.originalFileName || ""),
     mimeType: sanitizeGroupChatFileMimeType(doc?.mimeType),
     size: sanitizeRuntimeInteger(doc?.size, 0, 0, MAX_FILE_SIZE_BYTES),
@@ -7822,7 +8379,10 @@ function compareClassroomRosterStudent(a, b) {
     sensitivity: "base",
   });
   if (nameCompare !== 0) return nameCompare;
-  return String(a?.userId || "").localeCompare(String(b?.userId || ""), "zh-CN");
+  return String(a?.userId || "").localeCompare(
+    String(b?.userId || ""),
+    "zh-CN",
+  );
 }
 
 function iterateAdminClassroomTaskFiles(lesson, onFile) {
@@ -7860,7 +8420,9 @@ function findAdminClassroomLessonTaskById(lesson, taskId) {
   const safeTaskId = sanitizeId(taskId, "");
   if (!safeTaskId) return null;
   const tasks = Array.isArray(lesson?.tasks) ? lesson.tasks : [];
-  const taskIndex = tasks.findIndex((task) => sanitizeId(task?.id, "") === safeTaskId);
+  const taskIndex = tasks.findIndex(
+    (task) => sanitizeId(task?.id, "") === safeTaskId,
+  );
   if (taskIndex < 0) return null;
   return {
     task: tasks[taskIndex],
@@ -7907,16 +8469,22 @@ function findAdminClassroomLessonByFileId(plans, fileId) {
 function normalizeAdminConfigDoc(doc) {
   return {
     prompts: sanitizeAgentPromptPayload(doc?.agentSystemPrompts),
-    runtimeConfigs: sanitizeAgentRuntimeConfigsPayload(doc?.agentRuntimeConfigs),
+    runtimeConfigs: sanitizeAgentRuntimeConfigsPayload(
+      doc?.agentRuntimeConfigs,
+    ),
     shangguanClassTaskProductImprovementEnabled: sanitizeRuntimeBoolean(
       doc?.shangguanClassTaskProductImprovementEnabled,
       false,
     ),
-    teacherCoursePlans: sanitizeAdminClassroomCoursePlansPayload(doc?.teacherCoursePlans),
+    teacherCoursePlans: sanitizeAdminClassroomCoursePlansPayload(
+      doc?.teacherCoursePlans,
+    ),
     classroomDisciplineConfig: sanitizeAdminClassroomDisciplineConfigPayload(
       doc?.classroomDisciplineConfig,
     ),
-    seatLayoutsByClass: sanitizeAdminClassroomSeatLayoutsByClassPayload(doc?.seatLayoutsByClass),
+    seatLayoutsByClass: sanitizeAdminClassroomSeatLayoutsByClassPayload(
+      doc?.seatLayoutsByClass,
+    ),
     updatedAt: sanitizeIsoDate(doc?.updatedAt),
   };
 }
@@ -7973,12 +8541,7 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
     0,
     2,
   );
-  const topP = sanitizeRuntimeNumber(
-    source.topP,
-    defaults.topP,
-    0,
-    1,
-  );
+  const topP = sanitizeRuntimeNumber(source.topP, defaults.topP, 0, 1);
   const frequencyPenalty = sanitizeRuntimeNumber(
     source.frequencyPenalty,
     defaults.frequencyPenalty,
@@ -7998,7 +8561,9 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
     RUNTIME_CONTEXT_ROUNDS_MAX,
   );
   const contextWindowTokens = sanitizeRuntimeInteger(
-    lockTokenFields ? tokenDefaults.contextWindowTokens : source.contextWindowTokens,
+    lockTokenFields
+      ? tokenDefaults.contextWindowTokens
+      : source.contextWindowTokens,
     tokenDefaults.contextWindowTokens,
     1024,
     RUNTIME_MAX_CONTEXT_WINDOW_TOKENS,
@@ -8010,13 +8575,17 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
     RUNTIME_MAX_INPUT_TOKENS,
   );
   const maxOutputTokens = sanitizeRuntimeInteger(
-    lockAliyunMaxOutput ? tokenDefaults.maxOutputTokens : source.maxOutputTokens,
+    lockAliyunMaxOutput
+      ? tokenDefaults.maxOutputTokens
+      : source.maxOutputTokens,
     tokenDefaults.maxOutputTokens,
     64,
     RUNTIME_MAX_OUTPUT_TOKENS,
   );
   const maxReasoningTokens = sanitizeRuntimeInteger(
-    lockTokenFields ? tokenDefaults.maxReasoningTokens : source.maxReasoningTokens,
+    lockTokenFields
+      ? tokenDefaults.maxReasoningTokens
+      : source.maxReasoningTokens,
     tokenDefaults.maxReasoningTokens,
     0,
     RUNTIME_MAX_REASONING_TOKENS,
@@ -8153,7 +8722,9 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
     source.openrouterUseResponseHealing,
     defaults.openrouterUseResponseHealing,
   );
-  const openrouterPdfEngine = sanitizeOpenRouterPdfEngine(source.openrouterPdfEngine);
+  const openrouterPdfEngine = sanitizeOpenRouterPdfEngine(
+    source.openrouterPdfEngine,
+  );
 
   const next = {
     provider,
@@ -8221,7 +8792,12 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
         0,
         2,
       );
-      next.topP = sanitizeRuntimeNumber(policy.fixedSampling.topP, next.topP, 0, 1);
+      next.topP = sanitizeRuntimeNumber(
+        policy.fixedSampling.topP,
+        next.topP,
+        0,
+        1,
+      );
     }
     if (!policy.allowWebSearch) {
       next.enableWebSearch = false;
@@ -8239,7 +8815,8 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
     const sourceProvider = sanitizeRuntimeProvider(source.provider);
     const sourceModel = sanitizeRuntimeModel(source.model).toLowerCase();
     const shouldApplyBootDefaults =
-      sourceProvider !== AGENT_D_FIXED_PROVIDER || sourceModel !== AGENT_D_FIXED_MODEL;
+      sourceProvider !== AGENT_D_FIXED_PROVIDER ||
+      sourceModel !== AGENT_D_FIXED_MODEL;
 
     next.provider = AGENT_D_FIXED_PROVIDER;
     next.model = AGENT_D_FIXED_MODEL;
@@ -8277,7 +8854,10 @@ function resolveAgentRuntimeConfigs(runtimeConfigs) {
   const normalized = sanitizeAgentRuntimeConfigsPayload(runtimeConfigs);
   const resolved = {};
   AGENT_IDS.forEach((agentId) => {
-    resolved[agentId] = normalizeRuntimeConfigFromPreset(normalized[agentId], agentId);
+    resolved[agentId] = normalizeRuntimeConfigFromPreset(
+      normalized[agentId],
+      agentId,
+    );
   });
   return resolved;
 }
@@ -8298,11 +8878,21 @@ function normalizeRuntimeConfigFromPreset(runtimeConfig, agentId = "A") {
     frequencyPenalty:
       config.creativityMode === "custom"
         ? config.frequencyPenalty
-        : sanitizeRuntimeNumber(base.frequencyPenalty, config.frequencyPenalty, -2, 2),
+        : sanitizeRuntimeNumber(
+            base.frequencyPenalty,
+            config.frequencyPenalty,
+            -2,
+            2,
+          ),
     presencePenalty:
       config.creativityMode === "custom"
         ? config.presencePenalty
-        : sanitizeRuntimeNumber(base.presencePenalty, config.presencePenalty, -2, 2),
+        : sanitizeRuntimeNumber(
+            base.presencePenalty,
+            config.presencePenalty,
+            -2,
+            2,
+          ),
   };
 
   const normalizedAgentId = sanitizeAgent(agentId);
@@ -8326,7 +8916,12 @@ function normalizeRuntimeConfigFromPreset(runtimeConfig, agentId = "A") {
         0,
         2,
       );
-      next.topP = sanitizeRuntimeNumber(policy.fixedSampling.topP, next.topP, 0, 1);
+      next.topP = sanitizeRuntimeNumber(
+        policy.fixedSampling.topP,
+        next.topP,
+        0,
+        1,
+      );
     }
     if (!policy.allowWebSearch) {
       next.enableWebSearch = false;
@@ -8345,10 +8940,20 @@ function normalizeRuntimeConfigFromPreset(runtimeConfig, agentId = "A") {
 
 function getRuntimePresetDefaults(mode) {
   if (mode === "precise") {
-    return { temperature: 0.2, topP: 0.8, frequencyPenalty: 0, presencePenalty: -0.1 };
+    return {
+      temperature: 0.2,
+      topP: 0.8,
+      frequencyPenalty: 0,
+      presencePenalty: -0.1,
+    };
   }
   if (mode === "creative") {
-    return { temperature: 1.1, topP: 1, frequencyPenalty: 0.2, presencePenalty: 0.3 };
+    return {
+      temperature: 1.1,
+      topP: 1,
+      frequencyPenalty: 0.2,
+      presencePenalty: 0.3,
+    };
   }
   return { temperature: 0.6, topP: 1, frequencyPenalty: 0, presencePenalty: 0 };
 }
@@ -8367,10 +8972,13 @@ function sanitizeRuntimeProvider(value) {
     .trim()
     .toLowerCase();
   if (!key) return DEFAULT_AGENT_RUNTIME_CONFIG.provider;
-  if (key === "inherit" || key === "default" || key === "auto") return "inherit";
+  if (key === "inherit" || key === "default" || key === "auto")
+    return "inherit";
   if (key === "openrouter") return "openrouter";
-  if (key === "aliyun" || key === "alibaba" || key === "dashscope") return "aliyun";
-  if (key === "volcengine" || key === "volc" || key === "ark") return "volcengine";
+  if (key === "aliyun" || key === "alibaba" || key === "dashscope")
+    return "aliyun";
+  if (key === "volcengine" || key === "volc" || key === "ark")
+    return "volcengine";
   return DEFAULT_AGENT_RUNTIME_CONFIG.provider;
 }
 
@@ -8400,7 +9008,8 @@ function sanitizeOpenRouterPdfEngine(value) {
   const key = String(value || "")
     .trim()
     .toLowerCase();
-  if (key === "pdf-text" || key === "mistral-ocr" || key === "native") return key;
+  if (key === "pdf-text" || key === "mistral-ocr" || key === "native")
+    return key;
   return "auto";
 }
 
@@ -8483,7 +9092,12 @@ function sanitizeCreativityMode(value) {
   const key = String(value || "")
     .trim()
     .toLowerCase();
-  if (key === "precise" || key === "balanced" || key === "creative" || key === "custom") {
+  if (
+    key === "precise" ||
+    key === "balanced" ||
+    key === "creative" ||
+    key === "custom"
+  ) {
     return key;
   }
   return "balanced";
@@ -8508,7 +9122,8 @@ function sanitizeRuntimeBoolean(value, fallback = false) {
     .trim()
     .toLowerCase();
   if (!key) return fallback;
-  if (key === "1" || key === "true" || key === "yes" || key === "on") return true;
+  if (key === "1" || key === "true" || key === "yes" || key === "on")
+    return true;
   if (key === "0" || key === "false" || key === "no" || key === "off")
     return false;
   return fallback;
@@ -8545,7 +9160,9 @@ function sanitizeSmartContextMode(value) {
 
 function buildAdminAgentSettingsResponse(config) {
   const resolvedPrompts = resolveAgentSystemPrompts(config.prompts);
-  const resolvedRuntimeConfigs = resolveAgentRuntimeConfigs(config.runtimeConfigs);
+  const resolvedRuntimeConfigs = resolveAgentRuntimeConfigs(
+    config.runtimeConfigs,
+  );
   return {
     ok: true,
     defaultSystemPrompt: getDefaultSystemPrompt(),
@@ -8555,7 +9172,8 @@ function buildAdminAgentSettingsResponse(config) {
     resolvedRuntimeConfigs,
     agentProviderDefaults: buildAgentProviderDefaults(),
     agentModelDefaults: buildAgentModelDefaults(),
-    shangguanClassTaskProductImprovementEnabled: !!config.shangguanClassTaskProductImprovementEnabled,
+    shangguanClassTaskProductImprovementEnabled:
+      !!config.shangguanClassTaskProductImprovementEnabled,
     updatedAt: config.updatedAt,
   };
 }
@@ -8617,7 +9235,11 @@ function resolveReasoningPolicy(model, requested, provider) {
   const providerAllows = providerSupportsReasoning(provider);
 
   if (!providerAllows) {
-    return { enabled: false, effort: "none", forced: requestedEffort !== "none" };
+    return {
+      enabled: false,
+      effort: "none",
+      forced: requestedEffort !== "none",
+    };
   }
 
   if (requires && requestedEffort === "none") {
@@ -8625,7 +9247,11 @@ function resolveReasoningPolicy(model, requested, provider) {
   }
 
   if (!supports) {
-    return { enabled: false, effort: "none", forced: requestedEffort !== "none" };
+    return {
+      enabled: false,
+      effort: "none",
+      forced: requestedEffort !== "none",
+    };
   }
 
   if (requestedEffort === "none") {
@@ -8714,7 +9340,9 @@ function readEnvApiKey(...names) {
 }
 
 function isPlaceholderApiKey(value) {
-  const key = String(value || "").trim().toLowerCase();
+  const key = String(value || "")
+    .trim()
+    .toLowerCase();
   if (!key) return true;
   if (key.startsWith("your_") && key.includes("api_key")) return true;
   if (key.includes("replace_me")) return true;
@@ -8750,14 +9378,13 @@ function buildProviderHeaders(provider, apiKey, protocol = "chat") {
 }
 
 function extractRequestFailureCode(error) {
-  const cause = error?.cause && typeof error.cause === "object" ? error.cause : null;
+  const cause =
+    error?.cause && typeof error.cause === "object" ? error.cause : null;
   const code = sanitizeText(cause?.code || error?.code, "", 80)
     .trim()
     .toUpperCase();
   if (code) return code;
-  const causeName = sanitizeText(cause?.name, "", 80)
-    .trim()
-    .toLowerCase();
+  const causeName = sanitizeText(cause?.name, "", 80).trim().toLowerCase();
   if (causeName.includes("timeout")) return "TIMEOUT";
   return "";
 }
@@ -8777,7 +9404,8 @@ function formatProviderRequestFailure(provider, protocol, endpoint, error) {
   const safeProvider = sanitizeText(provider, "upstream", 60);
   const safeProtocol = sanitizeText(protocol, "chat", 40);
   const baseMessage = sanitizeText(error?.message, "fetch failed", 300);
-  const cause = error?.cause && typeof error.cause === "object" ? error.cause : null;
+  const cause =
+    error?.cause && typeof error.cause === "object" ? error.cause : null;
   const causeMessage = sanitizeText(cause?.message, "", 400);
   const code = extractRequestFailureCode(error);
 
@@ -8951,7 +9579,9 @@ function mapVolcengineUpstreamError({ status, code, message, param }) {
 
   if (
     status === 400 &&
-    (msg.includes("reasoning") || msg.includes("thinking") || paramKey === "reasoning")
+    (msg.includes("reasoning") ||
+      msg.includes("thinking") ||
+      paramKey === "reasoning")
   ) {
     return "当前模型不支持所选深度思考参数，请调整后重试。（Error Code: 400）";
   }
@@ -8983,7 +9613,10 @@ function mapVolcengineUpstreamError({ status, code, message, param }) {
   }
 
   if (status === 403) {
-    if (codeKey.includes("serviceoverdue") || codeKey === "accountoverdueerror") {
+    if (
+      codeKey.includes("serviceoverdue") ||
+      codeKey === "accountoverdueerror"
+    ) {
       return "账号欠费或服务已过期，请检查火山账户计费状态。（Error Code: 403）";
     }
     if (codeKey.includes("accessdenied")) {
@@ -9028,7 +9661,9 @@ function pruneExpiredUserOnlinePresence(nowMs = Date.now()) {
 
 function markUserOnlinePresence(userOrId, seenAtMs = Date.now()) {
   const userId =
-    typeof userOrId === "string" ? sanitizeId(userOrId, "") : sanitizeId(userOrId?._id, "");
+    typeof userOrId === "string"
+      ? sanitizeId(userOrId, "")
+      : sanitizeId(userOrId?._id, "");
   if (!userId) return;
 
   const safeSeenAtMs = Number.isFinite(seenAtMs) ? seenAtMs : Date.now();
@@ -9048,7 +9683,9 @@ function markUserOnlinePresence(userOrId, seenAtMs = Date.now()) {
 
 function markUserOnlineBrowserHeartbeat(userOrId, seenAtMs = Date.now()) {
   const userId =
-    typeof userOrId === "string" ? sanitizeId(userOrId, "") : sanitizeId(userOrId?._id, "");
+    typeof userOrId === "string"
+      ? sanitizeId(userOrId, "")
+      : sanitizeId(userOrId?._id, "");
   if (!userId) return;
 
   const safeSeenAtMs = Number.isFinite(seenAtMs) ? seenAtMs : Date.now();
@@ -9068,13 +9705,20 @@ function markUserOnlineBrowserHeartbeat(userOrId, seenAtMs = Date.now()) {
 
 function setUserOnlineSocketPresence(userOrId, delta = 0) {
   const userId =
-    typeof userOrId === "string" ? sanitizeId(userOrId, "") : sanitizeId(userOrId?._id, "");
+    typeof userOrId === "string"
+      ? sanitizeId(userOrId, "")
+      : sanitizeId(userOrId?._id, "");
   if (!userId) return;
 
   const safeDelta = sanitizeRuntimeInteger(delta, 0, -9999, 9999);
   const nowMs = Date.now();
   const previous = userOnlinePresenceByUserId.get(userId);
-  const previousCount = sanitizeRuntimeInteger(previous?.socketCount, 0, 0, 9999);
+  const previousCount = sanitizeRuntimeInteger(
+    previous?.socketCount,
+    0,
+    0,
+    9999,
+  );
   const nextCount = Math.max(0, previousCount + safeDelta);
   const lastSeenAtMs = Number(previous?.lastSeenAtMs) || nowMs;
   const browserHeartbeatAtMs = Number(previous?.browserHeartbeatAtMs) || 0;
@@ -9087,7 +9731,10 @@ function setUserOnlineSocketPresence(userOrId, delta = 0) {
   });
   if (safeDelta > 0) {
     markUserOnlinePresence(userId, nowMs);
-  } else if (nextCount <= 0 && nowMs - lastSeenAtMs > USER_ONLINE_PRESENCE_RETENTION_MS) {
+  } else if (
+    nextCount <= 0 &&
+    nowMs - lastSeenAtMs > USER_ONLINE_PRESENCE_RETENTION_MS
+  ) {
     userOnlinePresenceByUserId.delete(userId);
   }
 }
@@ -9197,7 +9844,9 @@ function readRequestVolcengineFileRefs(raw) {
 
 function readRequestPreparedAttachmentRefs(raw) {
   const parsed = readJsonLikeField(raw, []);
-  return Array.isArray(parsed) ? sanitizePreparedAttachmentRefsPayload(parsed) : [];
+  return Array.isArray(parsed)
+    ? sanitizePreparedAttachmentRefsPayload(parsed)
+    : [];
 }
 
 function defaultChatState() {
@@ -9249,7 +9898,10 @@ function readChatStateShape(raw) {
   };
 }
 
-function readTeacherScopedChatStateRaw(doc, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY) {
+function readTeacherScopedChatStateRaw(
+  doc,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+) {
   if (!doc) return null;
 
   const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
@@ -9264,7 +9916,10 @@ function readTeacherScopedChatStateRaw(doc, teacherScopeKey = DEFAULT_TEACHER_SC
   return readChatStateShape(teacherStates[safeTeacherScopeKey]);
 }
 
-function normalizeChatStateDoc(doc, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY) {
+function normalizeChatStateDoc(
+  doc,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+) {
   const scoped = readTeacherScopedChatStateRaw(doc, teacherScopeKey);
   if (!scoped) return defaultChatState();
   return sanitizeChatStatePayload({
@@ -9276,7 +9931,10 @@ function normalizeChatStateDoc(doc, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY)
   });
 }
 
-function getTeacherScopedChatStatePath(field, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY) {
+function getTeacherScopedChatStatePath(
+  field,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+) {
   const safeField = String(field || "").trim();
   if (!safeField) return "";
 
@@ -9285,9 +9943,13 @@ function getTeacherScopedChatStatePath(field, teacherScopeKey = DEFAULT_TEACHER_
   return `teacherStates.${safeTeacherScopeKey}.${safeField}`;
 }
 
-function readTeacherScopedSessionContextRefs(doc, teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY) {
+function readTeacherScopedSessionContextRefs(
+  doc,
+  teacherScopeKey = DEFAULT_TEACHER_SCOPE_KEY,
+) {
   const scoped = readTeacherScopedChatStateRaw(doc, teacherScopeKey);
-  return scoped?.sessionContextRefs && typeof scoped.sessionContextRefs === "object"
+  return scoped?.sessionContextRefs &&
+    typeof scoped.sessionContextRefs === "object"
     ? scoped.sessionContextRefs
     : {};
 }
@@ -9296,8 +9958,15 @@ function sanitizeChatStatePayload(payload) {
   const fallback = defaultChatState();
   const groups = sanitizeGroups(payload.groups);
   const sessions = sanitizeSessions(payload.sessions, groups);
-  const sessionMessages = sanitizeSessionMessages(payload.sessionMessages, sessions);
-  const activeId = resolveActiveId(payload.activeId, sessions, fallback.activeId);
+  const sessionMessages = sanitizeSessionMessages(
+    payload.sessionMessages,
+    sessions,
+  );
+  const activeId = resolveActiveId(
+    payload.activeId,
+    sessions,
+    fallback.activeId,
+  );
   const settings = sanitizeStateSettings(payload.settings);
 
   return {
@@ -9313,7 +9982,11 @@ function sanitizeChatStateMetaPayload(payload) {
   const fallback = defaultChatState();
   const groups = sanitizeGroups(payload.groups);
   const sessions = sanitizeSessions(payload.sessions, groups);
-  const activeId = resolveActiveId(payload.activeId, sessions, fallback.activeId);
+  const activeId = resolveActiveId(
+    payload.activeId,
+    sessions,
+    fallback.activeId,
+  );
   const settings = sanitizeStateSettings(payload.settings);
   return { activeId, groups, sessions, settings };
 }
@@ -9356,13 +10029,20 @@ function sanitizeSmartContextEnabledBySessionAgent(raw) {
   Object.entries(source)
     .slice(0, 1200)
     .forEach(([rawKey, rawValue]) => {
-      if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
+      if (
+        rawValue &&
+        typeof rawValue === "object" &&
+        !Array.isArray(rawValue)
+      ) {
         const safeSessionId = sanitizeId(rawKey, "");
         if (!safeSessionId) return;
         Object.entries(rawValue)
           .slice(0, 8)
           .forEach(([rawAgentId, nestedValue]) => {
-            const key = buildSmartContextEnabledMapKey(safeSessionId, rawAgentId);
+            const key = buildSmartContextEnabledMapKey(
+              safeSessionId,
+              rawAgentId,
+            );
             if (!key) return;
             normalized[key] = sanitizeRuntimeBoolean(nestedValue, false);
           });
@@ -9400,12 +10080,22 @@ function sanitizeStateSettings(raw) {
   const agentBySession = sanitizeAgentBySession(source.agentBySession);
   const apiTemperature = sanitizeNumber(source.apiTemperature, 0.6, 0, 2);
   const apiTopP = sanitizeNumber(source.apiTopP, 1, 0, 1);
-  const apiReasoningEffort = sanitizeReasoning(source.apiReasoningEffort, "high");
-  const lastAppliedReasoning = sanitizeReasoning(source.lastAppliedReasoning, "high");
-  const smartContextEnabled = sanitizeRuntimeBoolean(source.smartContextEnabled, false);
-  const smartContextEnabledBySessionAgent = sanitizeSmartContextEnabledBySessionAgent(
-    source.smartContextEnabledBySessionAgent,
+  const apiReasoningEffort = sanitizeReasoning(
+    source.apiReasoningEffort,
+    "high",
   );
+  const lastAppliedReasoning = sanitizeReasoning(
+    source.lastAppliedReasoning,
+    "high",
+  );
+  const smartContextEnabled = sanitizeRuntimeBoolean(
+    source.smartContextEnabled,
+    false,
+  );
+  const smartContextEnabledBySessionAgent =
+    sanitizeSmartContextEnabledBySessionAgent(
+      source.smartContextEnabledBySessionAgent,
+    );
 
   return {
     agent,
@@ -9420,7 +10110,8 @@ function sanitizeStateSettings(raw) {
 }
 
 function sanitizeGroups(input) {
-  if (!Array.isArray(input)) return [{ id: "g1", name: "新组", description: "" }];
+  if (!Array.isArray(input))
+    return [{ id: "g1", name: "新组", description: "" }];
 
   const used = new Set();
   const normalized = [];
@@ -9476,10 +10167,12 @@ function sanitizeSessionMessages(input, sessions) {
   const normalized = {};
 
   sessions.forEach((session) => {
-    const rawMessages = Array.isArray(source[session.id]) ? source[session.id] : [];
-    normalized[session.id] = rawMessages.slice(0, 400).map((m, idx) =>
-      sanitizeMessage(m, idx),
-    );
+    const rawMessages = Array.isArray(source[session.id])
+      ? source[session.id]
+      : [];
+    normalized[session.id] = rawMessages
+      .slice(0, 400)
+      .map((m, idx) => sanitizeMessage(m, idx));
   });
 
   if (Object.keys(normalized).length === 0) {
@@ -9554,8 +10247,16 @@ function sanitizeMessage(msg, idx) {
             topP: Number.isFinite(Number(msg.runtime.topP))
               ? Number(msg.runtime.topP)
               : undefined,
-            reasoningRequested: sanitizeText(msg.runtime.reasoningRequested, "", 16),
-            reasoningApplied: sanitizeText(msg.runtime.reasoningApplied, "", 16),
+            reasoningRequested: sanitizeText(
+              msg.runtime.reasoningRequested,
+              "",
+              16,
+            ),
+            reasoningApplied: sanitizeText(
+              msg.runtime.reasoningApplied,
+              "",
+              16,
+            ),
           }
         : undefined,
   };
@@ -9675,7 +10376,9 @@ function sanitizeAgent(value) {
 
 function resolveTeacherScopedLockedAgentId(teacherScopeKey) {
   const safeScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
-  const rawLockedAgent = String(TEACHER_SCOPE_LOCKED_AGENT_MAP[safeScopeKey] || "")
+  const rawLockedAgent = String(
+    TEACHER_SCOPE_LOCKED_AGENT_MAP[safeScopeKey] || "",
+  )
     .trim()
     .toUpperCase();
   if (["A", "B", "C", "D", AGENT_E_ID].includes(rawLockedAgent)) {
@@ -9760,15 +10463,15 @@ async function generateUniqueGroupChatRoomCode() {
 function sanitizeGroupChatMemberUserIds(value) {
   if (!Array.isArray(value)) return [];
   return Array.from(
-    new Set(
-      value
-        .map((item) => sanitizeId(item, ""))
-        .filter(Boolean),
-    ),
+    new Set(value.map((item) => sanitizeId(item, "")).filter(Boolean)),
   ).slice(0, GROUP_CHAT_MAX_MEMBERS_PER_ROOM);
 }
 
-function sanitizeGroupChatMutedMemberUserIds(value, roomMemberUserIds = [], ownerUserId = "") {
+function sanitizeGroupChatMutedMemberUserIds(
+  value,
+  roomMemberUserIds = [],
+  ownerUserId = "",
+) {
   const memberSet = new Set(sanitizeGroupChatMemberUserIds(roomMemberUserIds));
   const safeOwnerUserId = sanitizeId(ownerUserId, "");
   if (!Array.isArray(value)) return [];
@@ -9776,7 +10479,10 @@ function sanitizeGroupChatMutedMemberUserIds(value, roomMemberUserIds = [], owne
     new Set(
       value
         .map((item) => sanitizeId(item, ""))
-        .filter((userId) => !!userId && userId !== safeOwnerUserId && memberSet.has(userId)),
+        .filter(
+          (userId) =>
+            !!userId && userId !== safeOwnerUserId && memberSet.has(userId),
+        ),
     ),
   ).slice(0, GROUP_CHAT_MAX_MEMBERS_PER_ROOM);
 }
@@ -9790,7 +10496,8 @@ function normalizeGroupChatReadStates(value, roomMemberUserIds = []) {
     if (!userId || !memberSet.has(userId)) return;
     const lastReadMessageId = sanitizeId(item?.lastReadMessageId, "");
     const lastReadAt = sanitizeIsoDate(item?.lastReadAt);
-    const updatedAt = sanitizeIsoDate(item?.updatedAt) || new Date().toISOString();
+    const updatedAt =
+      sanitizeIsoDate(item?.updatedAt) || new Date().toISOString();
     deduped.set(userId, {
       userId,
       lastReadMessageId,
@@ -9799,7 +10506,11 @@ function normalizeGroupChatReadStates(value, roomMemberUserIds = []) {
     });
   });
   return Array.from(deduped.values())
-    .sort((a, b) => toGroupChatDateTimestamp(a.updatedAt) - toGroupChatDateTimestamp(b.updatedAt))
+    .sort(
+      (a, b) =>
+        toGroupChatDateTimestamp(a.updatedAt) -
+        toGroupChatDateTimestamp(b.updatedAt),
+    )
     .slice(-GROUP_CHAT_MAX_READ_STATES_PER_ROOM);
 }
 
@@ -9827,7 +10538,11 @@ function normalizeGroupChatRoomDoc(doc, options = {}) {
     ownerUserId,
   );
   const onlineMemberUserIds = Array.from(
-    new Set(getGroupChatOnlineUserIdsByRoom(id).filter((userId) => memberUserIds.includes(userId))),
+    new Set(
+      getGroupChatOnlineUserIdsByRoom(id).filter((userId) =>
+        memberUserIds.includes(userId),
+      ),
+    ),
   );
 
   const normalized = {
@@ -9835,17 +10550,26 @@ function normalizeGroupChatRoomDoc(doc, options = {}) {
     roomCode: sanitizeGroupChatCode(doc.roomCode),
     name: sanitizeGroupChatRoomName(doc.name),
     ownerUserId,
-    partyAgentMemberEnabled: sanitizeRuntimeBoolean(doc.partyAgentMemberEnabled, true),
+    partyAgentMemberEnabled: sanitizeRuntimeBoolean(
+      doc.partyAgentMemberEnabled,
+      true,
+    ),
     memberUserIds,
     mutedMemberUserIds,
-    memberCount: Math.max(memberUserIds.length, sanitizeRuntimeInteger(doc.memberCount, 1, 1, 999)),
+    memberCount: Math.max(
+      memberUserIds.length,
+      sanitizeRuntimeInteger(doc.memberCount, 1, 1, 999),
+    ),
     createdAt: sanitizeIsoDate(doc.createdAt),
     updatedAt: sanitizeIsoDate(doc.updatedAt),
     onlineMemberUserIds,
   };
 
   if (viewerUserId && viewerUserId === ownerUserId) {
-    normalized.readStates = normalizeGroupChatReadStates(doc.readStates, memberUserIds);
+    normalized.readStates = normalizeGroupChatReadStates(
+      doc.readStates,
+      memberUserIds,
+    );
   }
 
   return normalized;
@@ -9934,7 +10658,10 @@ function normalizeGroupChatFileOssMeta(raw) {
 function isGroupChatFilesApiExpired(filesApiMeta, { nowMs = Date.now() } = {}) {
   const expiresAt = sanitizeIsoDate(filesApiMeta?.expiresAt);
   if (!expiresAt) return false;
-  return toGroupChatDateTimestamp(expiresAt) > 0 && toGroupChatDateTimestamp(expiresAt) <= nowMs;
+  return (
+    toGroupChatDateTimestamp(expiresAt) > 0 &&
+    toGroupChatDateTimestamp(expiresAt) <= nowMs
+  );
 }
 
 function resolveGroupChatFileExtension(fileName, mimeType = "") {
@@ -9956,7 +10683,10 @@ function classifyGroupChatVolcengineSupportedInputType({
   fallbackType = "",
 } = {}) {
   const explicitInputType = normalizeGroupChatFilesApiInputType(fallbackType);
-  if (explicitInputType === "input_image" || explicitInputType === "input_file") {
+  if (
+    explicitInputType === "input_image" ||
+    explicitInputType === "input_file"
+  ) {
     return explicitInputType;
   }
 
@@ -9967,12 +10697,19 @@ function classifyGroupChatVolcengineSupportedInputType({
     return "input_file";
   }
 
-  const normalizedExt = String(ext || "").trim().toLowerCase();
-  const imageByMime = GROUP_CHAT_VOLCENGINE_SUPPORTED_IMAGE_MIME_TYPES.has(mime);
-  const imageByExt = GROUP_CHAT_VOLCENGINE_SUPPORTED_IMAGE_EXTENSIONS.has(normalizedExt);
+  const normalizedExt = String(ext || "")
+    .trim()
+    .toLowerCase();
+  const imageByMime =
+    GROUP_CHAT_VOLCENGINE_SUPPORTED_IMAGE_MIME_TYPES.has(mime);
+  const imageByExt =
+    GROUP_CHAT_VOLCENGINE_SUPPORTED_IMAGE_EXTENSIONS.has(normalizedExt);
   const mimeIsImage = mime.startsWith("image/");
 
-  if ((imageByMime || imageByExt) && (mimeIsImage || !mime || mime === "application/octet-stream")) {
+  if (
+    (imageByMime || imageByExt) &&
+    (mimeIsImage || !mime || mime === "application/octet-stream")
+  ) {
     return "input_image";
   }
   return "";
@@ -9980,20 +10717,26 @@ function classifyGroupChatVolcengineSupportedInputType({
 
 function normalizeGroupChatRoomFileItemFromMessageDoc(doc) {
   const normalized = normalizeGroupChatMessageDoc(doc);
-  if (!normalized || (normalized.type !== "file" && normalized.type !== "image")) return null;
+  if (
+    !normalized ||
+    (normalized.type !== "file" && normalized.type !== "image")
+  )
+    return null;
   const nowMs = Date.now();
   const isImage = normalized.type === "image";
   const payload = isImage ? normalized.image : normalized.file;
   if (!payload) return null;
 
-  const filesApiMeta = normalizeGroupChatFilesApiMeta(
-    payload?.filesApi,
-    { defaultInputType: isImage ? "input_image" : "input_file" },
-  );
+  const filesApiMeta = normalizeGroupChatFilesApiMeta(payload?.filesApi, {
+    defaultInputType: isImage ? "input_image" : "input_file",
+  });
   const filesApiExpired = isGroupChatFilesApiExpired(filesApiMeta, { nowMs });
   const filesApiStatus = filesApiExpired
     ? "expired"
-    : normalizeGroupChatFilesApiStatus(filesApiMeta.status, filesApiMeta.fileId ? "uploaded" : "missing");
+    : normalizeGroupChatFilesApiStatus(
+        filesApiMeta.status,
+        filesApiMeta.fileId ? "uploaded" : "missing",
+      );
   const ossMeta = normalizeGroupChatFileOssMeta(payload?.oss);
   const fileName = isImage
     ? sanitizeGroupChatImageFileName(payload?.fileName)
@@ -10014,13 +10757,15 @@ function normalizeGroupChatRoomFileItemFromMessageDoc(doc) {
       payload?.size,
       0,
       0,
-      isImage ? GROUP_CHAT_IMAGE_MAX_FILE_SIZE_BYTES : GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES,
+      isImage
+        ? GROUP_CHAT_IMAGE_MAX_FILE_SIZE_BYTES
+        : GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES,
     ),
     createdAt: sanitizeIsoDate(normalized.createdAt),
-    localParseOnly: isImage ? false : sanitizeRuntimeBoolean(payload?.localParseOnly, false),
-    parseHint: isImage
-      ? ""
-      : sanitizeText(payload?.parseHint, "", 120),
+    localParseOnly: isImage
+      ? false
+      : sanitizeRuntimeBoolean(payload?.localParseOnly, false),
+    parseHint: isImage ? "" : sanitizeText(payload?.parseHint, "", 120),
     filesApi: {
       status: filesApiStatus || "missing",
       uploaded: filesApiStatus === "uploaded",
@@ -10047,14 +10792,24 @@ function normalizeGroupChatMessageDoc(doc) {
   const type = String(doc?.type || "")
     .trim()
     .toLowerCase();
-  if (type !== "text" && type !== "image" && type !== "file" && type !== "system") return null;
+  if (
+    type !== "text" &&
+    type !== "image" &&
+    type !== "file" &&
+    type !== "system"
+  )
+    return null;
 
   const normalized = {
     id,
     roomId,
     type,
     senderUserId: sanitizeId(doc?.senderUserId, ""),
-    senderName: sanitizeText(doc?.senderName, type === "system" ? "系统" : "用户", 30),
+    senderName: sanitizeText(
+      doc?.senderName,
+      type === "system" ? "系统" : "用户",
+      30,
+    ),
     content: sanitizeText(doc?.content, "", GROUP_CHAT_TEXT_MAX_LENGTH),
     replyToMessageId: sanitizeId(doc?.replyToMessageId, ""),
     replyPreviewText: sanitizeText(
@@ -10082,7 +10837,12 @@ function normalizeGroupChatMessageDoc(doc) {
       dataUrl,
       mimeType: sanitizeText(image.mimeType, "image/png", 80).toLowerCase(),
       fileName: sanitizeGroupChatImageFileName(image.fileName),
-      size: sanitizeRuntimeInteger(image.size, 0, 0, GROUP_CHAT_IMAGE_MAX_FILE_SIZE_BYTES),
+      size: sanitizeRuntimeInteger(
+        image.size,
+        0,
+        0,
+        GROUP_CHAT_IMAGE_MAX_FILE_SIZE_BYTES,
+      ),
       filesApi: normalizeGroupChatFilesApiMeta(image.filesApi, {
         defaultInputType: "input_image",
       }),
@@ -10098,7 +10858,12 @@ function normalizeGroupChatMessageDoc(doc) {
       fileId: sanitizeId(file.fileId, ""),
       fileName: sanitizeGroupChatFileName(file.fileName),
       mimeType: sanitizeGroupChatFileMimeType(file.mimeType),
-      size: sanitizeRuntimeInteger(file.size, 0, 0, GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES),
+      size: sanitizeRuntimeInteger(
+        file.size,
+        0,
+        0,
+        GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES,
+      ),
       expiresAt: sanitizeIsoDate(file.expiresAt),
       localParseOnly: sanitizeRuntimeBoolean(file.localParseOnly, false),
       parseHint: sanitizeText(file.parseHint, "", 120),
@@ -10172,8 +10937,10 @@ function toAsciiHeaderFileName(fileName) {
 }
 
 function encodeRfc5987ValueChars(value) {
-  return encodeURIComponent(String(value || "download.bin"))
-    .replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return encodeURIComponent(String(value || "download.bin")).replace(
+    /[!'()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 }
 
 function sanitizeGroupChatFileMimeType(value) {
@@ -10333,9 +11100,14 @@ function sanitizeAliyunOssNetworkMode(value) {
 }
 
 function resolveAliyunOssNetworkMode() {
-  const explicitMode = sanitizeAliyunOssNetworkMode(process.env.ALIYUN_OSS_NETWORK_MODE);
+  const explicitMode = sanitizeAliyunOssNetworkMode(
+    process.env.ALIYUN_OSS_NETWORK_MODE,
+  );
   if (explicitMode) return explicitMode;
-  const legacyInternal = sanitizeRuntimeBoolean(process.env.ALIYUN_OSS_INTERNAL, false);
+  const legacyInternal = sanitizeRuntimeBoolean(
+    process.env.ALIYUN_OSS_INTERNAL,
+    false,
+  );
   return legacyInternal ? "internal_prefer" : "public";
 }
 
@@ -10345,11 +11117,15 @@ function buildGroupChatOssConfig() {
   const enableTimeoutFallback = networkMode === "internal_prefer";
   const bucket = sanitizeAliyunOssBucket(process.env.ALIYUN_OSS_BUCKET);
   const accessKeyId = String(process.env.ALIYUN_ACCESS_KEY_ID || "").trim();
-  const accessKeySecret = String(process.env.ALIYUN_ACCESS_KEY_SECRET || "").trim();
+  const accessKeySecret = String(
+    process.env.ALIYUN_ACCESS_KEY_SECRET || "",
+  ).trim();
   const region = sanitizeAliyunOssRegion(
     process.env.ALIYUN_OSS_REGION || GROUP_CHAT_OSS_DEFAULT_REGION,
   );
-  const endpointRaw = sanitizeAliyunOssEndpoint(process.env.ALIYUN_OSS_ENDPOINT);
+  const endpointRaw = sanitizeAliyunOssEndpoint(
+    process.env.ALIYUN_OSS_ENDPOINT,
+  );
   const endpoint =
     networkMode === "public"
       ? normalizeGroupChatOssPublicEndpoint(endpointRaw) || endpointRaw
@@ -10358,7 +11134,10 @@ function buildGroupChatOssConfig() {
     process.env.ALIYUN_OSS_OBJECT_PREFIX || GROUP_CHAT_OSS_DEFAULT_PREFIX,
   );
   const secure = sanitizeRuntimeBoolean(process.env.ALIYUN_OSS_SECURE, true);
-  const publicRead = sanitizeRuntimeBoolean(process.env.ALIYUN_OSS_PUBLIC_READ, false);
+  const publicRead = sanitizeRuntimeBoolean(
+    process.env.ALIYUN_OSS_PUBLIC_READ,
+    false,
+  );
   const signedUrlTtlSeconds = sanitizeRuntimeInteger(
     process.env.ALIYUN_OSS_SIGNED_URL_TTL_SECONDS,
     GROUP_CHAT_OSS_SIGNED_URL_TTL_SECONDS_DEFAULT,
@@ -10443,7 +11222,9 @@ function createGroupChatOssClients(config) {
 }
 
 function isGroupChatOssConnectionTimeoutError(error) {
-  const code = String(error?.code || "").trim().toLowerCase();
+  const code = String(error?.code || "")
+    .trim()
+    .toLowerCase();
   if (code === "connectiontimeouterror" || code === "timeout") return true;
   const message = String(error?.message || "")
     .trim()
@@ -10452,24 +11233,36 @@ function isGroupChatOssConnectionTimeoutError(error) {
 }
 
 function isGroupChatOssAccessDeniedError(error) {
-  const code = String(error?.code || "").trim().toLowerCase();
+  const code = String(error?.code || "")
+    .trim()
+    .toLowerCase();
   if (code === "accessdenied" || code === "forbidden") return true;
   const status = Number(error?.status);
   if (status === 403) return true;
   const message = String(error?.message || "")
     .trim()
     .toLowerCase();
-  return message.includes("access denied") || message.includes("does not belong to you");
+  return (
+    message.includes("access denied") ||
+    message.includes("does not belong to you")
+  );
 }
 
-async function callGroupChatOssWithTimeoutFallback(operationName, primaryCall, fallbackCall) {
+async function callGroupChatOssWithTimeoutFallback(
+  operationName,
+  primaryCall,
+  fallbackCall,
+) {
   if (!groupChatOssClient) {
     throw new Error("OSS 客户端未初始化");
   }
   try {
     return await primaryCall(groupChatOssClient);
   } catch (error) {
-    if (!groupChatOssFallbackClient || !isGroupChatOssConnectionTimeoutError(error)) {
+    if (
+      !groupChatOssFallbackClient ||
+      !isGroupChatOssConnectionTimeoutError(error)
+    ) {
       throw error;
     }
     console.warn(
@@ -10602,7 +11395,9 @@ function buildGroupChatOssObjectKey({ roomId, fileName }) {
   const safeFileName = sanitizeGroupChatFileName(fileName).replace(/\s+/g, "_");
   const randomPart = crypto.randomBytes(8).toString("hex");
   const timestamp = Date.now();
-  const objectPrefix = sanitizeAliyunOssObjectPrefix(groupChatOssConfig?.objectPrefix);
+  const objectPrefix = sanitizeAliyunOssObjectPrefix(
+    groupChatOssConfig?.objectPrefix,
+  );
   return `${objectPrefix}/${safeRoomId}/${timestamp}-${randomPart}-${safeFileName}`;
 }
 
@@ -10646,9 +11441,11 @@ function buildRuntimeOssObjectKey({
   );
   const safeScope = sanitizeGroupChatOssScopeSegment(scope, "misc");
   const safeUserSegment =
-    sanitizeId(userId, "") || sanitizeGroupChatOssScopeSegment(userId, "anonymous");
+    sanitizeId(userId, "") ||
+    sanitizeGroupChatOssScopeSegment(userId, "anonymous");
   const safeSessionSegment =
-    sanitizeId(sessionId, "") || sanitizeGroupChatOssScopeSegment(sessionId, "");
+    sanitizeId(sessionId, "") ||
+    sanitizeGroupChatOssScopeSegment(sessionId, "");
   const randomPart = crypto.randomBytes(8).toString("hex");
   const timestamp = Date.now();
   const safeFileName = sanitizeGroupChatFileName(fileName)
@@ -10676,8 +11473,14 @@ function formatTeacherLessonOssTimeSegment(isoText) {
 
 function buildTeacherLessonOssLessonSegment(lesson, lessonIndex = 0) {
   const safeLessonId = sanitizeId(lesson?.id, "");
-  const safeCourseName = sanitizeGroupChatOssScopeSegment(lesson?.courseName, "lesson");
-  const indexText = String(Math.max(1, Number(lessonIndex) + 1)).padStart(2, "0");
+  const safeCourseName = sanitizeGroupChatOssScopeSegment(
+    lesson?.courseName,
+    "lesson",
+  );
+  const indexText = String(Math.max(1, Number(lessonIndex) + 1)).padStart(
+    2,
+    "0",
+  );
   if (!safeLessonId) return `lesson-${indexText}-${safeCourseName}`;
   return `lesson-${indexText}-${safeLessonId.slice(0, 24)}`;
 }
@@ -10702,8 +11505,15 @@ function sanitizeStudentHomeworkOssFolderSegment(value, fallback = "unknown") {
 
 function buildStudentHomeworkLessonFolderName(lesson, lessonIndex = 0) {
   const name = sanitizeText(lesson?.courseName, "", 80);
-  if (name) return sanitizeStudentHomeworkOssFolderSegment(name, `第${lessonIndex + 1}节课`);
-  return sanitizeStudentHomeworkOssFolderSegment(`第${lessonIndex + 1}节课`, "未命名课时");
+  if (name)
+    return sanitizeStudentHomeworkOssFolderSegment(
+      name,
+      `第${lessonIndex + 1}节课`,
+    );
+  return sanitizeStudentHomeworkOssFolderSegment(
+    `第${lessonIndex + 1}节课`,
+    "未命名课时",
+  );
 }
 
 function buildStudentHomeworkStudentFolderName({
@@ -10714,10 +11524,15 @@ function buildStudentHomeworkStudentFolderName({
   const safeStudentName = sanitizeText(studentName, "", 64);
   const safeStudentId = sanitizeText(studentId, "", 20);
   if (safeStudentId && safeStudentName) {
-    return sanitizeStudentHomeworkOssFolderSegment(`${safeStudentId}-${safeStudentName}`, safeStudentId);
+    return sanitizeStudentHomeworkOssFolderSegment(
+      `${safeStudentId}-${safeStudentName}`,
+      safeStudentId,
+    );
   }
-  if (safeStudentId) return sanitizeStudentHomeworkOssFolderSegment(safeStudentId, "student");
-  if (safeStudentName) return sanitizeStudentHomeworkOssFolderSegment(safeStudentName, "student");
+  if (safeStudentId)
+    return sanitizeStudentHomeworkOssFolderSegment(safeStudentId, "student");
+  if (safeStudentName)
+    return sanitizeStudentHomeworkOssFolderSegment(safeStudentName, "student");
   const fallbackUserId = sanitizeId(studentUserId, "") || "student";
   return sanitizeStudentHomeworkOssFolderSegment(fallbackUserId, "student");
 }
@@ -10727,13 +11542,21 @@ function buildStudentHomeworkOssObjectKey({
   studentFolder = "",
   fileName = "",
 }) {
-  const objectPrefix = sanitizeAliyunOssObjectPrefix(TEACHER_LESSON_FILE_OSS_SCOPE);
+  const objectPrefix = sanitizeAliyunOssObjectPrefix(
+    TEACHER_LESSON_FILE_OSS_SCOPE,
+  );
   const safeScope = sanitizeStudentHomeworkOssFolderSegment(
     STUDENT_HOMEWORK_OSS_SUB_SCOPE,
     "student-homework",
   );
-  const safeLessonFolder = sanitizeStudentHomeworkOssFolderSegment(lessonFolder, "未命名课时");
-  const safeStudentFolder = sanitizeStudentHomeworkOssFolderSegment(studentFolder, "student");
+  const safeLessonFolder = sanitizeStudentHomeworkOssFolderSegment(
+    lessonFolder,
+    "未命名课时",
+  );
+  const safeStudentFolder = sanitizeStudentHomeworkOssFolderSegment(
+    studentFolder,
+    "student",
+  );
   const safeFileName = sanitizeGroupChatFileName(fileName).replace(/\s+/g, "_");
   const randomPart = crypto.randomBytes(8).toString("hex");
   const timestamp = Date.now();
@@ -10741,16 +11564,16 @@ function buildStudentHomeworkOssObjectKey({
   return sanitizeGroupChatOssObjectKey(rawKey);
 }
 
-async function uploadTeacherLessonFileToOss({
-  lesson,
-  lessonIndex = 0,
-  file,
-}) {
+async function uploadTeacherLessonFileToOss({ lesson, lessonIndex = 0, file }) {
   if (!groupChatOssClient || !groupChatOssConfig) {
     throw new Error("未配置阿里云 OSS，暂时无法上传课程文件。");
   }
   const normalizedFile = normalizeMultipartUploadFile(file);
-  if (!normalizedFile || !Buffer.isBuffer(normalizedFile.buffer) || normalizedFile.buffer.length === 0) {
+  if (
+    !normalizedFile ||
+    !Buffer.isBuffer(normalizedFile.buffer) ||
+    normalizedFile.buffer.length === 0
+  ) {
     throw new Error("课程文件为空，上传失败。");
   }
   const lessonSegment = buildTeacherLessonOssLessonSegment(lesson, lessonIndex);
@@ -10786,14 +11609,21 @@ async function uploadStudentHomeworkFileToOss({
     throw new Error("未配置阿里云 OSS，暂时无法上传作业文件。");
   }
   const normalizedFile = normalizeMultipartUploadFile(file);
-  if (!normalizedFile || !Buffer.isBuffer(normalizedFile.buffer) || normalizedFile.buffer.length === 0) {
+  if (
+    !normalizedFile ||
+    !Buffer.isBuffer(normalizedFile.buffer) ||
+    normalizedFile.buffer.length === 0
+  ) {
     throw new Error("作业文件为空，上传失败。");
   }
 
   const targetFileName = sanitizeGroupChatFileName(
     fileNameOverride || normalizedFile.originalname || "作业文件.bin",
   );
-  const lessonFolder = buildStudentHomeworkLessonFolderName(lesson, lessonIndex);
+  const lessonFolder = buildStudentHomeworkLessonFolderName(
+    lesson,
+    lessonIndex,
+  );
   const studentFolder = buildStudentHomeworkStudentFolderName({
     studentName,
     studentId,
@@ -10817,7 +11647,8 @@ async function uploadStudentHomeworkFileToOss({
       client.put(ossKey, normalizedFile.buffer, {
         headers: {
           "Content-Type": safeMimeType,
-          "Content-Disposition": buildAttachmentContentDisposition(targetFileName),
+          "Content-Disposition":
+            buildAttachmentContentDisposition(targetFileName),
           "Cache-Control": "private, no-store",
         },
       }),
@@ -10825,7 +11656,8 @@ async function uploadStudentHomeworkFileToOss({
       client.put(ossKey, normalizedFile.buffer, {
         headers: {
           "Content-Type": safeMimeType,
-          "Content-Disposition": buildAttachmentContentDisposition(targetFileName),
+          "Content-Disposition":
+            buildAttachmentContentDisposition(targetFileName),
           "Cache-Control": "private, no-store",
         },
       }),
@@ -10873,7 +11705,8 @@ async function uploadBufferToGroupChatOss({
       client.put(ossKey, safeBuffer, {
         headers: {
           "Content-Type": safeMimeType,
-          "Content-Disposition": buildAttachmentContentDisposition(safeFileName),
+          "Content-Disposition":
+            buildAttachmentContentDisposition(safeFileName),
           "Cache-Control": cacheControl || "private, no-store",
         },
       }),
@@ -10881,7 +11714,8 @@ async function uploadBufferToGroupChatOss({
       client.put(ossKey, safeBuffer, {
         headers: {
           "Content-Type": safeMimeType,
-          "Content-Disposition": buildAttachmentContentDisposition(safeFileName),
+          "Content-Disposition":
+            buildAttachmentContentDisposition(safeFileName),
           "Cache-Control": cacheControl || "private, no-store",
         },
       }),
@@ -11080,7 +11914,8 @@ async function buildGroupChatStoredFileStoragePayload({
         client.put(ossKey, safeBuffer, {
           headers: {
             "Content-Type": safeMimeType,
-            "Content-Disposition": buildAttachmentContentDisposition(safeFileName),
+            "Content-Disposition":
+              buildAttachmentContentDisposition(safeFileName),
             "Cache-Control": "private, no-store",
           },
         }),
@@ -11088,13 +11923,16 @@ async function buildGroupChatStoredFileStoragePayload({
         client.put(ossKey, safeBuffer, {
           headers: {
             "Content-Type": safeMimeType,
-            "Content-Disposition": buildAttachmentContentDisposition(safeFileName),
+            "Content-Disposition":
+              buildAttachmentContentDisposition(safeFileName),
             "Cache-Control": "private, no-store",
           },
         }),
     );
   } catch (error) {
-    throw new Error(`上传文件到 OSS 失败：${error?.message || "unknown error"}`);
+    throw new Error(
+      `上传文件到 OSS 失败：${error?.message || "unknown error"}`,
+    );
   }
 
   return {
@@ -11125,8 +11963,14 @@ async function deleteGroupChatOssObject(ossKey) {
 
 function readGroupChatOssStartupCheckConfig() {
   return {
-    enabled: sanitizeRuntimeBoolean(process.env.ALIYUN_OSS_STARTUP_CHECK_ENABLED, true),
-    writeProbe: sanitizeRuntimeBoolean(process.env.ALIYUN_OSS_STARTUP_WRITE_PROBE, true),
+    enabled: sanitizeRuntimeBoolean(
+      process.env.ALIYUN_OSS_STARTUP_CHECK_ENABLED,
+      true,
+    ),
+    writeProbe: sanitizeRuntimeBoolean(
+      process.env.ALIYUN_OSS_STARTUP_WRITE_PROBE,
+      true,
+    ),
     timeoutMs: sanitizeRuntimeInteger(
       process.env.ALIYUN_OSS_STARTUP_CHECK_TIMEOUT_MS,
       GROUP_CHAT_OSS_STARTUP_CHECK_TIMEOUT_MS_DEFAULT,
@@ -11137,7 +11981,9 @@ function readGroupChatOssStartupCheckConfig() {
 }
 
 function buildGroupChatOssStartupProbeObjectKey() {
-  const objectPrefix = sanitizeAliyunOssObjectPrefix(groupChatOssConfig?.objectPrefix);
+  const objectPrefix = sanitizeAliyunOssObjectPrefix(
+    groupChatOssConfig?.objectPrefix,
+  );
   const randomPart = crypto.randomBytes(6).toString("hex");
   return `${objectPrefix}/_healthchecks/startup-${Date.now()}-${randomPart}.txt`;
 }
@@ -11214,7 +12060,9 @@ async function runGroupChatOssStartupHealthCheck() {
   }
 
   const probeKey = buildGroupChatOssStartupProbeObjectKey();
-  const probeBody = Buffer.from(`educhat oss startup check ${new Date().toISOString()}\n`);
+  const probeBody = Buffer.from(
+    `educhat oss startup check ${new Date().toISOString()}\n`,
+  );
   try {
     await callGroupChatOssWithTimeoutFallback(
       `put(${probeKey})`,
@@ -11254,7 +12102,9 @@ async function runGroupChatOssStartupHealthCheck() {
           timeout: checkConfig.timeoutMs,
         }),
     );
-    console.log("[group-chat-file-storage] OSS 启动检查通过：写入与删除能力正常。");
+    console.log(
+      "[group-chat-file-storage] OSS 启动检查通过：写入与删除能力正常。",
+    );
     if (bucketLocationAccessDenied) {
       console.log(
         "[group-chat-file-storage] OSS 启动检查补充：对象写删正常，说明当前 AK 至少具备对象级权限；仅 BucketLocation 权限可能缺失。",
@@ -11337,7 +12187,10 @@ async function findGroupChatStoredFileByRoomAndId({
   ).lean();
   if (storedFileDoc) return storedFileDoc;
 
-  const legacyStoredFileDoc = await GroupChatStoredFile.findById(safeFileId, projection).lean();
+  const legacyStoredFileDoc = await GroupChatStoredFile.findById(
+    safeFileId,
+    projection,
+  ).lean();
   if (sanitizeId(legacyStoredFileDoc?.roomId, "") === safeRoomId) {
     storedFileDoc = legacyStoredFileDoc;
   }
@@ -11353,7 +12206,10 @@ async function cleanupExpiredGroupChatStoredFiles() {
     const expiredDocs = await GroupChatStoredFile.find(
       {
         expiresAt: { $lte: new Date() },
-        $or: [{ storageType: { $exists: false } }, { storageType: { $ne: "oss" } }],
+        $or: [
+          { storageType: { $exists: false } },
+          { storageType: { $ne: "oss" } },
+        ],
       },
       { _id: 1, ossKey: 1 },
     )
@@ -11415,7 +12271,10 @@ async function cleanupExpiredGeneratedImageHistories() {
     const expiredDocs = await GeneratedImageHistory.find(
       {
         expiresAt: { $lte: new Date() },
-        $or: [{ imageStorageType: { $exists: false } }, { imageStorageType: { $ne: "oss" } }],
+        $or: [
+          { imageStorageType: { $exists: false } },
+          { imageStorageType: { $ne: "oss" } },
+        ],
       },
       { _id: 1, ossKey: 1 },
     )
@@ -11424,7 +12283,8 @@ async function cleanupExpiredGeneratedImageHistories() {
       .lean();
     if (!expiredDocs.length) break;
 
-    const deleteSummary = await deleteGeneratedImageHistoryOssObjects(expiredDocs);
+    const deleteSummary =
+      await deleteGeneratedImageHistoryOssObjects(expiredDocs);
     deletedObjectCount += Number(deleteSummary?.deletedCount || 0);
     const failedKeySet = new Set(
       Array.isArray(deleteSummary?.failedKeys) ? deleteSummary.failedKeys : [],
@@ -11443,7 +12303,8 @@ async function cleanupExpiredGeneratedImageHistories() {
       _id: { $in: expiredDocIds },
     });
     deletedDocCount += Number(deleteResult?.deletedCount || 0);
-    if (expiredDocs.length < GENERATED_IMAGE_OSS_EXPIRED_CLEANUP_BATCH_SIZE) break;
+    if (expiredDocs.length < GENERATED_IMAGE_OSS_EXPIRED_CLEANUP_BATCH_SIZE)
+      break;
   }
 
   return { deletedDocCount, deletedObjectCount };
@@ -11472,41 +12333,48 @@ async function migrateOssFilesToPermanentRetention() {
   if (!groupChatOssClient) return;
 
   try {
-    const [groupFileResult, messageResult, imageHistoryResult] = await Promise.all([
-      GroupChatStoredFile.updateMany(
-        {
-          expiresAt: { $exists: true, $ne: null },
-          $or: [{ storageType: "oss" }, { ossKey: { $exists: true, $ne: "" } }],
-        },
-        {
-          $set: {
-            expiresAt: null,
+    const [groupFileResult, messageResult, imageHistoryResult] =
+      await Promise.all([
+        GroupChatStoredFile.updateMany(
+          {
+            expiresAt: { $exists: true, $ne: null },
+            $or: [
+              { storageType: "oss" },
+              { ossKey: { $exists: true, $ne: "" } },
+            ],
           },
-        },
-      ),
-      GroupChatMessage.updateMany(
-        {
-          type: "file",
-          "file.expiresAt": { $exists: true, $ne: null },
-        },
-        {
-          $set: {
-            "file.expiresAt": null,
+          {
+            $set: {
+              expiresAt: null,
+            },
           },
-        },
-      ),
-      GeneratedImageHistory.updateMany(
-        {
-          expiresAt: { $exists: true, $ne: null },
-          $or: [{ imageStorageType: "oss" }, { ossKey: { $exists: true, $ne: "" } }],
-        },
-        {
-          $set: {
-            expiresAt: null,
+        ),
+        GroupChatMessage.updateMany(
+          {
+            type: "file",
+            "file.expiresAt": { $exists: true, $ne: null },
           },
-        },
-      ),
-    ]);
+          {
+            $set: {
+              "file.expiresAt": null,
+            },
+          },
+        ),
+        GeneratedImageHistory.updateMany(
+          {
+            expiresAt: { $exists: true, $ne: null },
+            $or: [
+              { imageStorageType: "oss" },
+              { ossKey: { $exists: true, $ne: "" } },
+            ],
+          },
+          {
+            $set: {
+              expiresAt: null,
+            },
+          },
+        ),
+      ]);
 
     const groupUpdated = Number(groupFileResult?.modifiedCount || 0);
     const messageUpdated = Number(messageResult?.modifiedCount || 0);
@@ -11529,7 +12397,9 @@ function sanitizeGroupChatReactionEmoji(value) {
     .trim()
     .replace(/\s+/g, "");
   if (!safe) return "";
-  return Array.from(safe).slice(0, GROUP_CHAT_REACTION_EMOJI_MAX_SYMBOLS).join("");
+  return Array.from(safe)
+    .slice(0, GROUP_CHAT_REACTION_EMOJI_MAX_SYMBOLS)
+    .join("");
 }
 
 function normalizeGroupChatReactions(value) {
@@ -11548,7 +12418,11 @@ function normalizeGroupChatReactions(value) {
   });
 
   return Array.from(map.values())
-    .sort((a, b) => toGroupChatDateTimestamp(a.createdAt) - toGroupChatDateTimestamp(b.createdAt))
+    .sort(
+      (a, b) =>
+        toGroupChatDateTimestamp(a.createdAt) -
+        toGroupChatDateTimestamp(b.createdAt),
+    )
     .slice(-GROUP_CHAT_MAX_REACTIONS_PER_MESSAGE);
 }
 
@@ -11569,7 +12443,11 @@ function collectGroupChatMemberUserIds(rooms) {
 
 async function readGroupChatUsersByIds(userIds) {
   const ids = Array.from(
-    new Set((Array.isArray(userIds) ? userIds : []).map((id) => sanitizeId(id, "")).filter(Boolean)),
+    new Set(
+      (Array.isArray(userIds) ? userIds : [])
+        .map((id) => sanitizeId(id, ""))
+        .filter(Boolean),
+    ),
   ).slice(0, 120);
   if (ids.length === 0) return {};
   const users = await AuthUser.find(
@@ -11616,7 +12494,11 @@ function collectMentionNames(content) {
 async function resolveGroupChatReplyMeta({ roomId, rawReplyToMessageId }) {
   const replyToMessageId = sanitizeId(rawReplyToMessageId, "");
   const safeRoomId = sanitizeId(roomId, "");
-  if (!replyToMessageId || !isMongoObjectIdLike(replyToMessageId) || !isMongoObjectIdLike(safeRoomId)) {
+  if (
+    !replyToMessageId ||
+    !isMongoObjectIdLike(replyToMessageId) ||
+    !isMongoObjectIdLike(safeRoomId)
+  ) {
     return {
       replyToMessageId: "",
       replyPreviewText: "",
@@ -11648,7 +12530,11 @@ async function resolveGroupChatReplyMeta({ roomId, rawReplyToMessageId }) {
       ? "[图片]"
       : replyType === "file"
         ? "[文件]"
-      : sanitizeText(replyDoc?.content, "", GROUP_CHAT_REPLY_PREVIEW_MAX_LENGTH);
+        : sanitizeText(
+            replyDoc?.content,
+            "",
+            GROUP_CHAT_REPLY_PREVIEW_MAX_LENGTH,
+          );
 
   return {
     replyToMessageId,
@@ -11661,10 +12547,12 @@ async function resolveGroupChatReplyMeta({ roomId, rawReplyToMessageId }) {
 function buildGroupChatReadStateMap(readStates = [], roomMemberUserIds = []) {
   const memberSet = new Set(sanitizeGroupChatMemberUserIds(roomMemberUserIds));
   const map = new Map();
-  normalizeGroupChatReadStates(readStates, roomMemberUserIds).forEach((item) => {
-    if (!memberSet.has(item.userId)) return;
-    map.set(item.userId, item);
-  });
+  normalizeGroupChatReadStates(readStates, roomMemberUserIds).forEach(
+    (item) => {
+      if (!memberSet.has(item.userId)) return;
+      map.set(item.userId, item);
+    },
+  );
   return map;
 }
 
@@ -11699,7 +12587,10 @@ async function updateGroupChatRoomReadState({
   if (!normalizedRoom) return null;
   if (!normalizedRoom.memberUserIds.includes(safeUserId)) return room;
 
-  const readStateMap = buildGroupChatReadStateMap(room?.readStates, normalizedRoom.memberUserIds);
+  const readStateMap = buildGroupChatReadStateMap(
+    room?.readStates,
+    normalizedRoom.memberUserIds,
+  );
   const current = readStateMap.get(safeUserId);
   const currentTs = toGroupChatDateTimestamp(current?.lastReadAt);
   const nextTs = toGroupChatDateTimestamp(safeReadAtIso);
@@ -11732,7 +12623,11 @@ async function updateGroupChatRoomReadState({
   ).lean();
 }
 
-async function markGroupChatRoomReadByMessageId({ roomId, userId, messageId = "" }) {
+async function markGroupChatRoomReadByMessageId({
+  roomId,
+  userId,
+  messageId = "",
+}) {
   const safeRoomId = sanitizeId(roomId, "");
   const safeUserId = sanitizeId(userId, "");
   const safeMessageId = sanitizeId(messageId, "");
@@ -11765,8 +12660,13 @@ async function markGroupChatRoomReadByMessageId({ roomId, userId, messageId = ""
   });
   if (!updatedRoomDoc) return null;
 
-  const roomMemberUserIds = sanitizeGroupChatMemberUserIds(updatedRoomDoc?.memberUserIds);
-  const readState = normalizeGroupChatReadStates(updatedRoomDoc?.readStates, roomMemberUserIds).find((item) => {
+  const roomMemberUserIds = sanitizeGroupChatMemberUserIds(
+    updatedRoomDoc?.memberUserIds,
+  );
+  const readState = normalizeGroupChatReadStates(
+    updatedRoomDoc?.readStates,
+    roomMemberUserIds,
+  ).find((item) => {
     return item.userId === safeUserId;
   });
   if (readState) {
@@ -11877,14 +12777,22 @@ async function handleGroupChatWsAuth(socket, payload) {
   const token = String(payload?.token || "").trim();
   const verified = verifyToken(token);
   if (!verified || verified.scope !== "chat" || !verified.uid) {
-    sendGroupChatWsError(socket, "登录状态无效或已过期，请重新登录。", "unauthorized");
+    sendGroupChatWsError(
+      socket,
+      "登录状态无效或已过期，请重新登录。",
+      "unauthorized",
+    );
     closeGroupChatSocket(socket, 4003, "unauthorized");
     return;
   }
 
   const user = await AuthUser.findById(verified.uid).lean();
   if (!user) {
-    sendGroupChatWsError(socket, "账号不存在，请重新登录。", "account_not_found");
+    sendGroupChatWsError(
+      socket,
+      "账号不存在，请重新登录。",
+      "account_not_found",
+    );
     closeGroupChatSocket(socket, 4003, "account_not_found");
     return;
   }
@@ -11941,7 +12849,11 @@ async function handleGroupChatWsJoinRoom(socket, payload) {
     memberUserIds: meta.userId,
   });
   if (!hasMembership) {
-    sendGroupChatWsError(socket, "你不在该群聊中，无法订阅消息。", "forbidden_room");
+    sendGroupChatWsError(
+      socket,
+      "你不在该群聊中，无法订阅消息。",
+      "forbidden_room",
+    );
     return;
   }
 
@@ -11984,7 +12896,8 @@ function readGroupChatWsPayload(rawData) {
   if (!text) return null;
   try {
     const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return null;
     return parsed;
   } catch {
     return null;
@@ -12039,7 +12952,12 @@ function attachSocketToGroupChatRoom(socket, roomId) {
       roomOnlineCounter = new Map();
       groupChatWsOnlineCountsByRoom.set(safeRoomId, roomOnlineCounter);
     }
-    const previousCount = sanitizeRuntimeInteger(roomOnlineCounter.get(meta.userId), 0, 0, 9999);
+    const previousCount = sanitizeRuntimeInteger(
+      roomOnlineCounter.get(meta.userId),
+      0,
+      0,
+      9999,
+    );
     roomOnlineCounter.set(meta.userId, previousCount + 1);
     if (previousCount === 0) {
       broadcastGroupChatMemberPresenceUpdated(safeRoomId);
@@ -12066,7 +12984,12 @@ function detachSocketFromGroupChatRoom(socket, roomId) {
 
   const roomOnlineCounter = groupChatWsOnlineCountsByRoom.get(safeRoomId);
   if (!roomOnlineCounter) return;
-  const previousCount = sanitizeRuntimeInteger(roomOnlineCounter.get(meta.userId), 0, 0, 9999);
+  const previousCount = sanitizeRuntimeInteger(
+    roomOnlineCounter.get(meta.userId),
+    0,
+    0,
+    9999,
+  );
   const nextCount = Math.max(0, previousCount - 1);
   if (nextCount <= 0) {
     roomOnlineCounter.delete(meta.userId);
@@ -12082,17 +13005,21 @@ function detachSocketFromGroupChatRoom(socket, roomId) {
 function detachSocketFromAllGroupChatRooms(socket) {
   const meta = groupChatWsMetaBySocket.get(socket);
   if (!meta) {
-    Array.from(groupChatWsRoomSockets.entries()).forEach(([roomId, sockets]) => {
-      sockets.delete(socket);
-      if (sockets.size === 0) {
-        groupChatWsRoomSockets.delete(roomId);
-      }
-    });
+    Array.from(groupChatWsRoomSockets.entries()).forEach(
+      ([roomId, sockets]) => {
+        sockets.delete(socket);
+        if (sockets.size === 0) {
+          groupChatWsRoomSockets.delete(roomId);
+        }
+      },
+    );
     return;
   }
 
   const joinedRoomIds = Array.from(meta.joinedRooms);
-  joinedRoomIds.forEach((roomId) => detachSocketFromGroupChatRoom(socket, roomId));
+  joinedRoomIds.forEach((roomId) =>
+    detachSocketFromGroupChatRoom(socket, roomId),
+  );
 }
 
 function clearGroupChatRoomSockets(roomId) {
@@ -12166,10 +13093,15 @@ function broadcastGroupChatMemberPresenceUpdated(roomId) {
 async function broadcastGroupChatRoomReadStateUpdated(roomId, readState) {
   const safeRoomId = sanitizeId(roomId, "");
   if (!safeRoomId) return;
-  const normalizedReadStates = normalizeGroupChatReadStates([readState], [sanitizeId(readState?.userId, "")]);
+  const normalizedReadStates = normalizeGroupChatReadStates(
+    [readState],
+    [sanitizeId(readState?.userId, "")],
+  );
   const normalizedReadState = normalizedReadStates[0];
   if (!normalizedReadState) return;
-  const room = await GroupChatRoom.findById(safeRoomId, { ownerUserId: 1 }).lean();
+  const room = await GroupChatRoom.findById(safeRoomId, {
+    ownerUserId: 1,
+  }).lean();
   const ownerUserId = sanitizeId(room?.ownerUserId, "");
   if (!ownerUserId) return;
   sendGroupChatWsPayloadToUserInRoom(safeRoomId, ownerUserId, {
@@ -12220,7 +13152,10 @@ function broadcastGroupChatMessageDeleted(roomId, messageId) {
 }
 
 function broadcastGroupChatRoomUpdated(roomId, room) {
-  const rawRoom = room && typeof room === "object" && room.id ? { ...room, _id: room.id } : room;
+  const rawRoom =
+    room && typeof room === "object" && room.id
+      ? { ...room, _id: room.id }
+      : room;
   const normalizedRoom = normalizeGroupChatRoomDoc(rawRoom);
   if (!normalizedRoom) return;
   broadcastGroupChatWsPayload(roomId, {
@@ -12235,7 +13170,8 @@ async function assertPartyAgentPanelRoomAccess(req, res) {
     .trim()
     .toLowerCase();
   const roomId = sanitizeId(req.body?.partyRoomId, "");
-  const requiresPartyRoomGuard = requestSource === "party-agent-panel" || !!roomId;
+  const requiresPartyRoomGuard =
+    requestSource === "party-agent-panel" || !!roomId;
 
   if (!requiresPartyRoomGuard) return null;
   if (requestSource === "party-agent-panel" && !roomId) {
@@ -12253,7 +13189,10 @@ async function assertPartyAgentPanelRoomAccess(req, res) {
     return false;
   }
 
-  const room = await GroupChatRoom.findOne({ _id: roomId, memberUserIds: userId }).lean();
+  const room = await GroupChatRoom.findOne({
+    _id: roomId,
+    memberUserIds: userId,
+  }).lean();
   const normalizedRoom = normalizeGroupChatRoomDoc(room, {
     viewerUserId: userId,
   });
@@ -12309,7 +13248,9 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`API server listening on http://localhost:${port}`);
-    console.log(`Group chat websocket listening on ws://localhost:${port}${GROUP_CHAT_WS_PATH}`);
+    console.log(
+      `Group chat websocket listening on ws://localhost:${port}${GROUP_CHAT_WS_PATH}`,
+    );
   });
 
   void runStartupMaintenanceTasks();
@@ -12415,7 +13356,10 @@ async function ensureGroupChatStoredFileIndexes() {
   await ensureGroupChatStoredFileTtlIndex(collection, existingIndexes);
 }
 
-function hasEquivalentMongoIndex(existingIndexes, { key, unique, expireAfterSeconds }) {
+function hasEquivalentMongoIndex(
+  existingIndexes,
+  { key, unique, expireAfterSeconds },
+) {
   const list = Array.isArray(existingIndexes) ? existingIndexes : [];
   return list.some((index) => {
     if (!hasSameMongoIndexKey(index?.key, key)) return false;
@@ -12464,7 +13408,10 @@ function isMongoNamespaceMissingError(error) {
     .trim()
     .toLowerCase();
   if (!message) return false;
-  return message.includes("ns does not exist") || message.includes("namespace not found");
+  return (
+    message.includes("ns does not exist") ||
+    message.includes("namespace not found")
+  );
 }
 
 async function ensureUploadedFileContextTtlIndex(collection, existingIndexes) {
@@ -12501,7 +13448,10 @@ async function ensureUploadedFileContextTtlIndex(collection, existingIndexes) {
   );
 }
 
-async function ensureGeneratedImageHistoryTtlIndex(collection, existingIndexes) {
+async function ensureGeneratedImageHistoryTtlIndex(
+  collection,
+  existingIndexes,
+) {
   const ttlSpec = { key: { expiresAt: 1 }, expireAfterSeconds: 0 };
   if (hasEquivalentMongoIndex(existingIndexes, ttlSpec)) {
     return;
@@ -12581,7 +13531,7 @@ function readFixedAdminAccountsFromEnv() {
     parsed = JSON.parse(raw);
   } catch {
     console.warn(
-      "[auth] FIXED_ADMIN_ACCOUNTS 解析失败：请使用 JSON 数组格式（例如 [{\"username\":\"admin\",\"password\":\"secret\"}]）。",
+      '[auth] FIXED_ADMIN_ACCOUNTS 解析失败：请使用 JSON 数组格式（例如 [{"username":"admin","password":"secret"}]）。',
     );
     return [];
   }
@@ -12593,7 +13543,8 @@ function readFixedAdminAccountsFromEnv() {
 
   const deduped = new Map();
   parsed.forEach((item) => {
-    const username = normalizeUsername(item?.username) || String(item?.username || "").trim();
+    const username =
+      normalizeUsername(item?.username) || String(item?.username || "").trim();
     const password = String(item?.password || "");
     if (!username || !password) return;
     const usernameKey = toUsernameKey(username);
@@ -12649,7 +13600,9 @@ function isFixedAdminUsernameKey(usernameKey) {
 }
 
 function isFixedAdminUser(user) {
-  return !!user && user.role === "admin" && isFixedAdminUsernameKey(user.usernameKey);
+  return (
+    !!user && user.role === "admin" && isFixedAdminUsernameKey(user.usernameKey)
+  );
 }
 
 function isFixedStudentUsernameKey(usernameKey) {
@@ -12675,9 +13628,7 @@ function readLockedTeacherScopeKey(value) {
 }
 
 function normalizeClassNameForTeacherScope(value) {
-  return sanitizeText(value, "", 40)
-    .replace(/\s+/g, "")
-    .replace(/班/g, "");
+  return sanitizeText(value, "", 40).replace(/\s+/g, "").replace(/班/g, "");
 }
 
 function resolveTeacherScopeKeyByClassName(value) {
@@ -12702,7 +13653,9 @@ function resolveTeacherScopeKeyByClassName(value) {
 }
 
 function isJiaoji231ClassName(value) {
-  return resolveTeacherScopeKeyByClassName(value) === YANG_JUNFENG_TEACHER_SCOPE_KEY;
+  return (
+    resolveTeacherScopeKeyByClassName(value) === YANG_JUNFENG_TEACHER_SCOPE_KEY
+  );
 }
 
 function resolveLoginLockedTeacherScopeKey(user) {
@@ -12743,7 +13696,9 @@ async function verifyPassword(password, storedHash) {
 
 async function ensureFixedAdminAccounts() {
   for (const account of FIXED_ADMIN_ACCOUNTS) {
-    const username = normalizeUsername(account?.username) || String(account?.username || "").trim();
+    const username =
+      normalizeUsername(account?.username) ||
+      String(account?.username || "").trim();
     const password = String(account?.password || "");
     if (!username || !password) continue;
 
@@ -12783,15 +13738,19 @@ async function ensureFixedAdminAccounts() {
 
 async function ensureFixedStudentAccounts() {
   for (const account of FIXED_STUDENT_ACCOUNTS) {
-    const username = normalizeUsername(account?.username) || String(account?.username || "").trim();
+    const username =
+      normalizeUsername(account?.username) ||
+      String(account?.username || "").trim();
     const password = String(account?.password || "");
     const className = sanitizeText(account?.className, "", 40);
     const studentId = sanitizeText(account?.studentId, "", 20);
     const grade = sanitizeText(account?.grade, "8年级", 20);
     const lockedTeacherScopeKey = sanitizeTeacherScopeKey(
-      account?.requiredTeacherScopeKey || FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
+      account?.requiredTeacherScopeKey ||
+        FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
     );
-    if (!username || !password || !studentId || !lockedTeacherScopeKey) continue;
+    if (!username || !password || !studentId || !lockedTeacherScopeKey)
+      continue;
 
     const usernameKey = toUsernameKey(username);
     const existing = await AuthUser.findOne({ usernameKey });
@@ -12832,11 +13791,14 @@ async function ensureFixedStudentAccounts() {
       existing.passwordPlain !== password ||
       !hashMatches ||
       String(existing.accountTag || "").trim() !== FIXED_STUDENT_ACCOUNT_TAG ||
-      readLockedTeacherScopeKey(existing.lockedTeacherScopeKey) !== lockedTeacherScopeKey ||
+      readLockedTeacherScopeKey(existing.lockedTeacherScopeKey) !==
+        lockedTeacherScopeKey ||
       nextProfile.name !== sanitizeText(existing.profile?.name, "", 20) ||
-      nextProfile.studentId !== sanitizeText(existing.profile?.studentId, "", 20) ||
+      nextProfile.studentId !==
+        sanitizeText(existing.profile?.studentId, "", 20) ||
       nextProfile.grade !== sanitizeText(existing.profile?.grade, "", 20) ||
-      nextProfile.className !== sanitizeText(existing.profile?.className, "", 40);
+      nextProfile.className !==
+        sanitizeText(existing.profile?.className, "", 40);
     if (!needsUpdate) continue;
 
     existing.username = username;
@@ -12853,7 +13815,9 @@ async function ensureFixedStudentAccounts() {
 
 function signToken(payload, ttlSeconds) {
   const now = Date.now();
-  const safeTtl = Number.isFinite(ttlSeconds) ? ttlSeconds : AUTH_TOKEN_TTL_SECONDS;
+  const safeTtl = Number.isFinite(ttlSeconds)
+    ? ttlSeconds
+    : AUTH_TOKEN_TTL_SECONDS;
   const data = {
     ...payload,
     iat: now,
@@ -12967,7 +13931,13 @@ function buildAdminChatsExportTxt(
   users.forEach((user, userIndex) => {
     const userId = String(user?._id || "");
     const state = stateByUserId.get(userId);
-    appendUserChatSection(lines, user, state, userIndex + 1, safeTeacherScopeKey);
+    appendUserChatSection(
+      lines,
+      user,
+      state,
+      userIndex + 1,
+      safeTeacherScopeKey,
+    );
     lines.push("");
   });
 
@@ -13007,7 +13977,9 @@ function appendUserChatSection(
     state?.sessionMessages && typeof state.sessionMessages === "object"
       ? state.sessionMessages
       : {};
-  const groupNameById = new Map(groups.map((group) => [group.id, group.name || group.id]));
+  const groupNameById = new Map(
+    groups.map((group) => [group.id, group.name || group.id]),
+  );
 
   lines.push(`用户 ${userIndex}`);
   lines.push(`账号: ${user?.username || "-"}`);
@@ -13035,7 +14007,9 @@ function appendUserChatSection(
   lines.push(`分组数: ${groups.length}`);
   if (groups.length > 0) {
     groups.forEach((group, idx) => {
-      lines.push(`  ${idx + 1}. ${group.name || "未命名分组"} (ID: ${group.id || "-"})`);
+      lines.push(
+        `  ${idx + 1}. ${group.name || "未命名分组"} (ID: ${group.id || "-"})`,
+      );
       if (group.description) {
         lines.push(`     描述: ${group.description}`);
       }
@@ -13054,7 +14028,9 @@ function appendUserChatSection(
     const groupName = session.groupId
       ? groupNameById.get(session.groupId) || session.groupId
       : "未分组";
-    const msgs = Array.isArray(sessionMessages[session.id]) ? sessionMessages[session.id] : [];
+    const msgs = Array.isArray(sessionMessages[session.id])
+      ? sessionMessages[session.id]
+      : [];
 
     lines.push(
       `  会话 ${sessionIndex + 1}: ${session.title || "新对话"} (ID: ${session.id || "-"})`,
@@ -13073,11 +14049,14 @@ function appendUserChatSection(
       const role = normalizeExportRole(msg?.role);
       lines.push(`    消息 ${msgIndex + 1} (${role})`);
 
-      if (msg?.askedAt) lines.push(`      askedAt: ${formatDisplayTime(msg.askedAt)}`);
-      if (msg?.startedAt) lines.push(`      startedAt: ${formatDisplayTime(msg.startedAt)}`);
+      if (msg?.askedAt)
+        lines.push(`      askedAt: ${formatDisplayTime(msg.askedAt)}`);
+      if (msg?.startedAt)
+        lines.push(`      startedAt: ${formatDisplayTime(msg.startedAt)}`);
       if (msg?.firstTextAt)
         lines.push(`      firstTextAt: ${formatDisplayTime(msg.firstTextAt)}`);
-      if (msg?.regenerateOf) lines.push(`      regenerateOf: ${msg.regenerateOf}`);
+      if (msg?.regenerateOf)
+        lines.push(`      regenerateOf: ${msg.regenerateOf}`);
 
       if (Array.isArray(msg?.attachments) && msg.attachments.length > 0) {
         lines.push("      附件:");
@@ -13092,15 +14071,24 @@ function appendUserChatSection(
       }
 
       if (role === "assistant") {
-        const runtime = msg?.runtime && typeof msg.runtime === "object" ? msg.runtime : {};
+        const runtime =
+          msg?.runtime && typeof msg.runtime === "object" ? msg.runtime : {};
         lines.push("      运行参数:");
-        lines.push(`        智能体: ${runtime.agentName || "-"} (${runtime.agentId || "-"})`);
+        lines.push(
+          `        智能体: ${runtime.agentName || "-"} (${runtime.agentId || "-"})`,
+        );
         lines.push(`        模型: ${runtime.model || "-"}`);
         lines.push(`        服务商: ${runtime.provider || "-"}`);
-        lines.push(`        temperature: ${formatMaybeNumber(runtime.temperature)}`);
+        lines.push(
+          `        temperature: ${formatMaybeNumber(runtime.temperature)}`,
+        );
         lines.push(`        topP: ${formatMaybeNumber(runtime.topP)}`);
-        lines.push(`        reasoningRequested: ${runtime.reasoningRequested || "-"}`);
-        lines.push(`        reasoningApplied: ${runtime.reasoningApplied || "-"}`);
+        lines.push(
+          `        reasoningRequested: ${runtime.reasoningRequested || "-"}`,
+        );
+        lines.push(
+          `        reasoningApplied: ${runtime.reasoningApplied || "-"}`,
+        );
         lines.push(`      用户反馈: ${normalizeFeedbackLabel(msg?.feedback)}`);
       }
 
@@ -13123,9 +14111,12 @@ function appendIndentedBlock(lines, text, spaces = 6) {
     lines.push(`${indent}-`);
     return;
   }
-  source.replace(/\r/g, "").split("\n").forEach((line) => {
-    lines.push(`${indent}${line}`);
-  });
+  source
+    .replace(/\r/g, "")
+    .split("\n")
+    .forEach((line) => {
+      lines.push(`${indent}${line}`);
+    });
 }
 
 function formatDisplayTime(value) {
@@ -13209,7 +14200,10 @@ function buildZipBuffer(files) {
 
   safeFiles.forEach((item, index) => {
     const fallbackName = `file-${index + 1}.txt`;
-    const safeName = sanitizeZipEntryName(item?.name || fallbackName, fallbackName);
+    const safeName = sanitizeZipEntryName(
+      item?.name || fallbackName,
+      fallbackName,
+    );
     const dataBuffer =
       item?.content instanceof Buffer
         ? item.content
@@ -13258,7 +14252,10 @@ function buildZipBuffer(files) {
   });
 
   const centralDirOffset = localOffset;
-  const centralDirSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const centralDirSize = centralParts.reduce(
+    (sum, part) => sum + part.length,
+    0,
+  );
   const totalEntries = Math.min(safeFiles.length, 0xffff);
 
   const eocd = Buffer.alloc(22);
@@ -13634,10 +14631,12 @@ export {
   parseGeneratedImageDataUrl,
   buildGeneratedImageHistoryContentPath,
   buildAdminGeneratedImageHistoryContentPath,
+  buildAdminGeneratedImageHistoryThumbnailPath,
   parseTeacherScopedStorageUserId,
   resolveGeneratedImageOutputUrl,
   fetchGeneratedImageBinaryFromUrl,
   buildGeneratedImageBinaryPayload,
+  ensureGeneratedImageHistoryThumbnail,
   saveGeneratedImageHistory,
   toGeneratedImageHistoryItem,
   toAdminGeneratedImageHistoryItem,

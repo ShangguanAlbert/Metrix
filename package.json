@@ -9,9 +9,11 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "node server/index.js",
-    "dev:web": "vite"
+    "dev:web": "vite",
+    "backfill:image-thumbnails": "node scripts/backfill-generated-image-thumbnails.mjs"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
     "ali-oss": "^6.23.0",
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",

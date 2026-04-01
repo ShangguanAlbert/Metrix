@@ -300,6 +300,7 @@ export function registerAdminRoutes(app, deps) {
     resolveGeneratedImageOutputUrl,
     fetchGeneratedImageBinaryFromUrl,
     buildGeneratedImageBinaryPayload,
+    ensureGeneratedImageHistoryThumbnail,
     saveGeneratedImageHistory,
     toGeneratedImageHistoryItem,
     toAdminGeneratedImageHistoryItem,
@@ -677,7 +678,11 @@ export function registerAdminRoutes(app, deps) {
   } = deps;
 
   const TERMINAL_ADMIN_USERNAME_KEY = toUsernameKey("上官福泽");
-  const USER_DIRECTORY_DEFAULT_TARGET_CLASSES = Object.freeze(["教技231", "810班", "811班"]);
+  const USER_DIRECTORY_DEFAULT_TARGET_CLASSES = Object.freeze([
+    "教技231",
+    "810班",
+    "811班",
+  ]);
   const USER_DIRECTORY_DEFAULT_TARGET_CLASS_KEYS = new Set(
     USER_DIRECTORY_DEFAULT_TARGET_CLASSES.map((name) =>
       String(name || "")
@@ -695,7 +700,12 @@ export function registerAdminRoutes(app, deps) {
   });
   const userDirectoryClassCategorySchema = new mongoose.Schema(
     {
-      key: { type: String, default: ADMIN_CONFIG_KEY, unique: true, index: true },
+      key: {
+        type: String,
+        default: ADMIN_CONFIG_KEY,
+        unique: true,
+        index: true,
+      },
       classNames: { type: [String], default: () => [] },
     },
     {
@@ -705,7 +715,10 @@ export function registerAdminRoutes(app, deps) {
   );
   const UserDirectoryClassCategory =
     mongoose.models.AdminUserDirectoryClassCategory ||
-    mongoose.model("AdminUserDirectoryClassCategory", userDirectoryClassCategorySchema);
+    mongoose.model(
+      "AdminUserDirectoryClassCategory",
+      userDirectoryClassCategorySchema,
+    );
 
   function isTerminalAdminAccount(admin) {
     return toUsernameKey(admin?.username) === TERMINAL_ADMIN_USERNAME_KEY;
@@ -746,18 +759,26 @@ export function registerAdminRoutes(app, deps) {
   }
 
   async function readUserDirectoryTargetClasses() {
-    const doc = await UserDirectoryClassCategory.findOne({ key: ADMIN_CONFIG_KEY }).lean();
+    const doc = await UserDirectoryClassCategory.findOne({
+      key: ADMIN_CONFIG_KEY,
+    }).lean();
     return mergeDefaultUserDirectoryTargetClasses(doc?.classNames);
   }
 
-  function resolveUserDirectoryClassBucket(className, targetClassKeys = USER_DIRECTORY_DEFAULT_TARGET_CLASS_KEYS) {
+  function resolveUserDirectoryClassBucket(
+    className,
+    targetClassKeys = USER_DIRECTORY_DEFAULT_TARGET_CLASS_KEYS,
+  ) {
     const normalized = normalizeClassNameKey(className);
     if (!normalized) return "unassigned";
     if (targetClassKeys.has(normalized)) return "target";
     return "other";
   }
 
-  function buildUserDirectoryItem(user, targetClassKeys = USER_DIRECTORY_DEFAULT_TARGET_CLASS_KEYS) {
+  function buildUserDirectoryItem(
+    user,
+    targetClassKeys = USER_DIRECTORY_DEFAULT_TARGET_CLASS_KEYS,
+  ) {
     const profile = sanitizeUserProfile(user?.profile);
     const role = sanitizeText(user?.role, "user", 20) || "user";
     return {
@@ -766,7 +787,9 @@ export function registerAdminRoutes(app, deps) {
       usernameKey: toUsernameKey(user?.username || user?.usernameKey),
       role,
       accountTag: sanitizeText(user?.accountTag, "", 40),
-      lockedTeacherScopeKey: readLockedTeacherScopeKey(user?.lockedTeacherScopeKey),
+      lockedTeacherScopeKey: readLockedTeacherScopeKey(
+        user?.lockedTeacherScopeKey,
+      ),
       profile: {
         name: sanitizeText(profile?.name, "", 20),
         studentId: sanitizeText(profile?.studentId, "", 20),
@@ -774,7 +797,10 @@ export function registerAdminRoutes(app, deps) {
         grade: sanitizeText(profile?.grade, "", 20),
         className: sanitizeText(profile?.className, "", 40),
       },
-      classBucket: resolveUserDirectoryClassBucket(profile?.className, targetClassKeys),
+      classBucket: resolveUserDirectoryClassBucket(
+        profile?.className,
+        targetClassKeys,
+      ),
       createdAt: sanitizeIsoDate(user?.createdAt),
       updatedAt: sanitizeIsoDate(user?.updatedAt),
     };
@@ -790,7 +816,11 @@ export function registerAdminRoutes(app, deps) {
     return new RegExp(`^${escapeRegexForQuery(safeUserId)}(?:__teacher__.+)?$`);
   }
 
-  function remapTeacherScopedStorageUserId(storageUserId, fromUserId, toUserId) {
+  function remapTeacherScopedStorageUserId(
+    storageUserId,
+    fromUserId,
+    toUserId,
+  ) {
     const fromId = sanitizeId(fromUserId, "");
     const toId = sanitizeId(toUserId, "");
     if (!fromId || !toId) return "";
@@ -802,11 +832,18 @@ export function registerAdminRoutes(app, deps) {
   async function remapCollectionStorageUserIds(Model, fromUserId, toUserId) {
     const scopedRegex = buildScopedUserIdRegex(fromUserId);
     if (!scopedRegex) return 0;
-    const docs = await Model.find({ userId: scopedRegex }, { _id: 1, userId: 1 }).lean();
+    const docs = await Model.find(
+      { userId: scopedRegex },
+      { _id: 1, userId: 1 },
+    ).lean();
     if (!Array.isArray(docs) || docs.length === 0) return 0;
     const ops = docs
       .map((doc) => {
-        const nextUserId = remapTeacherScopedStorageUserId(doc?.userId, fromUserId, toUserId);
+        const nextUserId = remapTeacherScopedStorageUserId(
+          doc?.userId,
+          fromUserId,
+          toUserId,
+        );
         if (!nextUserId) return null;
         return {
           updateOne: {
@@ -851,30 +888,44 @@ export function registerAdminRoutes(app, deps) {
     }
 
     const mutedMemberUserIds = sanitizeGroupChatMutedMemberUserIds(
-      (Array.isArray(source?.mutedMemberUserIds) ? source.mutedMemberUserIds : []).map((userId) =>
-        sanitizeId(userId, "") === fromId ? toId : userId,
-      ),
+      (Array.isArray(source?.mutedMemberUserIds)
+        ? source.mutedMemberUserIds
+        : []
+      ).map((userId) => (sanitizeId(userId, "") === fromId ? toId : userId)),
       dedupedMemberUserIds,
       ownerUserId,
     );
 
     const readStateMap = new Map();
-    (Array.isArray(source?.readStates) ? source.readStates : []).forEach((state) => {
-      const nextUserId = sanitizeId(state?.userId, "") === fromId ? toId : sanitizeId(state?.userId, "");
-      if (!nextUserId || !memberSet.has(nextUserId)) return;
-      const current = readStateMap.get(nextUserId);
-      const currentTime = Date.parse(String(current?.updatedAt || current?.lastReadAt || "")) || 0;
-      const nextTime = Date.parse(String(state?.updatedAt || state?.lastReadAt || "")) || 0;
-      if (!current || nextTime >= currentTime) {
-        readStateMap.set(nextUserId, {
-          userId: nextUserId,
-          lastReadMessageId: sanitizeId(state?.lastReadMessageId, ""),
-          lastReadAt: sanitizeIsoDate(state?.lastReadAt),
-          updatedAt: sanitizeIsoDate(state?.updatedAt || state?.lastReadAt) || new Date().toISOString(),
-        });
-      }
-    });
-    const readStates = normalizeGroupChatReadStates(Array.from(readStateMap.values()), dedupedMemberUserIds);
+    (Array.isArray(source?.readStates) ? source.readStates : []).forEach(
+      (state) => {
+        const nextUserId =
+          sanitizeId(state?.userId, "") === fromId
+            ? toId
+            : sanitizeId(state?.userId, "");
+        if (!nextUserId || !memberSet.has(nextUserId)) return;
+        const current = readStateMap.get(nextUserId);
+        const currentTime =
+          Date.parse(String(current?.updatedAt || current?.lastReadAt || "")) ||
+          0;
+        const nextTime =
+          Date.parse(String(state?.updatedAt || state?.lastReadAt || "")) || 0;
+        if (!current || nextTime >= currentTime) {
+          readStateMap.set(nextUserId, {
+            userId: nextUserId,
+            lastReadMessageId: sanitizeId(state?.lastReadMessageId, ""),
+            lastReadAt: sanitizeIsoDate(state?.lastReadAt),
+            updatedAt:
+              sanitizeIsoDate(state?.updatedAt || state?.lastReadAt) ||
+              new Date().toISOString(),
+          });
+        }
+      },
+    );
+    const readStates = normalizeGroupChatReadStates(
+      Array.from(readStateMap.values()),
+      dedupedMemberUserIds,
+    );
 
     return {
       ownerUserId,
@@ -888,7 +939,13 @@ export function registerAdminRoutes(app, deps) {
   async function mergeChatStateDocs(sourceUserId, targetUserId) {
     const sourceId = sanitizeId(sourceUserId, "");
     const targetId = sanitizeId(targetUserId, "");
-    if (!sourceId || !targetId || sourceId === targetId || !isMongoObjectIdLike(sourceId) || !isMongoObjectIdLike(targetId)) {
+    if (
+      !sourceId ||
+      !targetId ||
+      sourceId === targetId ||
+      !isMongoObjectIdLike(sourceId) ||
+      !isMongoObjectIdLike(targetId)
+    ) {
       return "skipped";
     }
     const sourceObjectId = new mongoose.Types.ObjectId(sourceId);
@@ -989,7 +1046,9 @@ export function registerAdminRoutes(app, deps) {
 
     try {
       const targetClasses = await readUserDirectoryTargetClasses();
-      const targetClassKeys = new Set(targetClasses.map((item) => normalizeClassNameKey(item)));
+      const targetClassKeys = new Set(
+        targetClasses.map((item) => normalizeClassNameKey(item)),
+      );
       const users = await AuthUser.find({})
         .sort({ role: 1, createdAt: 1, _id: 1 })
         .lean();
@@ -1039,56 +1098,64 @@ export function registerAdminRoutes(app, deps) {
     }
   });
 
-  app.post("/api/auth/admin/user-directory/class-categories", async (req, res) => {
-    const admin = await authenticateAdminRequest(req, res);
-    if (!admin) return;
-    if (!isTerminalAdminAccount(admin)) {
-      res.status(403).json({ error: "仅终端管理员可新增班级分类。" });
-      return;
-    }
-
-    const className = sanitizeText(req.body?.className, "", 40);
-    const classKey = normalizeClassNameKey(className);
-    if (!className || !classKey) {
-      res.status(400).json({ error: "请输入有效的班级名称。" });
-      return;
-    }
-
-    try {
-      const currentClasses = await readUserDirectoryTargetClasses();
-      const keySet = new Set(currentClasses.map((item) => normalizeClassNameKey(item)));
-      if (keySet.has(classKey)) {
-        res.status(409).json({ error: "该班级分类已存在。" });
+  app.post(
+    "/api/auth/admin/user-directory/class-categories",
+    async (req, res) => {
+      const admin = await authenticateAdminRequest(req, res);
+      if (!admin) return;
+      if (!isTerminalAdminAccount(admin)) {
+        res.status(403).json({ error: "仅终端管理员可新增班级分类。" });
         return;
       }
 
-      const nextClasses = mergeDefaultUserDirectoryTargetClasses([...currentClasses, className]);
-      await UserDirectoryClassCategory.findOneAndUpdate(
-        { key: ADMIN_CONFIG_KEY },
-        {
-          $set: {
-            key: ADMIN_CONFIG_KEY,
-            classNames: nextClasses,
-          },
-        },
-        {
-          upsert: true,
-          new: true,
-          setDefaultsOnInsert: true,
-        },
-      );
+      const className = sanitizeText(req.body?.className, "", 40);
+      const classKey = normalizeClassNameKey(className);
+      if (!className || !classKey) {
+        res.status(400).json({ error: "请输入有效的班级名称。" });
+        return;
+      }
 
-      res.status(201).json({
-        ok: true,
-        updatedAt: new Date().toISOString(),
-        targetClasses: nextClasses,
-      });
-    } catch (error) {
-      res.status(500).json({
-        error: error?.message || "新增班级分类失败，请稍后重试。",
-      });
-    }
-  });
+      try {
+        const currentClasses = await readUserDirectoryTargetClasses();
+        const keySet = new Set(
+          currentClasses.map((item) => normalizeClassNameKey(item)),
+        );
+        if (keySet.has(classKey)) {
+          res.status(409).json({ error: "该班级分类已存在。" });
+          return;
+        }
+
+        const nextClasses = mergeDefaultUserDirectoryTargetClasses([
+          ...currentClasses,
+          className,
+        ]);
+        await UserDirectoryClassCategory.findOneAndUpdate(
+          { key: ADMIN_CONFIG_KEY },
+          {
+            $set: {
+              key: ADMIN_CONFIG_KEY,
+              classNames: nextClasses,
+            },
+          },
+          {
+            upsert: true,
+            new: true,
+            setDefaultsOnInsert: true,
+          },
+        );
+
+        res.status(201).json({
+          ok: true,
+          updatedAt: new Date().toISOString(),
+          targetClasses: nextClasses,
+        });
+      } catch (error) {
+        res.status(500).json({
+          error: error?.message || "新增班级分类失败，请稍后重试。",
+        });
+      }
+    },
+  );
 
   app.post("/api/auth/admin/user-directory/users", async (req, res) => {
     const admin = await authenticateAdminRequest(req, res);
@@ -1109,7 +1176,9 @@ export function registerAdminRoutes(app, deps) {
       bindTeacherRaw === "yes";
     let lockedTeacherScopeKey = "";
     if (bindTeacher) {
-      const lockedTeacherScopeInput = String(payload?.lockedTeacherScopeKey || "").trim();
+      const lockedTeacherScopeInput = String(
+        payload?.lockedTeacherScopeKey || "",
+      ).trim();
       if (!lockedTeacherScopeInput) {
         res.status(400).json({ error: "请选择要绑定的老师。" });
         return;
@@ -1117,7 +1186,9 @@ export function registerAdminRoutes(app, deps) {
       lockedTeacherScopeKey = sanitizeTeacherScopeKey(lockedTeacherScopeInput);
     }
 
-    const username = normalizeUsername(payload?.username) || sanitizeText(payload?.username, "", 64);
+    const username =
+      normalizeUsername(payload?.username) ||
+      sanitizeText(payload?.username, "", 64);
     if (!username) {
       res.status(400).json({ error: "账号不能为空或格式不合法。" });
       return;
@@ -1128,11 +1199,15 @@ export function registerAdminRoutes(app, deps) {
       return;
     }
     if (isReservedAdminUsernameKey(usernameKey)) {
-      res.status(400).json({ error: "该账号为管理员保留账号，请使用其他账号名。" });
+      res
+        .status(400)
+        .json({ error: "该账号为管理员保留账号，请使用其他账号名。" });
       return;
     }
     if (isFixedStudentUsernameKey(usernameKey)) {
-      res.status(400).json({ error: "该账号名已在系统预置学生账号中使用，请更换后重试。" });
+      res
+        .status(400)
+        .json({ error: "该账号名已在系统预置学生账号中使用，请更换后重试。" });
       return;
     }
 
@@ -1210,7 +1285,9 @@ export function registerAdminRoutes(app, deps) {
     }
 
     const payload = req.body && typeof req.body === "object" ? req.body : {};
-    const username = normalizeUsername(payload?.username) || sanitizeText(payload?.username, "", 64);
+    const username =
+      normalizeUsername(payload?.username) ||
+      sanitizeText(payload?.username, "", 64);
     if (!username) {
       res.status(400).json({ error: "账号不能为空或格式不合法。" });
       return;
@@ -1230,7 +1307,9 @@ export function registerAdminRoutes(app, deps) {
       const currentAdminId = sanitizeId(admin?._id, "");
       const targetUserId = sanitizeId(user?._id, "");
       if (targetUserId && currentAdminId && targetUserId === currentAdminId) {
-        res.status(403).json({ error: "不支持修改当前登录账号，请联系其他终端管理员处理。" });
+        res.status(403).json({
+          error: "不支持修改当前登录账号，请联系其他终端管理员处理。",
+        });
         return;
       }
       if (isTerminalAdminAccount(user)) {
@@ -1270,174 +1349,206 @@ export function registerAdminRoutes(app, deps) {
     }
   });
 
-  app.delete("/api/auth/admin/user-directory/users/:userId", async (req, res) => {
-    const admin = await authenticateAdminRequest(req, res);
-    if (!admin) return;
-    if (!isTerminalAdminAccount(admin)) {
-      res.status(403).json({ error: "仅终端管理员可删除账号。" });
-      return;
-    }
-
-    const userId = sanitizeId(req.params?.userId, "");
-    if (!userId || !isMongoObjectIdLike(userId)) {
-      res.status(400).json({ error: "无效用户 ID。" });
-      return;
-    }
-
-    const confirmText = sanitizeText(req.body?.confirmText, "", 20);
-    if (confirmText !== "确认删除") {
-      res.status(400).json({ error: "请输入“确认删除”完成二次确认。" });
-      return;
-    }
-
-    try {
-      const user = await AuthUser.findById(userId);
-      if (!user) {
-        res.status(404).json({ error: "用户不存在或已删除。" });
-        return;
-      }
-      const currentAdminId = sanitizeId(admin?._id, "");
-      const targetUserId = sanitizeId(user?._id, "");
-      if (targetUserId && currentAdminId && targetUserId === currentAdminId) {
-        res.status(403).json({ error: "不支持删除当前登录账号，请联系其他终端管理员处理。" });
-        return;
-      }
-      if (isTerminalAdminAccount(user)) {
-        res.status(403).json({ error: "终端管理员账号不支持在此处删除。" });
+  app.delete(
+    "/api/auth/admin/user-directory/users/:userId",
+    async (req, res) => {
+      const admin = await authenticateAdminRequest(req, res);
+      if (!admin) return;
+      if (!isTerminalAdminAccount(admin)) {
+        res.status(403).json({ error: "仅终端管理员可删除账号。" });
         return;
       }
 
-      const scopedRegex = buildScopedUserIdRegex(userId);
-      const [generatedImages, groupChatFilesByUploader, relatedRoomDocs] = await Promise.all([
-        scopedRegex
-          ? GeneratedImageHistory.find(
-              { userId: scopedRegex },
-              { _id: 1, ossKey: 1, ossBucket: 1, ossRegion: 1 },
-            ).lean()
-          : [],
-        GroupChatStoredFile.find(
-          { uploaderUserId: userId },
-          { _id: 1, ossKey: 1, ossBucket: 1, ossRegion: 1 },
-        ).lean(),
-        GroupChatRoom.find(
-          {
-            $or: [
-              { ownerUserId: userId },
-              { memberUserIds: userId },
-              { mutedMemberUserIds: userId },
-              { "readStates.userId": userId },
-            ],
-          },
-          {
-            _id: 1,
-            ownerUserId: 1,
-            memberUserIds: 1,
-            mutedMemberUserIds: 1,
-            readStates: 1,
-          },
-        ).lean(),
-      ]);
+      const userId = sanitizeId(req.params?.userId, "");
+      if (!userId || !isMongoObjectIdLike(userId)) {
+        res.status(400).json({ error: "无效用户 ID。" });
+        return;
+      }
 
-      await deleteGeneratedImageHistoryOssObjects(generatedImages);
-      await deleteGroupChatStoredFileObjects(groupChatFilesByUploader);
+      const confirmText = sanitizeText(req.body?.confirmText, "", 20);
+      if (confirmText !== "确认删除") {
+        res.status(400).json({ error: "请输入“确认删除”完成二次确认。" });
+        return;
+      }
 
-      const roomIdsToDelete = [];
-      const roomUpdateOps = [];
-      (Array.isArray(relatedRoomDocs) ? relatedRoomDocs : []).forEach((room) => {
-        const roomId = sanitizeId(room?._id, "");
-        if (!roomId) return;
-        const nextRoomState = remapGroupChatRoomStateUsers(room, userId, "");
-        if (!nextRoomState || !nextRoomState.ownerUserId) {
-          roomIdsToDelete.push(roomId);
+      try {
+        const user = await AuthUser.findById(userId);
+        if (!user) {
+          res.status(404).json({ error: "用户不存在或已删除。" });
           return;
         }
-        roomUpdateOps.push({
-          updateOne: {
-            filter: { _id: roomId },
-            update: {
-              $set: {
-                ownerUserId: nextRoomState.ownerUserId,
-                memberUserIds: nextRoomState.memberUserIds,
-                mutedMemberUserIds: nextRoomState.mutedMemberUserIds,
-                readStates: nextRoomState.readStates,
-                memberCount: nextRoomState.memberCount,
-              },
-            },
-          },
-        });
-      });
-
-      let deletedRoomCount = 0;
-      if (roomIdsToDelete.length > 0) {
-        const deletingRoomFiles = await GroupChatStoredFile.find(
-          { roomId: { $in: roomIdsToDelete } },
-          { _id: 1, ossKey: 1, ossBucket: 1, ossRegion: 1 },
-        ).lean();
-        await deleteGroupChatStoredFileObjects(deletingRoomFiles);
-        const [deletedRooms] = await Promise.all([
-          GroupChatRoom.deleteMany({ _id: { $in: roomIdsToDelete } }),
-          GroupChatMessage.deleteMany({ roomId: { $in: roomIdsToDelete } }),
-          GroupChatStoredFile.deleteMany({ roomId: { $in: roomIdsToDelete } }),
-        ]);
-        deletedRoomCount = Number(deletedRooms?.deletedCount || 0);
-      }
-
-      if (roomUpdateOps.length > 0) {
-        await GroupChatRoom.bulkWrite(roomUpdateOps, { ordered: false });
-      }
-
-      const reactionDocs = await GroupChatMessage.find(
-        { "reactions.userId": userId },
-        { _id: 1, reactions: 1 },
-      ).lean();
-      if (reactionDocs.length > 0) {
-        const reactionOps = reactionDocs
-          .map((doc) => {
-            const reactions = Array.isArray(doc?.reactions)
-              ? doc.reactions.filter((reaction) => sanitizeId(reaction?.userId, "") !== userId)
-              : [];
-            return {
-              updateOne: {
-                filter: { _id: doc._id },
-                update: { $set: { reactions } },
-              },
-            };
-          })
-          .filter(Boolean);
-        if (reactionOps.length > 0) {
-          await GroupChatMessage.bulkWrite(reactionOps, { ordered: false });
+        const currentAdminId = sanitizeId(admin?._id, "");
+        const targetUserId = sanitizeId(user?._id, "");
+        if (targetUserId && currentAdminId && targetUserId === currentAdminId) {
+          res.status(403).json({
+            error: "不支持删除当前登录账号，请联系其他终端管理员处理。",
+          });
+          return;
         }
-      }
+        if (isTerminalAdminAccount(user)) {
+          res.status(403).json({ error: "终端管理员账号不支持在此处删除。" });
+          return;
+        }
 
-      const sourceObjectId = new mongoose.Types.ObjectId(userId);
-      const [chatStateDeleteResult, uploadedDeleteCount, generatedDeleteResult, messageUpdateResult, fileDeleteResult] =
-        await Promise.all([
+        const scopedRegex = buildScopedUserIdRegex(userId);
+        const [generatedImages, groupChatFilesByUploader, relatedRoomDocs] =
+          await Promise.all([
+            scopedRegex
+              ? GeneratedImageHistory.find(
+                  { userId: scopedRegex },
+                  { _id: 1, ossKey: 1, ossBucket: 1, ossRegion: 1 },
+                ).lean()
+              : [],
+            GroupChatStoredFile.find(
+              { uploaderUserId: userId },
+              { _id: 1, ossKey: 1, ossBucket: 1, ossRegion: 1 },
+            ).lean(),
+            GroupChatRoom.find(
+              {
+                $or: [
+                  { ownerUserId: userId },
+                  { memberUserIds: userId },
+                  { mutedMemberUserIds: userId },
+                  { "readStates.userId": userId },
+                ],
+              },
+              {
+                _id: 1,
+                ownerUserId: 1,
+                memberUserIds: 1,
+                mutedMemberUserIds: 1,
+                readStates: 1,
+              },
+            ).lean(),
+          ]);
+
+        await deleteGeneratedImageHistoryOssObjects(generatedImages);
+        await deleteGroupChatStoredFileObjects(groupChatFilesByUploader);
+
+        const roomIdsToDelete = [];
+        const roomUpdateOps = [];
+        (Array.isArray(relatedRoomDocs) ? relatedRoomDocs : []).forEach(
+          (room) => {
+            const roomId = sanitizeId(room?._id, "");
+            if (!roomId) return;
+            const nextRoomState = remapGroupChatRoomStateUsers(
+              room,
+              userId,
+              "",
+            );
+            if (!nextRoomState || !nextRoomState.ownerUserId) {
+              roomIdsToDelete.push(roomId);
+              return;
+            }
+            roomUpdateOps.push({
+              updateOne: {
+                filter: { _id: roomId },
+                update: {
+                  $set: {
+                    ownerUserId: nextRoomState.ownerUserId,
+                    memberUserIds: nextRoomState.memberUserIds,
+                    mutedMemberUserIds: nextRoomState.mutedMemberUserIds,
+                    readStates: nextRoomState.readStates,
+                    memberCount: nextRoomState.memberCount,
+                  },
+                },
+              },
+            });
+          },
+        );
+
+        let deletedRoomCount = 0;
+        if (roomIdsToDelete.length > 0) {
+          const deletingRoomFiles = await GroupChatStoredFile.find(
+            { roomId: { $in: roomIdsToDelete } },
+            { _id: 1, ossKey: 1, ossBucket: 1, ossRegion: 1 },
+          ).lean();
+          await deleteGroupChatStoredFileObjects(deletingRoomFiles);
+          const [deletedRooms] = await Promise.all([
+            GroupChatRoom.deleteMany({ _id: { $in: roomIdsToDelete } }),
+            GroupChatMessage.deleteMany({ roomId: { $in: roomIdsToDelete } }),
+            GroupChatStoredFile.deleteMany({
+              roomId: { $in: roomIdsToDelete },
+            }),
+          ]);
+          deletedRoomCount = Number(deletedRooms?.deletedCount || 0);
+        }
+
+        if (roomUpdateOps.length > 0) {
+          await GroupChatRoom.bulkWrite(roomUpdateOps, { ordered: false });
+        }
+
+        const reactionDocs = await GroupChatMessage.find(
+          { "reactions.userId": userId },
+          { _id: 1, reactions: 1 },
+        ).lean();
+        if (reactionDocs.length > 0) {
+          const reactionOps = reactionDocs
+            .map((doc) => {
+              const reactions = Array.isArray(doc?.reactions)
+                ? doc.reactions.filter(
+                    (reaction) => sanitizeId(reaction?.userId, "") !== userId,
+                  )
+                : [];
+              return {
+                updateOne: {
+                  filter: { _id: doc._id },
+                  update: { $set: { reactions } },
+                },
+              };
+            })
+            .filter(Boolean);
+          if (reactionOps.length > 0) {
+            await GroupChatMessage.bulkWrite(reactionOps, { ordered: false });
+          }
+        }
+
+        const sourceObjectId = new mongoose.Types.ObjectId(userId);
+        const [
+          chatStateDeleteResult,
+          uploadedDeleteCount,
+          generatedDeleteResult,
+          messageUpdateResult,
+          fileDeleteResult,
+        ] = await Promise.all([
           ChatState.deleteOne({ userId: sourceObjectId }),
           deleteCollectionStorageUserIds(UploadedFileContext, userId),
-          GeneratedImageHistory.deleteMany(scopedRegex ? { userId: scopedRegex } : { _id: null }),
-          GroupChatMessage.updateMany({ senderUserId: userId }, { $set: { senderUserId: "" } }),
+          GeneratedImageHistory.deleteMany(
+            scopedRegex ? { userId: scopedRegex } : { _id: null },
+          ),
+          GroupChatMessage.updateMany(
+            { senderUserId: userId },
+            { $set: { senderUserId: "" } },
+          ),
           GroupChatStoredFile.deleteMany({ uploaderUserId: userId }),
         ]);
 
-      await AuthUser.deleteOne({ _id: sourceObjectId });
-      userOnlinePresenceByUserId.delete(userId);
+        await AuthUser.deleteOne({ _id: sourceObjectId });
+        userOnlinePresenceByUserId.delete(userId);
 
-      res.json({
-        ok: true,
-        userId,
-        deletedRoomCount,
-        deletedChatStateCount: Number(chatStateDeleteResult?.deletedCount || 0),
-        deletedUploadedFileContextCount: Number(uploadedDeleteCount || 0),
-        deletedGeneratedImageCount: Number(generatedDeleteResult?.deletedCount || 0),
-        anonymizedGroupMessageCount: Number(messageUpdateResult?.modifiedCount || 0),
-        deletedGroupFileCount: Number(fileDeleteResult?.deletedCount || 0),
-      });
-    } catch (error) {
-      res.status(500).json({
-        error: error?.message || "删除账号失败，请稍后重试。",
-      });
-    }
-  });
+        res.json({
+          ok: true,
+          userId,
+          deletedRoomCount,
+          deletedChatStateCount: Number(
+            chatStateDeleteResult?.deletedCount || 0,
+          ),
+          deletedUploadedFileContextCount: Number(uploadedDeleteCount || 0),
+          deletedGeneratedImageCount: Number(
+            generatedDeleteResult?.deletedCount || 0,
+          ),
+          anonymizedGroupMessageCount: Number(
+            messageUpdateResult?.modifiedCount || 0,
+          ),
+          deletedGroupFileCount: Number(fileDeleteResult?.deletedCount || 0),
+        });
+      } catch (error) {
+        res.status(500).json({
+          error: error?.message || "删除账号失败，请稍后重试。",
+        });
+      }
+    },
+  );
 
   app.post("/api/auth/admin/user-directory/merge", async (req, res) => {
     const admin = await authenticateAdminRequest(req, res);
@@ -1458,7 +1569,10 @@ export function registerAdminRoutes(app, deps) {
       res.status(400).json({ error: "请选择两个不同的学生账号执行合并。" });
       return;
     }
-    if (!isMongoObjectIdLike(sourceUserId) || !isMongoObjectIdLike(targetUserId)) {
+    if (
+      !isMongoObjectIdLike(sourceUserId) ||
+      !isMongoObjectIdLike(targetUserId)
+    ) {
       res.status(400).json({ error: "无效用户 ID。" });
       return;
     }
@@ -1472,7 +1586,10 @@ export function registerAdminRoutes(app, deps) {
         res.status(404).json({ error: "待合并账号不存在或已删除。" });
         return;
       }
-      if (String(sourceUser.role || "").trim() !== "user" || String(targetUser.role || "").trim() !== "user") {
+      if (
+        String(sourceUser.role || "").trim() !== "user" ||
+        String(targetUser.role || "").trim() !== "user"
+      ) {
         res.status(403).json({ error: "仅支持学生账号合并。" });
         return;
       }
@@ -1489,8 +1606,16 @@ export function registerAdminRoutes(app, deps) {
       await targetUser.save();
 
       await Promise.all([
-        remapCollectionStorageUserIds(UploadedFileContext, sourceUserId, targetUserId),
-        remapCollectionStorageUserIds(GeneratedImageHistory, sourceUserId, targetUserId),
+        remapCollectionStorageUserIds(
+          UploadedFileContext,
+          sourceUserId,
+          targetUserId,
+        ),
+        remapCollectionStorageUserIds(
+          GeneratedImageHistory,
+          sourceUserId,
+          targetUserId,
+        ),
       ]);
 
       await Promise.all([
@@ -1511,18 +1636,21 @@ export function registerAdminRoutes(app, deps) {
       if (reactionDocs.length > 0) {
         const reactionOps = reactionDocs.map((doc) => {
           const reactionMap = new Map();
-          (Array.isArray(doc?.reactions) ? doc.reactions : []).forEach((reaction) => {
-            const userId = sanitizeId(reaction?.userId, "");
-            const nextUserId = userId === sourceUserId ? targetUserId : userId;
-            const emoji = sanitizeGroupChatReactionEmoji(reaction?.emoji);
-            if (!nextUserId || !emoji) return;
-            const dedupeKey = `${nextUserId}::${emoji}`;
-            if (reactionMap.has(dedupeKey)) return;
-            reactionMap.set(dedupeKey, {
-              ...reaction,
-              userId: nextUserId,
-            });
-          });
+          (Array.isArray(doc?.reactions) ? doc.reactions : []).forEach(
+            (reaction) => {
+              const userId = sanitizeId(reaction?.userId, "");
+              const nextUserId =
+                userId === sourceUserId ? targetUserId : userId;
+              const emoji = sanitizeGroupChatReactionEmoji(reaction?.emoji);
+              if (!nextUserId || !emoji) return;
+              const dedupeKey = `${nextUserId}::${emoji}`;
+              if (reactionMap.has(dedupeKey)) return;
+              reactionMap.set(dedupeKey, {
+                ...reaction,
+                userId: nextUserId,
+              });
+            },
+          );
           return {
             updateOne: {
               filter: { _id: doc._id },
@@ -1556,7 +1684,11 @@ export function registerAdminRoutes(app, deps) {
       if (relatedRoomDocs.length > 0) {
         const roomUpdateOps = relatedRoomDocs
           .map((room) => {
-            const nextState = remapGroupChatRoomStateUsers(room, sourceUserId, targetUserId);
+            const nextState = remapGroupChatRoomStateUsers(
+              room,
+              sourceUserId,
+              targetUserId,
+            );
             if (!nextState) return null;
             return {
               updateOne: {
@@ -1579,7 +1711,10 @@ export function registerAdminRoutes(app, deps) {
         }
       }
 
-      const chatStateMergeMode = await mergeChatStateDocs(sourceUserId, targetUserId);
+      const chatStateMergeMode = await mergeChatStateDocs(
+        sourceUserId,
+        targetUserId,
+      );
 
       await AuthUser.deleteOne({ _id: sourceUser._id });
       userOnlinePresenceByUserId.delete(sourceUserId);
@@ -1602,7 +1737,10 @@ export function registerAdminRoutes(app, deps) {
     if (!(await authenticateAdminRequest(req, res))) return;
 
     const adminOrderMap = new Map(
-      FIXED_ADMIN_ACCOUNTS.map((item, idx) => [toUsernameKey(item?.username), idx]),
+      FIXED_ADMIN_ACCOUNTS.map((item, idx) => [
+        toUsernameKey(item?.username),
+        idx,
+      ]),
     );
     const adminDefaultOrder = FIXED_ADMIN_ACCOUNTS.length + 200;
     const adminFallbackOrder = FIXED_ADMIN_ACCOUNTS.length + 80;
@@ -1681,9 +1819,11 @@ export function registerAdminRoutes(app, deps) {
       rooms.forEach((room) => {
         const ownerUserId = sanitizeId(room?.ownerUserId, "");
         if (ownerUserId) userIdSet.add(ownerUserId);
-        sanitizeGroupChatMemberUserIds(room?.memberUserIds).forEach((userId) => {
-          userIdSet.add(userId);
-        });
+        sanitizeGroupChatMemberUserIds(room?.memberUserIds).forEach(
+          (userId) => {
+            userIdSet.add(userId);
+          },
+        );
       });
 
       const users = userIdSet.size
@@ -1710,7 +1850,10 @@ export function registerAdminRoutes(app, deps) {
             username || "未知用户",
             64,
           );
-          const role = sanitizeText(user?.role, "user", 20).toLowerCase() === "admin" ? "admin" : "user";
+          const role =
+            sanitizeText(user?.role, "user", 20).toLowerCase() === "admin"
+              ? "admin"
+              : "user";
           return {
             id: userId,
             username,
@@ -1732,15 +1875,24 @@ export function registerAdminRoutes(app, deps) {
           const roleOrderB = b.role === "admin" ? 0 : 1;
           if (roleOrderA !== roleOrderB) return roleOrderA - roleOrderB;
           if (a.role === "admin") {
-            if (a.adminOrder !== b.adminOrder) return a.adminOrder - b.adminOrder;
-            return String(a.displayName || "").localeCompare(String(b.displayName || ""), "zh-CN", {
-              sensitivity: "base",
-            });
+            if (a.adminOrder !== b.adminOrder)
+              return a.adminOrder - b.adminOrder;
+            return String(a.displayName || "").localeCompare(
+              String(b.displayName || ""),
+              "zh-CN",
+              {
+                sensitivity: "base",
+              },
+            );
           }
-          const classCompare = String(a.className || "").localeCompare(String(b.className || ""), "zh-CN", {
-            sensitivity: "base",
-            numeric: true,
-          });
+          const classCompare = String(a.className || "").localeCompare(
+            String(b.className || ""),
+            "zh-CN",
+            {
+              sensitivity: "base",
+              numeric: true,
+            },
+          );
           if (classCompare !== 0) return classCompare;
           const studentIdCompare = String(a.studentId || "").localeCompare(
             String(b.studentId || ""),
@@ -1751,9 +1903,13 @@ export function registerAdminRoutes(app, deps) {
             },
           );
           if (studentIdCompare !== 0) return studentIdCompare;
-          return String(a.displayName || "").localeCompare(String(b.displayName || ""), "zh-CN", {
-            sensitivity: "base",
-          });
+          return String(a.displayName || "").localeCompare(
+            String(b.displayName || ""),
+            "zh-CN",
+            {
+              sensitivity: "base",
+            },
+          );
         });
 
       const payloadRooms = rooms
@@ -1769,7 +1925,8 @@ export function registerAdminRoutes(app, deps) {
             .sort((a, b) => {
               if (a.id === ownerUserId) return -1;
               if (b.id === ownerUserId) return 1;
-              if (a.adminOrder !== b.adminOrder) return a.adminOrder - b.adminOrder;
+              if (a.adminOrder !== b.adminOrder)
+                return a.adminOrder - b.adminOrder;
               return String(a.displayName || "").localeCompare(
                 String(b.displayName || ""),
                 "zh-CN",
@@ -1785,7 +1942,10 @@ export function registerAdminRoutes(app, deps) {
             id: roomId,
             roomCode: sanitizeText(room?.roomCode, "", 32),
             name: sanitizeText(room?.name, "未命名派", 80),
-            partyAgentMemberEnabled: sanitizeRuntimeBoolean(room?.partyAgentMemberEnabled, true),
+            partyAgentMemberEnabled: sanitizeRuntimeBoolean(
+              room?.partyAgentMemberEnabled,
+              true,
+            ),
             memberCount: members.length,
             owner,
             members,
@@ -1810,9 +1970,13 @@ export function registerAdminRoutes(app, deps) {
           (Date.parse(String(b.updatedAt || "")) || 0) -
           (Date.parse(String(a.updatedAt || "")) || 0);
         if (updatedDiff !== 0) return updatedDiff;
-        return String(a.name || "").localeCompare(String(b.name || ""), "zh-CN", {
-          sensitivity: "base",
-        });
+        return String(a.name || "").localeCompare(
+          String(b.name || ""),
+          "zh-CN",
+          {
+            sensitivity: "base",
+          },
+        );
       });
 
       res.json({
@@ -1835,12 +1999,12 @@ export function registerAdminRoutes(app, deps) {
 
     const roomName = sanitizeGroupChatRoomName(req.body?.name);
     const ownerUserId = sanitizeId(req.body?.ownerUserId, "");
-    const inputMemberUserIds = Array.isArray(req.body?.memberUserIds) ? req.body.memberUserIds : [];
+    const inputMemberUserIds = Array.isArray(req.body?.memberUserIds)
+      ? req.body.memberUserIds
+      : [];
     const rawMemberUserIds = Array.from(
       new Set(
-        inputMemberUserIds
-          .map((item) => sanitizeId(item, ""))
-          .filter(Boolean),
+        inputMemberUserIds.map((item) => sanitizeId(item, "")).filter(Boolean),
       ),
     );
 
@@ -1879,7 +2043,9 @@ export function registerAdminRoutes(app, deps) {
         ]),
       );
       if (usersById.size !== finalMemberUserIds.length) {
-        res.status(400).json({ error: "群成员中存在已失效账号，请刷新列表后重试。" });
+        res
+          .status(400)
+          .json({ error: "群成员中存在已失效账号，请刷新列表后重试。" });
         return;
       }
       const ownerUser = usersById.get(ownerUserId);
@@ -1893,7 +2059,9 @@ export function registerAdminRoutes(app, deps) {
         Promise.all(
           finalMemberUserIds.map(async (memberUserId) => ({
             userId: memberUserId,
-            count: await GroupChatRoom.countDocuments({ memberUserIds: memberUserId }),
+            count: await GroupChatRoom.countDocuments({
+              memberUserIds: memberUserId,
+            }),
           })),
         ),
       ]);
@@ -1913,10 +2081,13 @@ export function registerAdminRoutes(app, deps) {
         return;
       }
       const exceededMember = joinedCountRows.find(
-        (item) => Number(item?.count || 0) >= GROUP_CHAT_MAX_JOINED_ROOMS_PER_USER,
+        (item) =>
+          Number(item?.count || 0) >= GROUP_CHAT_MAX_JOINED_ROOMS_PER_USER,
       );
       if (exceededMember) {
-        const exceededUser = usersById.get(sanitizeId(exceededMember?.userId, ""));
+        const exceededUser = usersById.get(
+          sanitizeId(exceededMember?.userId, ""),
+        );
         const profile = sanitizeUserProfile(exceededUser?.profile);
         const displayName = sanitizeText(
           profile.name || exceededUser?.username,
@@ -2064,8 +2235,7 @@ export function registerAdminRoutes(app, deps) {
           model: 1,
           createdAt: 1,
         },
-      )
-        .sort({ createdAt: -1, _id: -1 });
+      ).sort({ createdAt: -1, _id: -1 });
       if (limit > 0) {
         query = query.limit(limit);
       }
@@ -2079,7 +2249,9 @@ export function registerAdminRoutes(app, deps) {
 
     let groups = [];
     try {
-      const imageItems = Array.isArray(docs) ? docs.map(toAdminGeneratedImageHistoryItem) : [];
+      const imageItems = Array.isArray(docs)
+        ? docs.map(toAdminGeneratedImageHistoryItem)
+        : [];
       const baseUserIdSet = new Set(
         imageItems
           .map((item) => sanitizeId(item?.baseUserId, ""))
@@ -2148,7 +2320,10 @@ export function registerAdminRoutes(app, deps) {
           const aTime = Date.parse(a?.createdAt || "") || 0;
           const bTime = Date.parse(b?.createdAt || "") || 0;
           if (bTime !== aTime) return bTime - aTime;
-          return String(b?.id || "").localeCompare(String(a?.id || ""), "zh-CN");
+          return String(b?.id || "").localeCompare(
+            String(a?.id || ""),
+            "zh-CN",
+          );
         });
         return {
           ...group,
@@ -2168,7 +2343,9 @@ export function registerAdminRoutes(app, deps) {
             group?.userId,
           ];
           return fields.some((field) =>
-            String(field || "").toLowerCase().includes(keywordLower),
+            String(field || "")
+              .toLowerCase()
+              .includes(keywordLower),
           );
         });
       }
@@ -2191,164 +2368,367 @@ export function registerAdminRoutes(app, deps) {
       keyword,
       updatedAt: new Date().toISOString(),
       totalGroupCount: groups.length,
-      totalImageCount: groups.reduce((sum, group) => sum + Number(group?.imageCount || 0), 0),
+      totalImageCount: groups.reduce(
+        (sum, group) => sum + Number(group?.imageCount || 0),
+        0,
+      ),
       groups,
     });
   });
 
-  app.get("/api/auth/admin/images/history/:imageId/content", async (req, res) => {
-    if (!(await authenticateAdminRequestFromHeaderOrQuery(req, res))) return;
+  app.get(
+    "/api/auth/admin/images/history/:imageId/content",
+    async (req, res) => {
+      if (!(await authenticateAdminRequestFromHeaderOrQuery(req, res))) return;
 
-    const imageId = sanitizeId(req.params?.imageId, "");
-    const download = sanitizeRuntimeBoolean(req.query?.download, false);
-    if (!imageId) {
-      res.status(400).json({ error: "无效图片 ID。" });
-      return;
-    }
+      const imageId = sanitizeId(req.params?.imageId, "");
+      const download = sanitizeRuntimeBoolean(req.query?.download, false);
+      if (!imageId) {
+        res.status(400).json({ error: "无效图片 ID。" });
+        return;
+      }
 
-    try {
-      const doc = await GeneratedImageHistory.findOne(
-        { _id: imageId },
-        {
-          prompt: 1,
+      try {
+        const doc = await GeneratedImageHistory.findOne(
+          { _id: imageId },
+          {
+            prompt: 1,
+            imageUrl: 1,
+            ossKey: 1,
+            imageData: 1,
+            imageMimeType: 1,
+            imageStorageType: 1,
+            createdAt: 1,
+            expiresAt: 1,
+          },
+        ).lean();
+        if (!doc) {
+          res.status(404).json({ error: "图片不存在或已过期。" });
+          return;
+        }
+
+        const storageType = normalizeGeneratedImageStorageType(
+          doc?.imageStorageType,
+        );
+        const expiresAt = sanitizeIsoDate(doc?.expiresAt);
+        if (
+          storageType !== "oss" &&
+          expiresAt &&
+          Date.parse(expiresAt) <= Date.now()
+        ) {
+          res.status(410).json({ error: "图片已过期。" });
+          return;
+        }
+
+        const mimeType =
+          normalizeGeneratedImageMimeType(doc?.imageMimeType) || "image/png";
+        const ext = resolveFileExtensionByMimeType(mimeType, "png");
+        const fileName = sanitizeGroupChatFileName(
+          `generated-image-${String(imageId).slice(-8) || imageId}.${ext}`,
+        );
+        const ossKey = sanitizeGroupChatOssObjectKey(doc?.ossKey);
+        if (ossKey) {
+          if (download) {
+            const downloadUrl = await buildTeacherLessonFileDownloadUrl({
+              ossKey,
+              fileName,
+            });
+            if (downloadUrl) {
+              res.json({
+                ok: true,
+                downloadUrl,
+                fileName,
+                mimeType,
+              });
+              return;
+            }
+          } else if (
+            groupChatOssClient &&
+            groupChatOssConfig &&
+            !groupChatOssConfig.publicRead
+          ) {
+            try {
+              const signedUrl = sanitizeGroupChatHttpUrl(
+                await groupChatOssClient.asyncSignatureUrl(ossKey, {
+                  method: "GET",
+                  expires: groupChatOssConfig.signedUrlTtlSeconds,
+                }),
+              );
+              if (/^https?:\/\//i.test(signedUrl)) {
+                res.redirect(signedUrl);
+                return;
+              }
+            } catch (error) {
+              console.warn(
+                `[image-management] OSS 预览地址生成失败（${ossKey}）：`,
+                error?.message || error,
+              );
+            }
+          }
+
+          const directUrl =
+            sanitizeGroupChatHttpUrl(doc?.imageUrl) ||
+            buildGroupChatOssObjectUrl(ossKey);
+          if (/^https?:\/\//i.test(directUrl)) {
+            if (download) {
+              res.json({
+                ok: true,
+                downloadUrl: directUrl,
+                fileName,
+                mimeType,
+              });
+              return;
+            }
+            res.redirect(directUrl);
+            return;
+          }
+        }
+
+        const imageBuffer = extractGeneratedImageDataBuffer(doc?.imageData);
+        if (imageBuffer.length > 0) {
+          res.setHeader("Content-Type", mimeType);
+          res.setHeader("Content-Length", String(imageBuffer.length));
+          res.setHeader("Cache-Control", "private, no-store");
+          if (download) {
+            res.setHeader(
+              "Content-Disposition",
+              buildAttachmentContentDisposition(fileName),
+            );
+          }
+          res.send(imageBuffer);
+          return;
+        }
+
+        const fallbackUrl = normalizeGeneratedImageStoreUrl(
+          doc?.imageUrl || "",
+        );
+        if (/^https?:\/\//i.test(fallbackUrl)) {
+          if (download) {
+            res.json({
+              ok: true,
+              downloadUrl: fallbackUrl,
+              fileName,
+              mimeType,
+            });
+          } else {
+            res.redirect(fallbackUrl);
+          }
+          return;
+        }
+
+        const parsedDataUrl = parseGeneratedImageDataUrl(fallbackUrl);
+        if (parsedDataUrl) {
+          const fallbackMimeType =
+            normalizeGeneratedImageMimeType(parsedDataUrl?.mimeType) ||
+            mimeType;
+          const fallbackExt = resolveFileExtensionByMimeType(
+            fallbackMimeType,
+            "png",
+          );
+          const fallbackFileName = sanitizeGroupChatFileName(
+            `generated-image-${String(imageId).slice(-8) || imageId}.${fallbackExt}`,
+          );
+          res.setHeader("Content-Type", fallbackMimeType);
+          res.setHeader("Content-Length", String(parsedDataUrl.data.length));
+          res.setHeader("Cache-Control", "private, no-store");
+          if (download) {
+            res.setHeader(
+              "Content-Disposition",
+              buildAttachmentContentDisposition(fallbackFileName),
+            );
+          }
+          res.send(parsedDataUrl.data);
+          return;
+        }
+
+        res.status(404).json({ error: "图片不存在或已过期。" });
+      } catch (error) {
+        if (String(error?.name || "") === "CastError") {
+          res.status(400).json({ error: "无效图片 ID。" });
+          return;
+        }
+        res.status(500).json({
+          error: error?.message || "读取图片内容失败，请稍后重试。",
+        });
+      }
+    },
+  );
+
+  app.get(
+    "/api/auth/admin/images/history/:imageId/thumbnail",
+    async (req, res) => {
+      if (!(await authenticateAdminRequestFromHeaderOrQuery(req, res))) return;
+
+      const imageId = sanitizeId(req.params?.imageId, "");
+      if (!imageId) {
+        res.status(400).json({ error: "无效图片 ID。" });
+        return;
+      }
+
+      try {
+        const doc = await GeneratedImageHistory.findOne(
+          { _id: imageId },
+          {
+            imageUrl: 1,
+            ossKey: 1,
+            imageData: 1,
+            imageMimeType: 1,
+            imageStorageType: 1,
+            expiresAt: 1,
+            thumbnailMimeType: 1,
+            thumbnailSize: 1,
+            thumbnailData: 1,
+          },
+        ).lean();
+        if (!doc) {
+          res.status(404).json({ error: "图片不存在或已过期。" });
+          return;
+        }
+
+        const storageType = normalizeGeneratedImageStorageType(
+          doc?.imageStorageType,
+        );
+        const expiresAt = sanitizeIsoDate(doc?.expiresAt);
+        if (
+          storageType !== "oss" &&
+          expiresAt &&
+          Date.parse(expiresAt) <= Date.now()
+        ) {
+          res.status(410).json({ error: "图片已过期。" });
+          return;
+        }
+
+        const thumbnailPayload = await ensureGeneratedImageHistoryThumbnail({
+          ...doc,
+          _id: imageId,
+        });
+        if (thumbnailPayload?.data?.length) {
+          res.setHeader(
+            "Content-Type",
+            normalizeGeneratedImageMimeType(thumbnailPayload?.mimeType) ||
+              "image/webp",
+          );
+          res.setHeader("Content-Length", String(thumbnailPayload.data.length));
+          res.setHeader("Cache-Control", "private, max-age=86400");
+          res.send(thumbnailPayload.data);
+          return;
+        }
+
+        const fallbackPath =
+          buildAdminGeneratedImageHistoryContentPath(imageId);
+        const token = sanitizeText(req.query?.token, "", 4096);
+        if (token) {
+          const joiner = fallbackPath.includes("?") ? "&" : "?";
+          res.redirect(
+            `${fallbackPath}${joiner}token=${encodeURIComponent(token)}`,
+          );
+        } else {
+          res.redirect(fallbackPath);
+        }
+      } catch (error) {
+        if (String(error?.name || "") === "CastError") {
+          res.status(400).json({ error: "无效图片 ID。" });
+          return;
+        }
+        res.status(500).json({
+          error: error?.message || "读取图片缩略图失败，请稍后重试。",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/auth/admin/images/history/backfill-thumbnails",
+    async (req, res) => {
+      if (!(await authenticateAdminRequestFromHeaderOrQuery(req, res))) return;
+
+      const rawLimit =
+        req.body?.limit ?? req.query?.limit ?? req.params?.limit ?? 80;
+      const parsedLimit = Number.parseInt(String(rawLimit || "").trim(), 10);
+      const limit =
+        Number.isFinite(parsedLimit) && parsedLimit > 0
+          ? Math.min(parsedLimit, 500)
+          : 80;
+      const now = new Date();
+      const thumbnailMissingQuery = {
+        $and: [
+          {
+            $or: [
+              { expiresAt: { $exists: false } },
+              { expiresAt: null },
+              { expiresAt: { $gt: now } },
+              { imageStorageType: "oss" },
+            ],
+          },
+          {
+            $or: [
+              { thumbnailSize: { $exists: false } },
+              { thumbnailSize: { $lte: 0 } },
+              { thumbnailData: { $exists: false } },
+              { thumbnailMimeType: { $exists: false } },
+              { thumbnailMimeType: "" },
+            ],
+          },
+        ],
+      };
+
+      try {
+        const projection = {
           imageUrl: 1,
           ossKey: 1,
           imageData: 1,
           imageMimeType: 1,
           imageStorageType: 1,
-          createdAt: 1,
           expiresAt: 1,
-        },
-      ).lean();
-      if (!doc) {
-        res.status(404).json({ error: "图片不存在或已过期。" });
-        return;
-      }
+          thumbnailMimeType: 1,
+          thumbnailSize: 1,
+          thumbnailData: 1,
+          createdAt: 1,
+        };
 
-      const storageType = normalizeGeneratedImageStorageType(doc?.imageStorageType);
-      const expiresAt = sanitizeIsoDate(doc?.expiresAt);
-      if (storageType !== "oss" && expiresAt && Date.parse(expiresAt) <= Date.now()) {
-        res.status(410).json({ error: "图片已过期。" });
-        return;
-      }
-
-      const mimeType = normalizeGeneratedImageMimeType(doc?.imageMimeType) || "image/png";
-      const ext = resolveFileExtensionByMimeType(mimeType, "png");
-      const fileName = sanitizeGroupChatFileName(
-        `generated-image-${String(imageId).slice(-8) || imageId}.${ext}`,
-      );
-      const ossKey = sanitizeGroupChatOssObjectKey(doc?.ossKey);
-      if (ossKey) {
-        if (download) {
-          const downloadUrl = await buildTeacherLessonFileDownloadUrl({
-            ossKey,
-            fileName,
-          });
-          if (downloadUrl) {
-            res.json({
-              ok: true,
-              downloadUrl,
-              fileName,
-              mimeType,
-            });
-            return;
-          }
-        } else if (groupChatOssClient && groupChatOssConfig && !groupChatOssConfig.publicRead) {
-          try {
-            const signedUrl = sanitizeGroupChatHttpUrl(
-              await groupChatOssClient.asyncSignatureUrl(ossKey, {
-                method: "GET",
-                expires: groupChatOssConfig.signedUrlTtlSeconds,
-              }),
-            );
-            if (/^https?:\/\//i.test(signedUrl)) {
-              res.redirect(signedUrl);
-              return;
-            }
-          } catch (error) {
-            console.warn(
-              `[image-management] OSS 预览地址生成失败（${ossKey}）：`,
-              error?.message || error,
-            );
-          }
-        }
-
-        const directUrl =
-          sanitizeGroupChatHttpUrl(doc?.imageUrl) || buildGroupChatOssObjectUrl(ossKey);
-        if (/^https?:\/\//i.test(directUrl)) {
-          if (download) {
-            res.json({
-              ok: true,
-              downloadUrl: directUrl,
-              fileName,
-              mimeType,
-            });
-            return;
-          }
-          res.redirect(directUrl);
-          return;
-        }
-      }
-
-      const imageBuffer = extractGeneratedImageDataBuffer(doc?.imageData);
-      if (imageBuffer.length > 0) {
-        res.setHeader("Content-Type", mimeType);
-        res.setHeader("Content-Length", String(imageBuffer.length));
-        res.setHeader("Cache-Control", "private, no-store");
-        if (download) {
-          res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fileName));
-        }
-        res.send(imageBuffer);
-        return;
-      }
-
-      const fallbackUrl = normalizeGeneratedImageStoreUrl(doc?.imageUrl || "");
-      if (/^https?:\/\//i.test(fallbackUrl)) {
-        if (download) {
-          res.json({
-            ok: true,
-            downloadUrl: fallbackUrl,
-            fileName,
-            mimeType,
-          });
-        } else {
-          res.redirect(fallbackUrl);
-        }
-        return;
-      }
-
-      const parsedDataUrl = parseGeneratedImageDataUrl(fallbackUrl);
-      if (parsedDataUrl) {
-        const fallbackMimeType =
-          normalizeGeneratedImageMimeType(parsedDataUrl?.mimeType) || mimeType;
-        const fallbackExt = resolveFileExtensionByMimeType(fallbackMimeType, "png");
-        const fallbackFileName = sanitizeGroupChatFileName(
-          `generated-image-${String(imageId).slice(-8) || imageId}.${fallbackExt}`,
+        const totalCandidates = await GeneratedImageHistory.countDocuments(
+          thumbnailMissingQuery,
         );
-        res.setHeader("Content-Type", fallbackMimeType);
-        res.setHeader("Content-Length", String(parsedDataUrl.data.length));
-        res.setHeader("Cache-Control", "private, no-store");
-        if (download) {
-          res.setHeader(
-            "Content-Disposition",
-            buildAttachmentContentDisposition(fallbackFileName),
-          );
-        }
-        res.send(parsedDataUrl.data);
-        return;
-      }
+        const docs = await GeneratedImageHistory.find(
+          thumbnailMissingQuery,
+          projection,
+        )
+          .sort({ createdAt: -1, _id: -1 })
+          .limit(limit)
+          .lean();
 
-      res.status(404).json({ error: "图片不存在或已过期。" });
-    } catch (error) {
-      if (String(error?.name || "") === "CastError") {
-        res.status(400).json({ error: "无效图片 ID。" });
-        return;
+        let successCount = 0;
+        let failedCount = 0;
+
+        for (const doc of docs) {
+          try {
+            const payload = await ensureGeneratedImageHistoryThumbnail(doc);
+            if (payload?.data?.length) {
+              successCount += 1;
+            } else {
+              failedCount += 1;
+            }
+          } catch {
+            failedCount += 1;
+          }
+        }
+
+        res.json({
+          ok: true,
+          updatedAt: new Date().toISOString(),
+          totalCandidates,
+          selectedCount: docs.length,
+          successCount,
+          failedCount,
+          limit,
+        });
+      } catch (error) {
+        res.status(500).json({
+          error: error?.message || "回填图片缩略图失败，请稍后重试。",
+        });
       }
-      res.status(500).json({
-        error: error?.message || "读取图片内容失败，请稍后重试。",
-      });
-    }
-  });
+    },
+  );
 
   app.get("/api/auth/admin/online-presence", async (req, res) => {
     if (!(await authenticateAdminRequest(req, res))) return;
@@ -2376,7 +2756,9 @@ export function registerAdminRoutes(app, deps) {
       { _id: { $in: onlineUserIds }, role: "user" },
       { username: 1, profile: 1 },
     ).lean();
-    const userById = new Map(users.map((item) => [String(item?._id || ""), item]));
+    const userById = new Map(
+      users.map((item) => [String(item?._id || ""), item]),
+    );
 
     const onlineUsers = onlineEntries
       .map((entry) => {
@@ -2392,7 +2774,9 @@ export function registerAdminRoutes(app, deps) {
             grade: profile.grade || "",
             className: profile.className || "",
           },
-          lastSeenAt: sanitizeIsoDate(new Date(entry.lastSeenAtMs)) || new Date(nowMs).toISOString(),
+          lastSeenAt:
+            sanitizeIsoDate(new Date(entry.lastSeenAtMs)) ||
+            new Date(nowMs).toISOString(),
           browserHeartbeatAt:
             entry.browserHeartbeatAtMs > 0
               ? sanitizeIsoDate(new Date(entry.browserHeartbeatAtMs))
@@ -2404,13 +2788,15 @@ export function registerAdminRoutes(app, deps) {
     const effectiveOnlineUsers = onlineUsers.filter((item) => {
       const className = sanitizeText(item?.profile?.className, "", 40);
       if (!strictBrowserOpenClassNames.has(className)) return true;
-      const heartbeatMs = new Date(item?.browserHeartbeatAt || 0).getTime() || 0;
+      const heartbeatMs =
+        new Date(item?.browserHeartbeatAt || 0).getTime() || 0;
       return heartbeatMs >= nowMs - USER_BROWSER_HEARTBEAT_STALE_MS;
     });
 
     const filteredUsers = classNameFilter
       ? effectiveOnlineUsers.filter(
-          (item) => sanitizeText(item?.profile?.className, "", 40) === classNameFilter,
+          (item) =>
+            sanitizeText(item?.profile?.className, "", 40) === classNameFilter,
         )
       : effectiveOnlineUsers;
 
@@ -2446,7 +2832,9 @@ export function registerAdminRoutes(app, deps) {
       .filter(Boolean);
     const scopedUserIdSet = new Set(scopedUserIds);
     const scopedStorageUserIds = scopedUserIds
-      .map((userId) => buildTeacherScopedStorageUserId(userId, safeTeacherScopeKey))
+      .map((userId) =>
+        buildTeacherScopedStorageUserId(userId, safeTeacherScopeKey),
+      )
       .filter(Boolean);
     return {
       safeTeacherScopeKey,
@@ -2522,7 +2910,9 @@ export function registerAdminRoutes(app, deps) {
     sessions.forEach((session) => {
       const sessionId = sanitizeId(session?.id, "");
       if (!sessionId) return;
-      const messages = Array.isArray(sessionMessages[sessionId]) ? sessionMessages[sessionId] : [];
+      const messages = Array.isArray(sessionMessages[sessionId])
+        ? sessionMessages[sessionId]
+        : [];
       const matchedMessages = messages.filter((message) =>
         doesMessageMatchExportDate(message, safeExportDate),
       );
@@ -2539,9 +2929,13 @@ export function registerAdminRoutes(app, deps) {
         .filter(Boolean),
     );
     const groups = Array.isArray(state?.groups)
-      ? state.groups.filter((group) => visibleGroupIds.has(sanitizeId(group?.id, "")))
+      ? state.groups.filter((group) =>
+          visibleGroupIds.has(sanitizeId(group?.id, "")),
+        )
       : [];
-    const activeId = filteredSessions.some((session) => session?.id === state?.activeId)
+    const activeId = filteredSessions.some(
+      (session) => session?.id === state?.activeId,
+    )
       ? state.activeId
       : filteredSessions[0]?.id || "";
 
@@ -2550,7 +2944,10 @@ export function registerAdminRoutes(app, deps) {
       groups,
       sessions: filteredSessions,
       sessionMessages: filteredSessionMessages,
-      settings: state?.settings && typeof state.settings === "object" ? state.settings : {},
+      settings:
+        state?.settings && typeof state.settings === "object"
+          ? state.settings
+          : {},
     };
   }
 
@@ -2559,7 +2956,9 @@ export function registerAdminRoutes(app, deps) {
     const teacherScopeKey = sanitizeTeacherScopeKey(payload?.teacherScopeKey);
     const exportDate = sanitizeExportDate(payload?.exportDate);
     const exportedCount = Number(payload?.exportedCount || 0);
-    const omittedUsers = Array.isArray(payload?.omittedUsers) ? payload.omittedUsers : [];
+    const omittedUsers = Array.isArray(payload?.omittedUsers)
+      ? payload.omittedUsers
+      : [];
     const lines = [
       "EduChat 管理员导出：按日期筛选聊天数据 ZIP",
       `导出时间: ${formatDisplayTime(exportedAt)}`,
@@ -2588,13 +2987,16 @@ export function registerAdminRoutes(app, deps) {
       const name = sanitizeText(profile?.name, "", 64);
       const className = sanitizeText(profile?.className, "", 40);
       const studentId = sanitizeText(profile?.studentId, "", 20);
-      const title = name || username || sanitizeId(user?._id, `user-${index + 1}`);
+      const title =
+        name || username || sanitizeId(user?._id, `user-${index + 1}`);
       const details = [
         username && username !== title ? `@${username}` : "",
         className,
         studentId,
       ].filter(Boolean);
-      lines.push(`  ${index + 1}. ${title}${details.length > 0 ? ` · ${details.join(" · ")}` : ""}`);
+      lines.push(
+        `  ${index + 1}. ${title}${details.length > 0 ? ` · ${details.join(" · ")}` : ""}`,
+      );
     });
     lines.push("");
     return lines.join("\n");
@@ -2604,11 +3006,17 @@ export function registerAdminRoutes(app, deps) {
     const safeExportDate = sanitizeExportDate(exportDate);
     const sourceMessages = Array.isArray(messages) ? messages : [];
     if (!safeExportDate) return sourceMessages;
-    return sourceMessages.filter((message) => readExportDateKey(message?.createdAt) === safeExportDate);
+    return sourceMessages.filter(
+      (message) => readExportDateKey(message?.createdAt) === safeExportDate,
+    );
   }
 
-  async function readAdminGroupChatsExportData(teacherScopeKey, exportDate = "") {
-    const userContext = await readTeacherScopeExportUserContext(teacherScopeKey);
+  async function readAdminGroupChatsExportData(
+    teacherScopeKey,
+    exportDate = "",
+  ) {
+    const userContext =
+      await readTeacherScopeExportUserContext(teacherScopeKey);
     const roomFilter = userContext.scopedUserIds.length
       ? isDefaultTeacherScopeKey(userContext.safeTeacherScopeKey)
         ? {}
@@ -2641,7 +3049,10 @@ export function registerAdminRoutes(app, deps) {
     rooms.forEach((room) => {
       const roomId = sanitizeId(room?._id, "");
       if (!roomId) return;
-      const messages = filterGroupChatMessagesByExportDate(rawMessagesByRoomId.get(roomId), safeExportDate);
+      const messages = filterGroupChatMessagesByExportDate(
+        rawMessagesByRoomId.get(roomId),
+        safeExportDate,
+      );
       if (safeExportDate && messages.length === 0) return;
       roomsForExport.push(room);
       messagesByRoomId.set(roomId, messages);
@@ -2657,7 +3068,9 @@ export function registerAdminRoutes(app, deps) {
     messagesByRoomId.forEach((messages) => {
       messages.forEach((message) => {
         participantUserIds.add(sanitizeId(message?.senderUserId, ""));
-        const reactions = Array.isArray(message?.reactions) ? message.reactions : [];
+        const reactions = Array.isArray(message?.reactions)
+          ? message.reactions
+          : [];
         reactions.forEach((reaction) => {
           participantUserIds.add(sanitizeId(reaction?.userId, ""));
         });
@@ -2675,7 +3088,11 @@ export function registerAdminRoutes(app, deps) {
         const userId = sanitizeId(user?._id, "");
         const profile = sanitizeUserProfile(user?.profile);
         const username = sanitizeText(user?.username, "", 64);
-        const displayName = sanitizeText(profile?.name || username || userId, "", 64);
+        const displayName = sanitizeText(
+          profile?.name || username || userId,
+          "",
+          64,
+        );
         return [
           userId,
           {
@@ -2701,10 +3118,13 @@ export function registerAdminRoutes(app, deps) {
   }
 
   function buildAdminGroupChatsExportTxt(data) {
-    const safeTeacherScopeKey = sanitizeTeacherScopeKey(data?.safeTeacherScopeKey);
+    const safeTeacherScopeKey = sanitizeTeacherScopeKey(
+      data?.safeTeacherScopeKey,
+    );
     const exportDate = sanitizeExportDate(data?.exportDate);
     const rooms = Array.isArray(data?.rooms) ? data.rooms : [];
-    const messagesByRoomId = data?.messagesByRoomId instanceof Map ? data.messagesByRoomId : new Map();
+    const messagesByRoomId =
+      data?.messagesByRoomId instanceof Map ? data.messagesByRoomId : new Map();
     const userById = data?.userById instanceof Map ? data.userById : new Map();
     const scopedUserCount = Number(data?.scopedUsers?.length || 0);
     const lines = [
@@ -2718,13 +3138,16 @@ export function registerAdminRoutes(app, deps) {
     ];
 
     if (rooms.length === 0) {
-      lines.push(exportDate ? "当前日期下暂无群聊记录。" : "当前范围暂无群聊记录。");
+      lines.push(
+        exportDate ? "当前日期下暂无群聊记录。" : "当前范围暂无群聊记录。",
+      );
       return lines.join("\n");
     }
 
     rooms.forEach((room, roomIndex) => {
       const roomId = sanitizeId(room?._id, "");
-      const roomName = sanitizeText(room?.name, "未命名群聊", 80) || "未命名群聊";
+      const roomName =
+        sanitizeText(room?.name, "未命名群聊", 80) || "未命名群聊";
       const roomCode = sanitizeText(room?.roomCode, "", 32);
       const ownerId = sanitizeId(room?.ownerUserId, "");
       const owner = ownerId ? userById.get(ownerId) : null;
@@ -2794,15 +3217,22 @@ export function registerAdminRoutes(app, deps) {
           lines.push("      内容:");
           appendIndentedBlock(lines, messageContent, 8);
         }
-        const reactions = Array.isArray(message?.reactions) ? message.reactions : [];
+        const reactions = Array.isArray(message?.reactions)
+          ? message.reactions
+          : [];
         if (reactions.length > 0) {
           const reactionText = reactions
             .slice(0, 20)
             .map((reaction) => {
               const emoji = sanitizeText(reaction?.emoji, "?", 16) || "?";
               const reactionUserId = sanitizeId(reaction?.userId, "");
-              const reactionUser = reactionUserId ? userById.get(reactionUserId) : null;
-              const reactionName = reactionUser?.displayName || sanitizeText(reaction?.userName, "-", 64) || "-";
+              const reactionUser = reactionUserId
+                ? userById.get(reactionUserId)
+                : null;
+              const reactionName =
+                reactionUser?.displayName ||
+                sanitizeText(reaction?.userName, "-", 64) ||
+                "-";
               return `${emoji}(${reactionName})`;
             })
             .join(" ");
@@ -2815,7 +3245,10 @@ export function registerAdminRoutes(app, deps) {
     return lines.join("\n");
   }
 
-  async function readAdminGeneratedImagesExportData(teacherScopeKey, userContext = null) {
+  async function readAdminGeneratedImagesExportData(
+    teacherScopeKey,
+    userContext = null,
+  ) {
     const context =
       userContext && typeof userContext === "object"
         ? userContext
@@ -2853,8 +3286,12 @@ export function registerAdminRoutes(app, deps) {
   }
 
   function buildAdminGeneratedImagesExportTxt(data) {
-    const safeTeacherScopeKey = sanitizeTeacherScopeKey(data?.safeTeacherScopeKey);
-    const scopedUsers = Array.isArray(data?.scopedUsers) ? data.scopedUsers : [];
+    const safeTeacherScopeKey = sanitizeTeacherScopeKey(
+      data?.safeTeacherScopeKey,
+    );
+    const scopedUsers = Array.isArray(data?.scopedUsers)
+      ? data.scopedUsers
+      : [];
     const docs = Array.isArray(data?.docs) ? data.docs : [];
     const rosterById = new Map(
       scopedUsers.map((user) => {
@@ -2898,8 +3335,12 @@ export function registerAdminRoutes(app, deps) {
       lines.push(`班级: ${user?.className || "-"}`);
       lines.push(`模型: ${sanitizeText(doc?.model, "-", 160) || "-"}`);
       lines.push(`尺寸: ${sanitizeText(doc?.size, "-", 80) || "-"}`);
-      lines.push(`响应格式: ${sanitizeText(doc?.responseFormat, "-", 24) || "-"}`);
-      lines.push(`存储类型: ${sanitizeText(doc?.imageStorageType, "-", 24) || "-"}`);
+      lines.push(
+        `响应格式: ${sanitizeText(doc?.responseFormat, "-", 24) || "-"}`,
+      );
+      lines.push(
+        `存储类型: ${sanitizeText(doc?.imageStorageType, "-", 24) || "-"}`,
+      );
       lines.push(`MIME: ${sanitizeText(doc?.imageMimeType, "-", 80) || "-"}`);
       lines.push(`图片大小: ${Number(doc?.imageSize || 0)}B`);
       lines.push(`图片URL: ${sanitizeText(doc?.imageUrl, "-", 2400) || "-"}`);
@@ -2914,7 +3355,9 @@ export function registerAdminRoutes(app, deps) {
   }
 
   function buildAllRecordsZipReadme(payload) {
-    const safeTeacherScopeKey = sanitizeTeacherScopeKey(payload?.teacherScopeKey);
+    const safeTeacherScopeKey = sanitizeTeacherScopeKey(
+      payload?.teacherScopeKey,
+    );
     return [
       "EduChat 管理员导出：全量记录归档 ZIP",
       `导出时间: ${formatDisplayTime(payload?.exportedAt || new Date())}`,
@@ -2969,7 +3412,11 @@ export function registerAdminRoutes(app, deps) {
       }),
     );
 
-    const content = buildAdminChatsExportTxt(users, stateByUserId, teacherScopeKey);
+    const content = buildAdminChatsExportTxt(
+      users,
+      stateByUserId,
+      teacherScopeKey,
+    );
     const suffix = formatFileStamp(new Date());
     res.json({
       ok: true,
@@ -3010,7 +3457,9 @@ export function registerAdminRoutes(app, deps) {
     users.forEach((user, idx) => {
       const userId = String(user?._id || "");
       const rawState = stateByUserId.get(userId);
-      const state = exportDate ? filterChatStateByExportDate(rawState, exportDate) : rawState;
+      const state = exportDate
+        ? filterChatStateByExportDate(rawState, exportDate)
+        : rawState;
       if (exportDate && !state) {
         omittedUsers.push(user);
         return;
@@ -3023,8 +3472,12 @@ export function registerAdminRoutes(app, deps) {
         exportedAt,
         teacherScopeKey,
       );
-      const username = sanitizeZipFileNamePart(user?.username || `user-${idx + 1}`);
-      const shortId = sanitizeZipFileNamePart(userId.slice(-8) || String(exportIndex));
+      const username = sanitizeZipFileNamePart(
+        user?.username || `user-${idx + 1}`,
+      );
+      const shortId = sanitizeZipFileNamePart(
+        userId.slice(-8) || String(exportIndex),
+      );
       const fileName = `${String(exportIndex).padStart(3, "0")}-${username}-${shortId}.txt`;
       userFiles.push({ name: fileName, content });
     });
@@ -3048,7 +3501,10 @@ export function registerAdminRoutes(app, deps) {
       ? `educhat-chats-by-user-${teacherScopeKey}-${exportDate}-${suffix}.zip`
       : `educhat-chats-by-user-${teacherScopeKey}-${suffix}.zip`;
     res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fileName));
+    res.setHeader(
+      "Content-Disposition",
+      buildAttachmentContentDisposition(fileName),
+    );
     res.send(zipBuffer);
   });
 
@@ -3063,7 +3519,10 @@ export function registerAdminRoutes(app, deps) {
     }
 
     try {
-      const data = await readAdminGroupChatsExportData(teacherScopeKey, exportDate);
+      const data = await readAdminGroupChatsExportData(
+        teacherScopeKey,
+        exportDate,
+      );
       const content = buildAdminGroupChatsExportTxt(data);
       const suffix = formatFileStamp(new Date());
       res.json({
@@ -3085,8 +3544,12 @@ export function registerAdminRoutes(app, deps) {
     const teacherScopeKey = sanitizeTeacherScopeKey(req.query?.teacherScopeKey);
 
     try {
-      const userContext = await readTeacherScopeExportUserContext(teacherScopeKey);
-      const data = await readAdminGeneratedImagesExportData(teacherScopeKey, userContext);
+      const userContext =
+        await readTeacherScopeExportUserContext(teacherScopeKey);
+      const data = await readAdminGeneratedImagesExportData(
+        teacherScopeKey,
+        userContext,
+      );
       const content = buildAdminGeneratedImagesExportTxt(data);
       const suffix = formatFileStamp(new Date());
       res.json({
@@ -3106,7 +3569,8 @@ export function registerAdminRoutes(app, deps) {
     const teacherScopeKey = sanitizeTeacherScopeKey(req.query?.teacherScopeKey);
 
     try {
-      const userContext = await readTeacherScopeExportUserContext(teacherScopeKey);
+      const userContext =
+        await readTeacherScopeExportUserContext(teacherScopeKey);
       const stateByUserId = await readTeacherScopedChatStateMap(
         userContext.users,
         teacherScopeKey,
@@ -3118,7 +3582,8 @@ export function registerAdminRoutes(app, deps) {
       );
       const usersTxt = buildAdminUsersExportTxt(userContext.users);
 
-      const groupChatData = await readAdminGroupChatsExportData(teacherScopeKey);
+      const groupChatData =
+        await readAdminGroupChatsExportData(teacherScopeKey);
       const groupChatsTxt = buildAdminGroupChatsExportTxt(groupChatData);
 
       const imageData = await readAdminGeneratedImagesExportData(
@@ -3138,8 +3603,12 @@ export function registerAdminRoutes(app, deps) {
           exportedAt,
           teacherScopeKey,
         );
-        const username = sanitizeZipFileNamePart(user?.username || `user-${index + 1}`);
-        const shortId = sanitizeZipFileNamePart(userId.slice(-8) || String(index + 1));
+        const username = sanitizeZipFileNamePart(
+          user?.username || `user-${index + 1}`,
+        );
+        const shortId = sanitizeZipFileNamePart(
+          userId.slice(-8) || String(index + 1),
+        );
         return {
           name: `chats-by-user/${String(index + 1).padStart(3, "0")}-${username}-${shortId}.txt`,
           content,
@@ -3166,7 +3635,10 @@ export function registerAdminRoutes(app, deps) {
       const suffix = formatFileStamp(exportedAt);
       const fileName = `educhat-all-records-${teacherScopeKey}-${suffix}.zip`;
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fileName));
+      res.setHeader(
+        "Content-Disposition",
+        buildAttachmentContentDisposition(fileName),
+      );
       res.send(zipBuffer);
     } catch (error) {
       res.status(500).json({
@@ -3182,7 +3654,10 @@ export function registerAdminRoutes(app, deps) {
     const userIds = users.map((user) => user._id);
     const scopedUserIds = users
       .map((user) =>
-        buildTeacherScopedStorageUserId(String(user?._id || ""), teacherScopeKey),
+        buildTeacherScopedStorageUserId(
+          String(user?._id || ""),
+          teacherScopeKey,
+        ),
       )
       .filter(Boolean);
 
@@ -3192,9 +3667,8 @@ export function registerAdminRoutes(app, deps) {
     ).lean();
     let deleteImageHistoryOssSummary = { deletedCount: 0, failedKeys: [] };
     try {
-      deleteImageHistoryOssSummary = await deleteGeneratedImageHistoryOssObjects(
-        imageHistoryDocs,
-      );
+      deleteImageHistoryOssSummary =
+        await deleteGeneratedImageHistoryOssObjects(imageHistoryDocs);
     } catch (error) {
       console.warn(
         "Failed to delete image history OSS objects on admin clear:",
@@ -3232,10 +3706,16 @@ export function registerAdminRoutes(app, deps) {
       teacherScopeKey,
       teacherScopeLabel: getTeacherScopeLabel(teacherScopeKey),
       deletedCount: Number(chatStateResult?.modifiedCount || 0),
-      deletedUploadedFileContextCount: Number(uploadedContextResult?.deletedCount || 0),
+      deletedUploadedFileContextCount: Number(
+        uploadedContextResult?.deletedCount || 0,
+      ),
       deletedImageHistoryCount: Number(imageHistoryResult?.deletedCount || 0),
-      deletedImageHistoryOssObjectCount: Number(deleteImageHistoryOssSummary?.deletedCount || 0),
-      failedImageHistoryOssKeys: Array.isArray(deleteImageHistoryOssSummary?.failedKeys)
+      deletedImageHistoryOssObjectCount: Number(
+        deleteImageHistoryOssSummary?.deletedCount || 0,
+      ),
+      failedImageHistoryOssKeys: Array.isArray(
+        deleteImageHistoryOssSummary?.failedKeys,
+      )
         ? deleteImageHistoryOssSummary.failedKeys
         : [],
     });

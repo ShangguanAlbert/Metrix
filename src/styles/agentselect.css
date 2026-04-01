@@ -11,24 +11,29 @@
 }
 
 .agent-trigger {
-  height: 40px;
-  padding: 0 14px 0 16px;
-  border: 0;
-  background: #eceff4;
+  height: 36px;
+  padding: 0 12px 0 14px;
+  border: 1px solid rgba(135, 134, 127, 0.14);
+  background: color-mix(in srgb, var(--bg) 88%, white);
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   line-height: 1;
   cursor: pointer;
-  color: #111827;
-  transition: box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+  color: #3d3929;
+  transition:
+    box-shadow 0.16s ease,
+    transform 0.16s ease,
+    background 0.16s ease,
+    border-color 0.16s ease;
 }
 
 .agent-trigger:hover {
-  background: #eef1f6;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.07);
-  transform: translateY(-0.5px);
+  background: color-mix(in srgb, var(--bg) 94%, white);
+  border-color: rgba(135, 134, 127, 0.18);
+  box-shadow: 0 1px 3px rgba(95, 74, 56, 0.04);
+  transform: none;
 }
 
 .agent-trigger:disabled {
@@ -40,18 +45,21 @@
 
 .agent-trigger:focus {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14), 0 3px 8px rgba(15, 23, 42, 0.08);
+  box-shadow:
+    0 0 0 2px rgba(193, 95, 60, 0.1),
+    0 2px 6px rgba(95, 74, 56, 0.05);
 }
 
 .agent-trigger[aria-expanded="true"] {
-  background: #eef1f6;
-  box-shadow: 0 3px 9px rgba(15, 23, 42, 0.09);
+  background: color-mix(in srgb, var(--bg) 92%, white);
+  border-color: rgba(135, 134, 127, 0.18);
+  box-shadow: 0 2px 6px rgba(95, 74, 56, 0.05);
 }
 
 .agent-trigger-title {
   display: inline-flex;
   align-items: center;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -59,10 +67,10 @@
 
 .agent-caret {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
-  color: #7b8797;
+  color: #b0aa9f;
   transform: none;
 }
 
@@ -71,10 +79,12 @@
   top: calc(100% + 8px);
   left: 0;
   min-width: 172px;
-  background: #fff;
+  background: #fffdfa;
   border: 0;
   border-radius: 16px;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.09), 0 1px 2px rgba(15, 23, 42, 0.05);
+  box-shadow:
+    0 8px 18px rgba(95, 74, 56, 0.09),
+    0 1px 2px rgba(95, 74, 56, 0.05);
   padding: 8px;
   z-index: 120;
 }
@@ -87,16 +97,18 @@
   border-radius: 12px;
   cursor: pointer;
   align-items: center;
-  transition: background 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    background 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 .agent-item:hover {
-  background: #eef2f8;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+  background: #f5efe7;
+  box-shadow: 0 1px 4px rgba(95, 74, 56, 0.06);
 }
 
 .agent-item.active {
-  background: #e7ecf8;
+  background: #f1e9df;
 }
 
 .agent-check {
@@ -105,25 +117,25 @@
   font-weight: 500;
   font-size: 15px;
   line-height: 1;
-  color: #0f172a;
+  color: #3d3929;
 }
 
 .agent-name {
   font-size: 14px;
   line-height: 1.25;
   font-weight: 400;
-  color: #111827;
+  color: #3d3929;
   text-align: left;
   white-space: nowrap;
 }
 
-.agent-item[aria-checked="true"] .agent-name{
+.agent-item[aria-checked="true"] .agent-name {
   font-weight: 600;
 }
 
 .agent-divider {
   height: 1px;
-  background: #e2e8f0;
+  background: #ece4d8;
   margin: 8px 4px;
 }
 
@@ -131,25 +143,27 @@
   width: 100%;
   border: 0;
   background: transparent;
-  color: #1f2937;
+  color: #3d3929;
   font-size: 14px;
   font-weight: 400;
   text-align: left;
   border-radius: 12px;
   padding: 9px 12px;
   cursor: pointer;
-  transition: background 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    background 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 .agent-settings-item:hover {
-  background: #eef2f8;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+  background: #f5efe7;
+  box-shadow: 0 1px 4px rgba(95, 74, 56, 0.06);
 }
 
 @media (max-width: 900px) {
   .agent-trigger {
-    height: 38px;
-    padding: 0 12px 0 14px;
+    height: 34px;
+    padding: 0 11px 0 13px;
   }
 
   .agent-trigger-title {

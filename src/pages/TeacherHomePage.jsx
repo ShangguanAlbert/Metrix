@@ -55,6 +55,7 @@ import {
   getTeacherScopeLabel,
 } from "../../shared/teacherScopes.js";
 import {
+  backfillAdminGeneratedImageThumbnails,
   createAdminChatSession,
   createAdminGroupChatRoom,
   createAdminUserDirectoryClassCategory,
@@ -1384,12 +1385,15 @@ export default function TeacherHomePage() {
   const [exportingHomeworkLessonId, setExportingHomeworkLessonId] =
     useState("");
   const [imageLibraryLoading, setImageLibraryLoading] = useState(false);
+  const [imageLibraryBackfillLoading, setImageLibraryBackfillLoading] =
+    useState(false);
   const [imageLibraryUpdatedAt, setImageLibraryUpdatedAt] = useState("");
   const [imageLibraryKeyword, setImageLibraryKeyword] = useState("");
   const [imageLibrarySearchInput, setImageLibrarySearchInput] = useState("");
   const [imageLibraryGroups, setImageLibraryGroups] = useState([]);
   const [imageLibraryClassFilter, setImageLibraryClassFilter] = useState("all");
   const [imageLibrarySortBy, setImageLibrarySortBy] = useState("latest");
+  const [imageLibraryNotice, setImageLibraryNotice] = useState("");
   const [expandedImageUserIds, setExpandedImageUserIds] = useState([]);
   const [downloadingImageId, setDownloadingImageId] = useState("");
   const [userDirectoryLoading, setUserDirectoryLoading] = useState(false);
@@ -1527,6 +1531,7 @@ export default function TeacherHomePage() {
   const seatLayoutsLastSavedSnapshotRef = useRef("");
   const exportCenterNoticeTimerRef = useRef(null);
   const classroomSaveNoticeTimerRef = useRef(null);
+  const imageLibraryNoticeTimerRef = useRef(null);
   const clearDisciplineStudentKeyword = useCallback(() => {
     setDisciplineStudentKeyword("");
     if (typeof window !== "undefined") {
@@ -2090,6 +2095,24 @@ export default function TeacherHomePage() {
       }
     };
   }, [classroomSaveNotice]);
+
+  useEffect(() => {
+    if (imageLibraryNoticeTimerRef.current) {
+      window.clearTimeout(imageLibraryNoticeTimerRef.current);
+      imageLibraryNoticeTimerRef.current = null;
+    }
+    if (!imageLibraryNotice) return undefined;
+    imageLibraryNoticeTimerRef.current = window.setTimeout(() => {
+      setImageLibraryNotice("");
+      imageLibraryNoticeTimerRef.current = null;
+    }, 2000);
+    return () => {
+      if (imageLibraryNoticeTimerRef.current) {
+        window.clearTimeout(imageLibraryNoticeTimerRef.current);
+        imageLibraryNoticeTimerRef.current = null;
+      }
+    };
+  }, [imageLibraryNotice]);
 
   useEffect(() => {
     if (activePanel === "export-center") return;
@@ -4551,6 +4574,36 @@ export default function TeacherHomePage() {
     setImageLibrarySearchInput("");
     setImageLibraryClassFilter("all");
     void loadImageLibrary("");
+  }
+
+  async function onBackfillImageLibraryThumbnails() {
+    if (!adminToken || imageLibraryBackfillLoading) return;
+    setImageLibraryBackfillLoading(true);
+    setError("");
+    setImageLibraryNotice("");
+    try {
+      const result = await backfillAdminGeneratedImageThumbnails(adminToken, {
+        limit: 100,
+      });
+      const selectedCount = Number(result?.selectedCount || 0);
+      const successCount = Number(result?.successCount || 0);
+      const failedCount = Number(result?.failedCount || 0);
+      if (selectedCount <= 0) {
+        setImageLibraryNotice("当前图片库的缩略图已是最新。");
+      } else if (failedCount > 0) {
+        setImageLibraryNotice(
+          `缩略图回填完成：成功 ${successCount} 张，失败 ${failedCount} 张。`,
+        );
+      } else {
+        setImageLibraryNotice(`缩略图回填完成：已处理 ${successCount} 张。`);
+      }
+      await loadImageLibrary(imageLibraryKeyword);
+    } catch (rawError) {
+      if (handleAuthError(rawError)) return;
+      setError(readErrorMessage(rawError));
+    } finally {
+      setImageLibraryBackfillLoading(false);
+    }
   }
 
   function onSubmitUserDirectorySearch(event) {
@@ -7724,9 +7777,31 @@ export default function TeacherHomePage() {
                   <div className="teacher-panel-actions">
                     <button
                       type="button"
+                      className="teacher-ghost-btn"
+                      onClick={() => void onBackfillImageLibraryThumbnails()}
+                      disabled={
+                        imageLibraryLoading || imageLibraryBackfillLoading
+                      }
+                    >
+                      <Sparkles
+                        size={15}
+                        className={
+                          imageLibraryBackfillLoading ? "is-spinning" : ""
+                        }
+                      />
+                      <span>
+                        {imageLibraryBackfillLoading
+                          ? "回填中..."
+                          : "回填缩略图"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
                       className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
                       onClick={() => void loadImageLibrary()}
-                      disabled={imageLibraryLoading}
+                      disabled={
+                        imageLibraryLoading || imageLibraryBackfillLoading
+                      }
                       aria-label={
                         imageLibraryLoading ? "Refreshing" : "Refresh images"
                       }
@@ -7896,9 +7971,16 @@ export default function TeacherHomePage() {
                                   const imageId = String(
                                     image?.id || "",
                                   ).trim();
+                                  const thumbnailPath = String(
+                                    image?.thumbnailPath || "",
+                                  ).trim();
                                   const previewPath = String(
                                     image?.previewPath || "",
                                   ).trim();
+                                  const thumbnailUrl =
+                                    buildAdminImagePreviewUrl(
+                                      thumbnailPath || previewPath,
+                                    );
                                   const previewUrl =
                                     buildAdminImagePreviewUrl(previewPath);
                                   const downloading =
@@ -7912,10 +7994,12 @@ export default function TeacherHomePage() {
                                       className="teacher-image-thumb-item"
                                     >
                                       <div className="teacher-image-thumb-media">
-                                        {previewUrl ? (
+                                        {thumbnailUrl ? (
                                           <img
-                                            src={previewUrl}
+                                            src={thumbnailUrl}
                                             alt={image?.prompt || "生成图片"}
+                                            loading="lazy"
+                                            decoding="async"
                                           />
                                         ) : (
                                           <div className="teacher-image-thumb-empty">
@@ -9410,6 +9494,7 @@ export default function TeacherHomePage() {
           </div>
         ) : null}
         {error ||
+        imageLibraryNotice ||
         exportCenterNotice ||
         classroomSaveNotice ||
         pageRefreshState === "success" ? (
@@ -9428,6 +9513,14 @@ export default function TeacherHomePage() {
                 role="status"
               >
                 {`已刷新为最新数据 · ${formatDisplayTime(classroomUpdatedAt)}`}
+              </p>
+            ) : null}
+            {imageLibraryNotice ? (
+              <p
+                className="teacher-home-alert success teacher-home-toast teacher-home-toast-fade teacher-home-refresh-toast"
+                role="status"
+              >
+                {imageLibraryNotice}
               </p>
             ) : null}
             {classroomSaveNotice ? (
