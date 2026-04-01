@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpDown,
   Bot,
@@ -716,6 +716,245 @@ function buildClassroomConfigSnapshot({
     classroomDisciplineConfig: normalizeDisciplineConfig(classroomDisciplineConfig),
   });
 }
+
+const TeacherSeatFixedPanel = memo(function TeacherSeatFixedPanel({
+  seatManageClassName,
+  classroomSeatClassOptions,
+  currentSeatLayout,
+  currentSeatFilledCount,
+  currentSeatTeacherLocked,
+  currentSeatStudentFillEnabled,
+  currentSeatStudentWritable,
+  userDirectoryItems,
+  onUpdateSeatManageClassName,
+  onResizeSeatLayout,
+  onToggleSeatTeacherLock,
+  onToggleSeatStudentFillEnabled,
+  onUpdateSeatValue,
+}) {
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      setHydrated(true);
+      return undefined;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      setHydrated(true);
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, []);
+
+  const seatNormalizedValues = useMemo(
+    () => currentSeatLayout.seats.map((seatValue) => String(seatValue || "").trim()),
+    [currentSeatLayout.seats],
+  );
+
+  const seatSuggestionItems = useMemo(() => {
+    if (!hydrated) return [];
+    const dedupe = new Set();
+    return userDirectoryItems
+      .filter((item) => String(item?.role || "").trim().toLowerCase() === "user")
+      .filter((item) => {
+        if (!seatManageClassName) return true;
+        return String(item?.profile?.className || "").trim() === seatManageClassName;
+      })
+      .map((item) => {
+        const name = String(item?.profile?.name || "").trim();
+        const username = String(item?.username || "").trim();
+        const studentId = String(item?.profile?.studentId || "").trim();
+        const value = name || username;
+        const valueKey = String(value || "").trim().toLowerCase();
+        const studentIdKey = String(studentId || "").trim().toLowerCase();
+        return {
+          value,
+          label: `${name || username || "未命名学生"}${studentId ? `（${studentId}）` : ""}`,
+          valueKey,
+          studentIdKey,
+        };
+      })
+      .filter((item) => String(item.value || "").trim())
+      .filter((item) => {
+        if (!item.valueKey || dedupe.has(item.valueKey)) return false;
+        dedupe.add(item.valueKey);
+        return true;
+      });
+  }, [hydrated, seatManageClassName, userDirectoryItems]);
+
+  const seatSuggestionOptionsByIndex = useMemo(() => {
+    if (!hydrated) return [];
+    const occupied = new Set(
+      seatNormalizedValues
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter(Boolean),
+    );
+    return seatNormalizedValues.map((currentValue) => {
+      const currentValueKey = String(currentValue || "").trim().toLowerCase();
+      if (currentValueKey) {
+        occupied.delete(currentValueKey);
+      }
+      const options = seatSuggestionItems
+        .filter(
+          (item) =>
+            !occupied.has(item.valueKey) &&
+            (!item.studentIdKey || !occupied.has(item.studentIdKey)),
+        )
+        .map((item) => ({
+          value: item.value,
+          label: item.label,
+        }));
+      if (currentValueKey) {
+        occupied.add(currentValueKey);
+      }
+      return options;
+    });
+  }, [hydrated, seatNormalizedValues, seatSuggestionItems]);
+
+  if (!hydrated) {
+    return (
+      <section className="teacher-card teacher-seat-fixed-card">
+        <p className="teacher-empty-text">正在载入座位表…</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="teacher-card teacher-seat-fixed-card">
+      <div className="teacher-seat-fixed-toolbar">
+        <div className="teacher-seat-fixed-control">
+          <span>班级</span>
+          <PortalSelect
+            className="teacher-seat-fixed-select"
+            value={seatManageClassName}
+            compact
+            ariaLabel="座位班级"
+            options={classroomSeatClassOptions}
+            onChange={onUpdateSeatManageClassName}
+          />
+        </div>
+        <div className="teacher-seat-fixed-control">
+          <span>行数</span>
+          <PortalSelect
+            className="teacher-seat-fixed-select"
+            value={String(currentSeatLayout.rows)}
+            compact
+            ariaLabel="座位行数"
+            disabled={currentSeatTeacherLocked}
+            options={Array.from(
+              { length: SEAT_LAYOUT_MAX_ROWS - SEAT_LAYOUT_MIN_ROWS + 1 },
+              (_, index) => {
+                const rows = SEAT_LAYOUT_MIN_ROWS + index;
+                return { value: String(rows), label: `${rows} 行` };
+              },
+            )}
+            onChange={(value) => onResizeSeatLayout(value, "rows")}
+          />
+        </div>
+        <div className="teacher-seat-fixed-control">
+          <span>列数</span>
+          <PortalSelect
+            className="teacher-seat-fixed-select"
+            value={String(currentSeatLayout.columns)}
+            compact
+            ariaLabel="座位列数"
+            disabled={currentSeatTeacherLocked}
+            options={Array.from(
+              { length: SEAT_LAYOUT_MAX_COLUMNS - SEAT_LAYOUT_MIN_COLUMNS + 1 },
+              (_, index) => {
+                const columns = SEAT_LAYOUT_MIN_COLUMNS + index;
+                return { value: String(columns), label: `${columns} 列` };
+              },
+            )}
+            onChange={(value) => onResizeSeatLayout(value, "columns")}
+          />
+        </div>
+        <div className="teacher-seat-fixed-stats">
+          <strong>{`${currentSeatFilledCount} / ${currentSeatLayout.seats.length}`}</strong>
+          <span>已填写座位</span>
+        </div>
+        <div className="teacher-seat-fixed-permission-tools">
+          <button
+            type="button"
+            className={`teacher-ghost-btn teacher-seat-fixed-lock-btn${
+              currentSeatTeacherLocked ? " is-locked" : ""
+            }`}
+            onClick={onToggleSeatTeacherLock}
+          >
+            {currentSeatTeacherLocked ? <Lock size={14} /> : <LockOpen size={14} />}
+            <span>{currentSeatTeacherLocked ? "已锁定" : "锁定"}</span>
+          </button>
+          <label className="teacher-ios-switch teacher-seat-fixed-student-switch">
+            <input
+              type="checkbox"
+              checked={currentSeatStudentFillEnabled}
+              onChange={(event) => onToggleSeatStudentFillEnabled(event.target.checked)}
+              disabled={currentSeatTeacherLocked}
+            />
+            <span className="teacher-ios-switch-track" aria-hidden="true">
+              <span className="teacher-ios-switch-thumb" />
+            </span>
+            <span className="teacher-ios-switch-text">开放学生填写</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="teacher-seat-fixed-hints">
+        <span>{`学生填写：${currentSeatStudentFillEnabled ? "已开放" : "已关闭"}`}</span>
+        <span>{`教师锁定：${currentSeatTeacherLocked ? "已锁定" : "未锁定"}`}</span>
+        <span>{`当前状态：${currentSeatStudentWritable ? "学生可填写" : "学生不可填写"}`}</span>
+      </div>
+
+      <div
+        className="teacher-seat-fixed-grid"
+        style={{
+          gridTemplateColumns: `repeat(${currentSeatLayout.columns}, minmax(0, 1fr))`,
+        }}
+      >
+        {currentSeatLayout.seats.map((seatValue, seatIndex) => {
+          const safeSeatValue = String(seatValue || "").trim();
+          const seatOptions = Array.isArray(seatSuggestionOptionsByIndex[seatIndex])
+            ? seatSuggestionOptionsByIndex[seatIndex]
+            : [];
+          const hasCurrentValueOption = seatOptions.some(
+            (item) => String(item?.value || "").trim() === safeSeatValue,
+          );
+          const rowNumber = Math.floor(seatIndex / currentSeatLayout.columns) + 1;
+          const columnNumber = (seatIndex % currentSeatLayout.columns) + 1;
+          return (
+            <label
+              key={`${seatManageClassName || "class"}-seat-${seatIndex + 1}`}
+              className="teacher-seat-fixed-item"
+            >
+              <span>{`座位 ${rowNumber}-${columnNumber}`}</span>
+              <select
+                value={safeSeatValue}
+                onChange={(event) => onUpdateSeatValue(seatIndex, event.target.value)}
+                disabled={currentSeatTeacherLocked}
+              >
+                <option value="">
+                  {seatOptions.length > 0 ? "请选择姓名/学号" : "暂无可选学生"}
+                </option>
+                {safeSeatValue && !hasCurrentValueOption ? (
+                  <option value={safeSeatValue}>{safeSeatValue}</option>
+                ) : null}
+                {seatOptions.map((item) => (
+                  <option
+                    key={`seat-${seatIndex + 1}-option-${String(item?.value || "").trim()}`}
+                    value={item.value}
+                  >
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })}
+      </div>
+    </section>
+  );
+});
 
 function buildLessonDraft(lessonIndex = 1) {
   const now = Date.now();
@@ -1503,6 +1742,7 @@ export default function TeacherHomePage() {
           dividerBefore: true,
           items: [
             { key: "agent", label: "智能体管理", icon: Bot, external: true },
+            { key: "agent-lab", label: "Agent Lab", icon: Sparkles, external: true },
             { key: "workshop", label: "进入元协坊", icon: Sparkles, external: true },
             { key: "image-generation", label: "图片生成", icon: Image, external: true },
             { key: "party", label: "派·协作", icon: Users, external: true },
@@ -1583,6 +1823,10 @@ export default function TeacherHomePage() {
     if (!confirmLeaveWithUnsavedClassroomConfig()) return;
     if (safeItemKey === "agent") {
       navigate(withAuthSlot("/admin/agent-settings", activeSlot));
+      return;
+    }
+    if (safeItemKey === "agent-lab") {
+      navigate(withAuthSlot("/admin/agent-lab", activeSlot));
       return;
     }
     if (safeItemKey === "workshop") {
@@ -2634,68 +2878,6 @@ export default function TeacherHomePage() {
   const currentSeatStudentWritable = useMemo(
     () => currentSeatStudentFillEnabled && !currentSeatTeacherLocked,
     [currentSeatStudentFillEnabled, currentSeatTeacherLocked],
-  );
-  const seatNormalizedValues = useMemo(
-    () =>
-      currentSeatLayout.seats.map((seatValue) => String(seatValue || "").trim()),
-    [currentSeatLayout.seats],
-  );
-  const seatSuggestionItems = useMemo(
-    () => {
-      const dedupe = new Set();
-      return userDirectoryItems
-        .filter((item) => String(item?.role || "").trim().toLowerCase() === "user")
-        .filter((item) => {
-          if (!seatManageClassName) return true;
-          return String(item?.profile?.className || "").trim() === seatManageClassName;
-        })
-        .map((item) => {
-          const name = String(item?.profile?.name || "").trim();
-          const username = String(item?.username || "").trim();
-          const studentId = String(item?.profile?.studentId || "").trim();
-          const value = name || username;
-          const valueKey = String(value || "").trim().toLowerCase();
-          const studentIdKey = String(studentId || "").trim().toLowerCase();
-          return {
-            value,
-            label: `${name || username || "未命名学生"}${studentId ? `（${studentId}）` : ""}`,
-            valueKey,
-            studentIdKey,
-          };
-        })
-        .filter((item) => String(item.value || "").trim())
-        .filter((item) => {
-          if (!item.valueKey || dedupe.has(item.valueKey)) return false;
-          dedupe.add(item.valueKey);
-          return true;
-        });
-    },
-    [seatManageClassName, userDirectoryItems],
-  );
-  const seatSuggestionOptionsByIndex = useMemo(
-    () =>
-      seatNormalizedValues.map((currentValue) => {
-        const occupied = new Set(
-          seatNormalizedValues
-            .map((item) => String(item || "").trim().toLowerCase())
-            .filter(Boolean),
-        );
-        const currentValueKey = String(currentValue || "").trim().toLowerCase();
-        if (currentValueKey) {
-          occupied.delete(currentValueKey);
-        }
-        return seatSuggestionItems
-          .filter(
-            (item) =>
-              !occupied.has(item.valueKey) &&
-              (!item.studentIdKey || !occupied.has(item.studentIdKey)),
-          )
-          .map((item) => ({
-            value: item.value,
-            label: item.label,
-          }));
-      }),
-    [seatNormalizedValues, seatSuggestionItems],
   );
 
   const randomRollcallScopeKey = useMemo(
@@ -5494,139 +5676,21 @@ export default function TeacherHomePage() {
                 </div>
               </header>
 
-              <section className="teacher-card teacher-seat-fixed-card">
-                <div className="teacher-seat-fixed-toolbar">
-                  <div className="teacher-seat-fixed-control">
-                    <span>班级</span>
-                    <PortalSelect
-                      className="teacher-seat-fixed-select"
-                      value={seatManageClassName}
-                      compact
-                      ariaLabel="座位班级"
-                      options={classroomSeatClassOptions}
-                      onChange={onUpdateSeatManageClassName}
-                    />
-                  </div>
-                  <div className="teacher-seat-fixed-control">
-                    <span>行数</span>
-                    <PortalSelect
-                      className="teacher-seat-fixed-select"
-                      value={String(currentSeatLayout.rows)}
-                      compact
-                      ariaLabel="座位行数"
-                      disabled={currentSeatTeacherLocked}
-                      options={Array.from(
-                        { length: SEAT_LAYOUT_MAX_ROWS - SEAT_LAYOUT_MIN_ROWS + 1 },
-                        (_, index) => {
-                          const rows = SEAT_LAYOUT_MIN_ROWS + index;
-                          return { value: String(rows), label: `${rows} 行` };
-                        },
-                      )}
-                      onChange={(value) => onResizeSeatLayout(value, "rows")}
-                    />
-                  </div>
-                  <div className="teacher-seat-fixed-control">
-                    <span>列数</span>
-                    <PortalSelect
-                      className="teacher-seat-fixed-select"
-                      value={String(currentSeatLayout.columns)}
-                      compact
-                      ariaLabel="座位列数"
-                      disabled={currentSeatTeacherLocked}
-                      options={Array.from(
-                        { length: SEAT_LAYOUT_MAX_COLUMNS - SEAT_LAYOUT_MIN_COLUMNS + 1 },
-                        (_, index) => {
-                          const columns = SEAT_LAYOUT_MIN_COLUMNS + index;
-                          return { value: String(columns), label: `${columns} 列` };
-                        },
-                      )}
-                      onChange={(value) => onResizeSeatLayout(value, "columns")}
-                    />
-                  </div>
-                  <div className="teacher-seat-fixed-stats">
-                    <strong>{`${currentSeatFilledCount} / ${currentSeatLayout.seats.length}`}</strong>
-                    <span>已填写座位</span>
-                  </div>
-                  <div className="teacher-seat-fixed-permission-tools">
-                    <button
-                      type="button"
-                      className={`teacher-ghost-btn teacher-seat-fixed-lock-btn${
-                        currentSeatTeacherLocked ? " is-locked" : ""
-                      }`}
-                      onClick={onToggleSeatTeacherLock}
-                    >
-                      {currentSeatTeacherLocked ? <Lock size={14} /> : <LockOpen size={14} />}
-                      <span>{currentSeatTeacherLocked ? "已锁定" : "锁定"}</span>
-                    </button>
-                    <label className="teacher-ios-switch teacher-seat-fixed-student-switch">
-                      <input
-                        type="checkbox"
-                        checked={currentSeatStudentFillEnabled}
-                        onChange={(event) => onToggleSeatStudentFillEnabled(event.target.checked)}
-                        disabled={currentSeatTeacherLocked}
-                      />
-                      <span className="teacher-ios-switch-track" aria-hidden="true">
-                        <span className="teacher-ios-switch-thumb" />
-                      </span>
-                      <span className="teacher-ios-switch-text">开放学生填写</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="teacher-seat-fixed-hints">
-                  <span>{`学生填写：${currentSeatStudentFillEnabled ? "已开放" : "已关闭"}`}</span>
-                  <span>{`教师锁定：${currentSeatTeacherLocked ? "已锁定" : "未锁定"}`}</span>
-                  <span>{`当前状态：${currentSeatStudentWritable ? "学生可填写" : "学生不可填写"}`}</span>
-                </div>
-
-                <div
-                  className="teacher-seat-fixed-grid"
-                  style={{
-                    gridTemplateColumns: `repeat(${currentSeatLayout.columns}, minmax(0, 1fr))`,
-                  }}
-                >
-                  {currentSeatLayout.seats.map((seatValue, seatIndex) => {
-                    const safeSeatValue = String(seatValue || "").trim();
-                    const seatOptions =
-                      Array.isArray(seatSuggestionOptionsByIndex[seatIndex])
-                        ? seatSuggestionOptionsByIndex[seatIndex]
-                        : [];
-                    const hasCurrentValueOption = seatOptions.some(
-                      (item) => String(item?.value || "").trim() === safeSeatValue,
-                    );
-                    const rowNumber = Math.floor(seatIndex / currentSeatLayout.columns) + 1;
-                    const columnNumber = (seatIndex % currentSeatLayout.columns) + 1;
-                    return (
-                      <label
-                        key={`${seatManageClassName || "class"}-seat-${seatIndex + 1}`}
-                        className="teacher-seat-fixed-item"
-                      >
-                        <span>{`座位 ${rowNumber}-${columnNumber}`}</span>
-                        <select
-                          value={safeSeatValue}
-                          onChange={(event) => onUpdateSeatValue(seatIndex, event.target.value)}
-                          disabled={currentSeatTeacherLocked}
-                        >
-                          <option value="">
-                            {seatOptions.length > 0 ? "请选择姓名/学号" : "暂无可选学生"}
-                          </option>
-                          {safeSeatValue && !hasCurrentValueOption ? (
-                            <option value={safeSeatValue}>{safeSeatValue}</option>
-                          ) : null}
-                          {seatOptions.map((item) => (
-                            <option
-                              key={`seat-${seatIndex + 1}-option-${String(item?.value || "").trim()}`}
-                              value={item.value}
-                            >
-                              {item.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    );
-                  })}
-                </div>
-              </section>
+              <TeacherSeatFixedPanel
+                seatManageClassName={seatManageClassName}
+                classroomSeatClassOptions={classroomSeatClassOptions}
+                currentSeatLayout={currentSeatLayout}
+                currentSeatFilledCount={currentSeatFilledCount}
+                currentSeatTeacherLocked={currentSeatTeacherLocked}
+                currentSeatStudentFillEnabled={currentSeatStudentFillEnabled}
+                currentSeatStudentWritable={currentSeatStudentWritable}
+                userDirectoryItems={userDirectoryItems}
+                onUpdateSeatManageClassName={onUpdateSeatManageClassName}
+                onResizeSeatLayout={onResizeSeatLayout}
+                onToggleSeatTeacherLock={onToggleSeatTeacherLock}
+                onToggleSeatStudentFillEnabled={onToggleSeatStudentFillEnabled}
+                onUpdateSeatValue={onUpdateSeatValue}
+              />
             </div>
           ) : null}
 

@@ -222,6 +222,45 @@ export function saveAdminClassroomSeatLayouts(adminToken, payload = {}) {
   });
 }
 
+export function fetchAdminAgentLabOverview(adminToken) {
+  return request("/api/auth/admin/agent-lab/overview", adminToken);
+}
+
+export function fetchAdminAgentLabAccessGrants(adminToken) {
+  return request("/api/auth/admin/agent-lab/access-grants", adminToken);
+}
+
+export function deleteAdminAgentLabAccessGrant(adminToken, userId) {
+  const safeUserId = String(userId || "").trim();
+  return request(`/api/auth/admin/agent-lab/access-grants/${encodeURIComponent(safeUserId)}`, adminToken, {
+    method: "DELETE",
+  });
+}
+
+export function resetAdminAgentLabRoom(adminToken) {
+  return request("/api/auth/admin/agent-lab/room/reset", adminToken, {
+    method: "POST",
+  });
+}
+
+export function saveAdminAgentLabRoom(adminToken, payload = {}) {
+  return request("/api/auth/admin/agent-lab/room", adminToken, {
+    method: "PUT",
+    body: JSON.stringify(payload && typeof payload === "object" ? payload : {}),
+  });
+}
+
+export function fetchAdminAgentLabSettings(adminToken) {
+  return request("/api/auth/admin/agent-lab/settings", adminToken);
+}
+
+export function saveAdminAgentLabSettings(adminToken, payload = {}) {
+  return request("/api/auth/admin/agent-lab/settings", adminToken, {
+    method: "PUT",
+    body: JSON.stringify(payload && typeof payload === "object" ? payload : {}),
+  });
+}
+
 export function fetchAdminClassroomHomeworkOverview(adminToken) {
   return request("/api/auth/admin/classroom-homework/overview", adminToken);
 }

@@ -9,17 +9,22 @@ import { registerAuthUserClassroomRoutes } from "./routes/auth-user-classroom.js
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerChatAndImageRoutes } from "./routes/chat-and-images.js";
 import { registerGroupChatRoutes } from "./routes/group-chat.js";
+import { registerAgentLabRoutes } from "./routes/agent-lab.js";
 import { createGroupChatRealtimeHub } from "./runtime/group-chat-realtime-hub.js";
+import { createAgentLabRealtimeHub } from "./runtime/agent-lab-realtime-hub.js";
 
 const app = express();
+const AGENT_LAB_WS_PATH = "/ws/agent-lab";
 const deps = createAppContext();
 const startupTasks = createStartupTasks(deps);
 const groupChatRealtimeHub = createGroupChatRealtimeHub(deps);
+const agentLabRealtimeHub = createAgentLabRealtimeHub(deps);
 
 registerAuthUserClassroomRoutes(app, deps);
 registerAdminRoutes(app, deps);
 registerChatAndImageRoutes(app, deps);
 registerGroupChatRoutes(app, deps);
+registerAgentLabRoutes(app, { ...deps, agentLabRealtimeHub });
 
 const distDir = path.resolve(process.cwd(), "dist");
 const distIndexHtml = path.join(distDir, "index.html");
@@ -54,13 +59,42 @@ async function startServer() {
   await deps.ensureFixedStudentAccounts();
 
   const server = http.createServer(app);
+  agentLabRealtimeHub.initWebSocketServer(server);
   groupChatRealtimeHub.initWebSocketServer(server);
+  const upgradeListeners = server.listeners("upgrade");
+  if (upgradeListeners.length >= 2) {
+    const agentLabUpgradeListener = upgradeListeners[0];
+    const groupChatUpgradeListener = upgradeListeners[1];
+    server.removeAllListeners("upgrade");
+    server.on("upgrade", (request, socket, head) => {
+      let pathname = "";
+      try {
+        pathname = new URL(request.url || "", "http://localhost").pathname;
+      } catch {
+        pathname = "";
+      }
+      if (pathname === AGENT_LAB_WS_PATH) {
+        agentLabUpgradeListener(request, socket, head);
+        return;
+      }
+      if (pathname === deps.GROUP_CHAT_WS_PATH) {
+        groupChatUpgradeListener(request, socket, head);
+        return;
+      }
+      try {
+        socket.destroy();
+      } catch {
+        // ignore invalid upgrade sockets
+      }
+    });
+  }
 
   server.listen(deps.port, () => {
     console.log(`API server listening on http://localhost:${deps.port}`);
     console.log(
       `Group chat websocket listening on ws://localhost:${deps.port}${deps.GROUP_CHAT_WS_PATH}`,
     );
+    console.log(`Agent Lab websocket listening on ws://localhost:${deps.port}/ws/agent-lab`);
   });
 
   void startupTasks.run();
