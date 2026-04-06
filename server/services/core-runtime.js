@@ -270,6 +270,9 @@ if (!groupChatOssClient) {
 const AGENT_D_FIXED_PROVIDER = "aliyun";
 const AGENT_D_FIXED_MODEL = "qwen3.5-plus";
 const AGENT_D_FIXED_MAX_OUTPUT_TOKENS = 65536;
+const AGENT_A_FIXED_PROVIDER = "packycode";
+const AGENT_A_FIXED_MODEL = "gpt-5.4";
+const AGENT_A_FIXED_PROTOCOL = "chat";
 const AGENT_C_FIXED_PROVIDER = "volcengine";
 const AGENT_C_FIXED_MODEL = "doubao-seed-2-0-pro-260215";
 const AGENT_C_FIXED_PROTOCOL = "responses";
@@ -369,10 +372,14 @@ const AGENT_C_ALWAYS_ON_WEB_SEARCH_MODEL_ALIASES = new Set([
 ]);
 const AGENT_RUNTIME_DEFAULT_OVERRIDES = Object.freeze({
   A: Object.freeze({
+    provider: AGENT_A_FIXED_PROVIDER,
+    model: AGENT_A_FIXED_MODEL,
+    protocol: AGENT_A_FIXED_PROTOCOL,
     contextWindowTokens: 256000,
-    maxInputTokens: 224000,
-    maxOutputTokens: 64000,
-    maxReasoningTokens: 32000,
+    maxInputTokens: 256000,
+    maxOutputTokens: 256000,
+    maxReasoningTokens: RUNTIME_MAX_REASONING_TOKENS,
+    enableWebSearch: false,
   }),
   B: Object.freeze({
     contextWindowTokens: 200000,
@@ -8215,6 +8222,9 @@ async function safeReadJson(response) {
 
 function getModelByAgent(agentId, runtimeConfig = null) {
   const targetAgent = sanitizeAgent(agentId);
+  if (targetAgent === "A") {
+    return AGENT_A_FIXED_MODEL;
+  }
   if (targetAgent === "C") {
     return AGENT_C_FIXED_MODEL;
   }
@@ -9277,6 +9287,20 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
     }
   }
 
+  if (normalizedAgentId === "A") {
+    next.provider = AGENT_A_FIXED_PROVIDER;
+    next.model = AGENT_A_FIXED_MODEL;
+    next.protocol = AGENT_A_FIXED_PROTOCOL;
+    next.enableWebSearch = false;
+    const fixedProfile = resolveRuntimeTokenProfileByModel(AGENT_A_FIXED_MODEL);
+    if (fixedProfile) {
+      next.contextWindowTokens = fixedProfile.contextWindowTokens;
+      next.maxInputTokens = fixedProfile.maxInputTokens;
+      next.maxOutputTokens = fixedProfile.maxOutputTokens;
+      next.maxReasoningTokens = fixedProfile.maxReasoningTokens;
+    }
+  }
+
   if (normalizedAgentId === "D") {
     const sourceProvider = sanitizeRuntimeProvider(source.provider);
     const sourceModel = sanitizeRuntimeModel(source.model).toLowerCase();
@@ -10226,6 +10250,9 @@ function sanitizeSystemPrompt(value) {
 
 function getProviderByAgent(agentId, runtimeConfig = null) {
   const targetAgent = sanitizeAgent(agentId);
+  if (targetAgent === "A") {
+    return AGENT_A_FIXED_PROVIDER;
+  }
   if (targetAgent === "C") {
     return AGENT_C_FIXED_PROVIDER;
   }

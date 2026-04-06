@@ -2,6 +2,10 @@ export const AGENT_IDS = ["A", "B", "C", "D"];
 export const VOLCENGINE_FIXED_SAMPLING_MODEL_ID = "doubao-seed-2-0-pro-260215";
 export const VOLCENGINE_FIXED_TEMPERATURE = 1;
 export const VOLCENGINE_FIXED_TOP_P = 0.95;
+const AGENT_A_FIXED_PROVIDER = "packycode";
+const AGENT_A_FIXED_MODEL = "gpt-5.4";
+const AGENT_A_FIXED_PROTOCOL = "chat";
+const AGENT_A_FIXED_THINKING_EFFORT = "medium";
 const AGENT_D_FIXED_PROVIDER = "aliyun";
 const AGENT_D_FIXED_MODEL = "qwen3.5-plus";
 const AGENT_D_FIXED_MAX_OUTPUT_TOKENS = 65536;
@@ -37,7 +41,7 @@ const ALIYUN_MINIMAX_M2_PREFIXES = Object.freeze([
 export const ALIYUN_MINIMAX_FIXED_TEMPERATURE = 1;
 export const ALIYUN_MINIMAX_FIXED_TOP_P = 0.95;
 const DEFAULT_AGENT_MODEL_BY_AGENT = Object.freeze({
-  A: "doubao-seed-1-6-251015",
+  A: AGENT_A_FIXED_MODEL,
   B: "glm-4-7-251222",
   C: AGENT_C_FIXED_MODEL,
   D: AGENT_D_FIXED_MODEL,
@@ -410,10 +414,15 @@ const AGENT_C_ALWAYS_ON_WEB_SEARCH_MODEL_ALIASES = new Set([
 ]);
 const AGENT_RUNTIME_DEFAULT_OVERRIDES = Object.freeze({
   A: Object.freeze({
+    provider: AGENT_A_FIXED_PROVIDER,
+    model: AGENT_A_FIXED_MODEL,
+    protocol: AGENT_A_FIXED_PROTOCOL,
     contextWindowTokens: 256000,
-    maxInputTokens: 224000,
-    maxOutputTokens: 64000,
-    maxReasoningTokens: 32000,
+    maxInputTokens: 256000,
+    maxOutputTokens: 256000,
+    maxReasoningTokens: RUNTIME_MAX_REASONING_TOKENS,
+    thinkingEffort: AGENT_A_FIXED_THINKING_EFFORT,
+    enableWebSearch: false,
   }),
   B: Object.freeze({
     contextWindowTokens: 200000,
@@ -473,6 +482,9 @@ function getDefaultModelByAgent(agentId = "A") {
 }
 
 export function resolveProviderDefaultModel(provider, agentId = "A") {
+  if ((AGENT_IDS.includes(agentId) ? agentId : "A") === "A") {
+    return AGENT_A_FIXED_MODEL;
+  }
   const normalizedProvider = sanitizeProvider(provider);
   if (normalizedProvider === PACKYCODE_PROVIDER) {
     return PACKYCODE_DEFAULT_MODEL;
@@ -896,6 +908,20 @@ export function sanitizeSingleRuntimeConfig(raw, agentId = "A") {
       next.contextWindowTokens = PACKYCODE_GPT54_CONTEXT_WINDOW_TOKENS;
       next.maxInputTokens = PACKYCODE_GPT54_MAX_INPUT_TOKENS;
       next.maxOutputTokens = PACKYCODE_GPT54_DEFAULT_MAX_OUTPUT_TOKENS;
+    }
+  }
+
+  if (normalizedAgentId === "A") {
+    next.provider = AGENT_A_FIXED_PROVIDER;
+    next.model = AGENT_A_FIXED_MODEL;
+    next.protocol = AGENT_A_FIXED_PROTOCOL;
+    next.enableWebSearch = false;
+    const fixedProfile = resolveRuntimeTokenProfileByModel(AGENT_A_FIXED_MODEL);
+    if (fixedProfile) {
+      next.contextWindowTokens = fixedProfile.contextWindowTokens;
+      next.maxInputTokens = fixedProfile.maxInputTokens;
+      next.maxOutputTokens = fixedProfile.maxOutputTokens;
+      next.maxReasoningTokens = fixedProfile.maxReasoningTokens;
     }
   }
 

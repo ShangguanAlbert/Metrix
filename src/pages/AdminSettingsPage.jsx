@@ -69,8 +69,11 @@ const KNOWN_PROVIDERS = new Set([
   "volcengine",
   "aliyun",
 ]);
+const AGENT_A_FIXED_PROVIDER = "packycode";
+const AGENT_A_FIXED_MODEL = "gpt-5.4";
 const AGENT_E_FIXED_MAX_OUTPUT_TOKENS = 131072;
 const AGENT_C_FIXED_MODEL = "doubao-seed-2-0-pro-260215";
+const AGENT_A_LOCKED_RUNTIME_FIELDS = new Set(["provider", "model"]);
 const AGENT_E_LOCKED_RUNTIME_FIELDS = new Set([
   "provider",
   "model",
@@ -803,6 +806,7 @@ export default function AdminSettingsPage() {
   const webSearchSwitchDisabled = loading || !webSearchSupported;
 
   const isAgentESelected = selectedAgent === "E";
+  const isAgentASelected = selectedAgent === "A";
   const isAgentCSelected = selectedAgent === "C";
   const isAgentDSelected = selectedAgent === "D";
   const isCoreAgentSelected = AGENT_IDS.includes(selectedAgent);
@@ -1182,6 +1186,7 @@ export default function AdminSettingsPage() {
 
   function updateRuntimeField(field, value) {
     if (!isCoreAgentSelected) return;
+    if (selectedAgent === "A" && AGENT_A_LOCKED_RUNTIME_FIELDS.has(field)) return;
     if (selectedAgent === "C" && AGENT_C_LOCKED_RUNTIME_FIELDS.has(field)) return;
     if (selectedAgent === "D" && AGENT_D_LOCKED_RUNTIME_FIELDS.has(field)) return;
     setRuntimeConfigs((prev) => {
@@ -2449,7 +2454,7 @@ export default function AdminSettingsPage() {
                   value={selectedProvider}
                   options={PROVIDER_OPTIONS}
                   onChange={(next) => updateRuntimeField("provider", next)}
-                  disabled={loading || isAgentCSelected || isAgentDSelected}
+                  disabled={loading || isAgentASelected || isAgentCSelected || isAgentDSelected}
                 />
               </div>
 
@@ -2465,9 +2470,14 @@ export default function AdminSettingsPage() {
                       ? `留空则使用默认模型：${selectedModelDefault}`
                       : "留空则走 .env 里对应 AGENT_MODEL_*"
                   }
-                  disabled={loading || isAgentCSelected || isAgentDSelected}
+                  disabled={loading || isAgentASelected || isAgentCSelected || isAgentDSelected}
                 />
               </label>
+              {isAgentASelected ? (
+                <p className="admin-field-note">
+                  智能体 A 已固定使用 {AGENT_A_FIXED_PROVIDER === "packycode" ? "PackyCode" : AGENT_A_FIXED_PROVIDER} / `{AGENT_A_FIXED_MODEL}`。
+                </p>
+              ) : null}
                   {showOpenRouterPanel ? (
                     <p className="admin-field-note">
                       Openrouter api仅支持最大输出（max_tokens）配置。
