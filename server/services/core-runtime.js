@@ -185,8 +185,8 @@ const GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const GROUP_CHAT_FILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const GROUP_CHAT_OSS_DEFAULT_REGION = "oss-cn-hangzhou";
 const GROUP_CHAT_OSS_DEFAULT_PREFIX = "chat-files";
-const GROUP_CHAT_OSS_SIGNED_URL_TTL_SECONDS_DEFAULT = 300;
-const GROUP_CHAT_OSS_SIGNED_URL_TTL_SECONDS_MAX = 3600;
+const GROUP_CHAT_OSS_SIGNED_URL_TTL_SECONDS_DEFAULT = 30 * 24 * 60 * 60;
+const GROUP_CHAT_OSS_SIGNED_URL_TTL_SECONDS_MAX = 30 * 24 * 60 * 60;
 const GROUP_CHAT_OSS_STARTUP_CHECK_TIMEOUT_MS_DEFAULT = 8000;
 const GROUP_CHAT_OSS_STARTUP_CHECK_TIMEOUT_MS_MAX = 60000;
 const GROUP_CHAT_OSS_EXPIRED_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
@@ -4625,12 +4625,11 @@ async function streamAgentResponse({
     });
     return;
   }
-  const hasLocalImageUpload =
-    attachUploadedFiles &&
-    filesForLocalAttach.some((file) => isImageUploadFile(file));
-  if (hasLocalImageUpload && !groupChatOssClient) {
+  const hasLocalFileUpload =
+    attachUploadedFiles && filesForLocalAttach.length > 0;
+  if (hasLocalFileUpload && !groupChatOssClient) {
     res.status(500).json({
-      error: "图片附件需要先上传到阿里云 OSS，当前 OSS 未配置。",
+      error: "文件附件需要先备份上传到阿里云 OSS，当前 OSS 未配置。",
     });
     return;
   }
@@ -4890,10 +4889,6 @@ async function streamAgentResponse({
     if (preparedOssFiles.length > 0) {
       uploadedContextOssFiles = dedupeUploadedFileContextOssFiles([
         ...uploadedContextOssFiles,
-        ...preparedOssFiles,
-      ]);
-      uploadedAttachmentOssFilesForMeta = dedupeUploadedFileContextOssFiles([
-        ...uploadedAttachmentOssFilesForMeta,
         ...preparedOssFiles,
       ]);
     }
@@ -14436,6 +14431,9 @@ async function uploadChatAttachmentsToOss({
           ossRegion: uploaded.ossRegion,
           fileUrl: uploaded.fileUrl,
         });
+        console.log(
+          `[chat-file-storage] 附件已上传到 OSS：source=${sourceTag}, key=${uploaded.ossKey}, size=${uploaded.size}`,
+        );
       }
     } catch (error) {
       if (stopOnError) {
@@ -14509,20 +14507,30 @@ function buildGroupChatOssObjectUrl(ossKey) {
   return `${protocol}://${host}/${encodedKey}`;
 }
 
-async function buildGroupChatFileSignedDownloadUrl({ ossKey, fileName }) {
+async function buildGroupChatFileSignedDownloadUrl({
+  ossKey,
+  fileName,
+  disposition = "attachment",
+} = {}) {
   if (!groupChatOssClient || !groupChatOssConfig) return "";
   const safeKey = sanitizeGroupChatOssObjectKey(ossKey);
   if (!safeKey) return "";
   const safeFileName = sanitizeGroupChatFileName(fileName);
 
   try {
-    return await groupChatOssClient.asyncSignatureUrl(safeKey, {
+    const responseHeaders = {};
+    if (disposition === "attachment" && safeFileName) {
+      responseHeaders["content-disposition"] =
+        buildAttachmentContentDisposition(safeFileName);
+    }
+    const signedUrl = await groupChatOssClient.asyncSignatureUrl(safeKey, {
       method: "GET",
       expires: groupChatOssConfig.signedUrlTtlSeconds,
-      response: {
-        "content-disposition": buildAttachmentContentDisposition(safeFileName),
-      },
+      ...(Object.keys(responseHeaders).length > 0
+        ? { response: responseHeaders }
+        : {}),
     });
+    return sanitizeGroupChatHttpUrl(signedUrl);
   } catch (error) {
     console.warn(
       `[group-chat-file-storage] OSS 签名下载地址生成失败（${safeKey}）：`,

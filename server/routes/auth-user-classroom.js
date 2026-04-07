@@ -1,4 +1,21 @@
 export function registerAuthUserClassroomRoutes(app, deps) {
+  function readSignedUrlExpiryText(url) {
+    const safeUrl = String(url || "").trim();
+    if (!safeUrl) return "";
+    try {
+      const parsed = new URL(safeUrl);
+      const epochText =
+        parsed.searchParams.get("Expires") ||
+        parsed.searchParams.get("x-oss-expires") ||
+        "";
+      const epoch = Number(epochText);
+      if (!Number.isFinite(epoch) || epoch <= 0) return "";
+      return new Date(epoch * 1000).toISOString();
+    } catch {
+      return "";
+    }
+  }
+
   const {
     express,
     cors,
@@ -1662,67 +1679,83 @@ export function registerAuthUserClassroomRoutes(app, deps) {
   });
 
   app.get("/api/chat/attachments/download", requireChatAuth, async (req, res) => {
-    const userId = sanitizeId(req.authUser?._id, "");
+    const chatUserId = sanitizeId(req.authUser?._id, "");
+    const storageUserId = sanitizeId(req.authStorageUserId || req.authUser?._id, "");
     const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
     const sessionId = sanitizeId(req.query?.sessionId, "");
     const messageId = sanitizeId(req.query?.messageId, "");
     const attachmentIndex = sanitizeRuntimeInteger(req.query?.attachmentIndex, -1, -1, 7);
+    const fallbackFileName = sanitizeGroupChatFileName(req.query?.fileName || "聊天附件.bin");
+    const fallbackMimeType = sanitizeGroupChatFileMimeType(req.query?.mimeType);
+    const fallbackOssKey = sanitizeGroupChatOssObjectKey(req.query?.ossKey);
+    const fallbackDirectUrl = sanitizeGroupChatHttpUrl(req.query?.url);
+    const mode =
+      String(req.query?.mode || "").trim().toLowerCase() === "inline"
+        ? "inline"
+        : "download";
 
-    if (!userId || !sessionId || !messageId || attachmentIndex < 0) {
+    if ((!chatUserId || !sessionId || !messageId || attachmentIndex < 0) && !fallbackOssKey && !fallbackDirectUrl) {
       res.status(400).json({ error: "无效参数。" });
       return;
     }
 
-    const stateDoc = await ChatState.findOne(
-      { userId: req.authUser._id },
-      { sessionMessages: 1, teacherStates: 1 },
-    ).lean();
-    const currentState = normalizeChatStateDoc(stateDoc, teacherScopeKey);
-    const currentMessages = Array.isArray(currentState.sessionMessages?.[sessionId])
-      ? currentState.sessionMessages[sessionId]
-      : [];
-    const message =
-      currentMessages.find((item) => sanitizeId(item?.id, "") === messageId) || null;
-    if (!message) {
-      res.status(404).json({ error: "未找到对应消息。" });
-      return;
-    }
+    let fileName = fallbackFileName;
+    let mimeType = fallbackMimeType;
+    let ossKey = fallbackOssKey;
+    let directUrl = fallbackDirectUrl;
 
-    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-    const attachment = attachments[attachmentIndex] || null;
-    if (!attachment) {
-      res.status(404).json({ error: "未找到对应附件。" });
-      return;
-    }
+    if (chatUserId && sessionId && messageId && attachmentIndex >= 0) {
+      const stateDoc = await ChatState.findOne(
+        { userId: chatUserId },
+        { sessionMessages: 1, teacherStates: 1 },
+      ).lean();
+      const currentState = normalizeChatStateDoc(stateDoc, teacherScopeKey);
+      const currentMessages = Array.isArray(currentState.sessionMessages?.[sessionId])
+        ? currentState.sessionMessages[sessionId]
+        : [];
+      const message =
+        currentMessages.find((item) => sanitizeId(item?.id, "") === messageId) || null;
 
-    const fileName = sanitizeGroupChatFileName(
-      attachment?.name || `聊天附件-${attachmentIndex + 1}.bin`,
-    );
-    const mimeType = sanitizeGroupChatFileMimeType(attachment?.type);
-    let ossKey = sanitizeGroupChatOssObjectKey(attachment?.ossKey);
-    let directUrl = sanitizeGroupChatHttpUrl(attachment?.url || attachment?.fileUrl);
+      if (message) {
+        const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+        const attachment = attachments[attachmentIndex] || null;
+        if (attachment) {
+          fileName = sanitizeGroupChatFileName(
+            attachment?.name || fileName || `聊天附件-${attachmentIndex + 1}.bin`,
+          );
+          mimeType = sanitizeGroupChatFileMimeType(attachment?.type || mimeType);
+          ossKey = ossKey || sanitizeGroupChatOssObjectKey(attachment?.ossKey);
+          directUrl = directUrl || sanitizeGroupChatHttpUrl(attachment?.url || attachment?.fileUrl);
 
-    if (!ossKey && !directUrl) {
-      const uploadedContextDoc = await UploadedFileContext.findOne({
-        userId,
-        sessionId,
-        messageId,
-      })
-        .select({ ossFiles: 1 })
-        .lean();
-      const resolved = resolveChatAttachmentLinkFromOssFiles(
-        attachment,
-        attachmentIndex,
-        uploadedContextDoc?.ossFiles,
-      );
-      if (resolved) {
-        ossKey = sanitizeGroupChatOssObjectKey(resolved.ossKey);
-        directUrl = sanitizeGroupChatHttpUrl(resolved.url);
+          if (!ossKey || !directUrl) {
+            const uploadedContextDoc = await UploadedFileContext.findOne({
+              userId: storageUserId,
+              sessionId,
+              messageId,
+            })
+              .select({ ossFiles: 1 })
+              .lean();
+            const resolved = resolveChatAttachmentLinkFromOssFiles(
+              attachment,
+              attachmentIndex,
+              uploadedContextDoc?.ossFiles,
+            );
+            if (resolved) {
+              ossKey = ossKey || sanitizeGroupChatOssObjectKey(resolved.ossKey);
+              directUrl = directUrl || sanitizeGroupChatHttpUrl(resolved.url);
+            }
+          }
+        }
       }
     }
 
     if (ossKey) {
       const downloadUrl =
+        (await buildGroupChatFileSignedDownloadUrl({
+          ossKey,
+          fileName,
+          disposition: mode === "inline" ? "inline" : "attachment",
+        })) ||
         (await buildTeacherLessonFileDownloadUrl({
           ossKey,
           fileName,
@@ -1733,11 +1766,17 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         res.status(500).json({ error: "附件下载地址生成失败，请稍后重试。" });
         return;
       }
+      console.log(
+        `[chat-file-storage] 下载链接已生成：key=${ossKey}, mode=${mode}, expiresAt=${
+          readSignedUrlExpiryText(downloadUrl) || "unknown"
+        }`,
+      );
       res.json({
         ok: true,
         downloadUrl,
         fileName,
         mimeType,
+        mode,
       });
       return;
     }
@@ -1748,6 +1787,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         downloadUrl: directUrl,
         fileName,
         mimeType,
+        mode,
       });
       return;
     }

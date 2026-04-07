@@ -1,3 +1,6 @@
+import fontkit from "@pdf-lib/fontkit";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+
 export function registerChatAndImageRoutes(app, deps) {
   const {
     express,
@@ -678,6 +681,384 @@ export function registerChatAndImageRoutes(app, deps) {
   } = deps;
 
   const SESSION_TITLE_MODEL_AGENT_ID = "C";
+  const DOCUMENT_PREVIEW_PDF_PAGE = Object.freeze({
+    width: 595.28,
+    height: 841.89,
+    margin: 48,
+    titleSize: 18,
+    bodySize: 12,
+    metaSize: 10,
+    lineGap: 6,
+  });
+
+  function listDocumentPreviewFontCandidates() {
+    const candidates = [
+      process.env.EDUCHAT_PREVIEW_FONT_PATH,
+      process.env.CHAT_PREVIEW_FONT_PATH,
+      process.env.PDF_PREVIEW_FONT_PATH,
+      process.env.HOME
+        ? path.join(process.env.HOME, "Library/Fonts/SimSun.ttf")
+        : "",
+      process.env.HOME
+        ? path.join(process.env.HOME, ".fonts/NotoSansCJK-Regular.ttc")
+        : "",
+      "/System/Library/Fonts/Hiragino Sans GB.ttc",
+      "/System/Library/Fonts/STHeiti Medium.ttc",
+      "/System/Library/Fonts/Supplemental/Songti.ttc",
+      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+      "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+      "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+      "C:\\Windows\\Fonts\\simsun.ttc",
+      "C:\\Windows\\Fonts\\msyh.ttc",
+      "C:\\Windows\\Fonts\\simhei.ttf",
+    ];
+    return Array.from(new Set(candidates.filter(Boolean)));
+  }
+
+  async function embedPreviewPdfFont(pdfDoc) {
+    pdfDoc.registerFontkit(fontkit);
+    const candidates = listDocumentPreviewFontCandidates();
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidatePath = candidates[index];
+      if (!candidatePath || !existsSync(candidatePath)) continue;
+      try {
+        const fontBytes = await readFileAsync(candidatePath);
+        const font = await pdfDoc.embedFont(fontBytes, { subset: true });
+        return font;
+      } catch {
+        // Ignore invalid or unsupported font candidates.
+      }
+    }
+    return pdfDoc.embedFont(StandardFonts.Helvetica);
+  }
+
+  function normalizeDocumentPreviewText(value) {
+    const text = String(value || "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/\u00a0/g, " ")
+      .replace(/\t/g, "  ");
+    return text.trim();
+  }
+
+  function wrapPreviewPdfLine(text, font, fontSize, maxWidth) {
+    const chars = Array.from(String(text || ""));
+    if (chars.length === 0) return [""];
+    const lines = [];
+    let current = "";
+
+    for (let index = 0; index < chars.length; index += 1) {
+      const char = chars[index];
+      const next = current + char;
+      if (
+        current &&
+        font.widthOfTextAtSize(next, fontSize) > maxWidth
+      ) {
+        lines.push(current.replace(/\s+$/g, ""));
+        current = char.trim() ? char : "";
+        continue;
+      }
+      current = next;
+    }
+
+    if (current || lines.length === 0) {
+      lines.push(current.replace(/\s+$/g, ""));
+    }
+    return lines;
+  }
+
+  async function buildDocumentPreviewPdfBuffer({
+    fileName = "",
+    sourceLabel = "文档预览",
+    text = "",
+  } = {}) {
+    const pdfDoc = await PDFDocument.create();
+    const font = await embedPreviewPdfFont(pdfDoc);
+    const safeText =
+      normalizeDocumentPreviewText(text) || "文档中没有可供预览的文本内容。";
+    const safeFileName = sanitizeText(fileName, "document.docx", 180);
+    const pageConfig = DOCUMENT_PREVIEW_PDF_PAGE;
+    const maxWidth = pageConfig.width - pageConfig.margin * 2;
+    const titleLines = wrapPreviewPdfLine(
+      safeFileName,
+      font,
+      pageConfig.titleSize,
+      maxWidth,
+    );
+    const bodyParagraphs = safeText.split(/\n{2,}/).map((item) => item.trim());
+    const metaLine = `${sourceLabel} · 文本转 PDF 预览`;
+
+    let page = pdfDoc.addPage([pageConfig.width, pageConfig.height]);
+    let cursorY = pageConfig.height - pageConfig.margin;
+
+    const ensureSpace = (requiredHeight) => {
+      if (cursorY - requiredHeight >= pageConfig.margin) return;
+      page = pdfDoc.addPage([pageConfig.width, pageConfig.height]);
+      cursorY = pageConfig.height - pageConfig.margin;
+    };
+
+    const drawLine = (line, size, options = {}) => {
+      ensureSpace(size + pageConfig.lineGap);
+      page.drawText(line, {
+        x: pageConfig.margin,
+        y: cursorY - size,
+        size,
+        font,
+        color: options.color || rgb(0.24, 0.22, 0.16),
+      });
+      cursorY -= size + pageConfig.lineGap;
+    };
+
+    titleLines.forEach((line) => {
+      drawLine(line, pageConfig.titleSize, { color: rgb(0.18, 0.16, 0.12) });
+    });
+    cursorY -= 2;
+    drawLine(metaLine, pageConfig.metaSize, { color: rgb(0.45, 0.42, 0.35) });
+    cursorY -= 8;
+
+    bodyParagraphs.forEach((paragraph, paragraphIndex) => {
+      const lines = wrapPreviewPdfLine(
+        paragraph || "",
+        font,
+        pageConfig.bodySize,
+        maxWidth,
+      );
+      lines.forEach((line) => {
+        drawLine(line || " ", pageConfig.bodySize);
+      });
+      if (paragraphIndex < bodyParagraphs.length - 1) {
+        cursorY -= pageConfig.bodySize * 0.65;
+      }
+    });
+
+    const pdfBytes = await pdfDoc.save();
+    return Buffer.from(pdfBytes);
+  }
+
+  function resolveChatAttachmentLinkFromOssFiles(
+    attachment,
+    attachmentIndex,
+    ossFiles = [],
+  ) {
+    const safeOssFiles = normalizeUploadedFileContextOssFiles(ossFiles);
+    if (safeOssFiles.length === 0) return null;
+
+    const attachmentName = sanitizeGroupChatFileName(attachment?.name);
+    const attachmentMimeType = sanitizeGroupChatFileMimeType(attachment?.type);
+    const attachmentSize = sanitizeRuntimeInteger(
+      attachment?.size,
+      0,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    );
+    const matchedByMeta =
+      safeOssFiles.find((item) => {
+        const sameName =
+          sanitizeGroupChatFileName(item?.fileName) === attachmentName &&
+          !!attachmentName;
+        const sameMime =
+          sanitizeGroupChatFileMimeType(item?.mimeType) === attachmentMimeType &&
+          !!attachmentMimeType;
+        const sameSize =
+          sanitizeRuntimeInteger(item?.size, 0, 0, Number.MAX_SAFE_INTEGER) ===
+            attachmentSize && attachmentSize > 0;
+        return sameName || (sameMime && sameSize);
+      }) || null;
+    const matchedByIndex =
+      !matchedByMeta &&
+      attachmentIndex >= 0 &&
+      attachmentIndex < safeOssFiles.length
+        ? safeOssFiles[attachmentIndex]
+        : null;
+    const matched = matchedByMeta || matchedByIndex;
+    if (!matched) return null;
+
+    const ossKey = sanitizeGroupChatOssObjectKey(matched?.ossKey);
+    const url = sanitizeGroupChatHttpUrl(matched?.fileUrl);
+    if (!ossKey && !url) return null;
+    return { ossKey, url };
+  }
+
+  function sanitizeSelectedContextFiles(raw) {
+    let source = raw;
+    if (typeof source === "string") {
+      try {
+        source = JSON.parse(source);
+      } catch {
+        source = [];
+      }
+    }
+    const list = Array.isArray(source) ? source : [];
+    return list
+      .map((item) => {
+        const messageId = sanitizeId(item?.messageId, "");
+        const attachmentIndex = sanitizeRuntimeInteger(
+          item?.attachmentIndex,
+          -1,
+          -1,
+          7,
+        );
+        if (!messageId || attachmentIndex < 0) return null;
+        const fileId = sanitizeText(item?.fileId, "", 160);
+        const inputType = String(item?.inputType || "")
+          .trim()
+          .toLowerCase();
+        const safeInputType =
+          inputType === "input_file" ||
+          inputType === "input_image" ||
+          inputType === "input_video"
+            ? inputType
+            : "";
+        return {
+          key: sanitizeText(item?.key, "", 240),
+          messageId,
+          attachmentIndex,
+          name: sanitizeGroupChatFileName(item?.name || "文件"),
+          type: sanitizeGroupChatFileMimeType(item?.type),
+          kind: sanitizeText(item?.kind, "", 24).toLowerCase(),
+          fileId,
+          inputType: safeInputType,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function filterUploadedContextContentByFileName(content, fileName) {
+    const normalized = normalizeMessageContent(content);
+    const safeName = sanitizeGroupChatFileName(fileName);
+    if (!Array.isArray(normalized) || !safeName) return [];
+
+    return normalized
+      .map((part) => {
+        const type = String(part?.type || "")
+          .trim()
+          .toLowerCase();
+        if (type !== "text") return null;
+        const text = String(part?.text || "");
+        if (!text.includes(`[附件: ${safeName}]`)) return null;
+        return { type: "text", text };
+      })
+      .filter(Boolean);
+  }
+
+  async function injectSelectedContextFilesIntoMessages(
+    messages,
+    selectedContextFiles,
+    {
+      userId,
+      sessionId,
+      provider = "",
+      protocol = "",
+      agentId = "",
+    } = {},
+  ) {
+    const safeMessages = Array.isArray(messages) ? messages : [];
+    const existingMessageIds = new Set(
+      safeMessages.map((item) => sanitizeId(item?.id, "")).filter(Boolean),
+    );
+    const safeSelections = sanitizeSelectedContextFiles(selectedContextFiles).filter(
+      (item) => !existingMessageIds.has(item.messageId),
+    );
+    if (safeMessages.length === 0 || safeSelections.length === 0) return;
+
+    const latestUserMessage = resolveLatestUserMessage(safeMessages);
+    if (!latestUserMessage) return;
+
+    const directRefs = sanitizeVolcengineFileRefsPayload(
+      safeSelections
+        .map((item) => {
+          if (!item.fileId || !item.inputType) return null;
+          return {
+            fileId: item.fileId,
+            inputType: item.inputType,
+          };
+        })
+        .filter(Boolean),
+    );
+    if (directRefs.length > 0) {
+      attachVolcengineFileRefsToLatestUserMessage(safeMessages, directRefs);
+    }
+
+    const selectedMessageIds = Array.from(
+      new Set(safeSelections.map((item) => item.messageId).filter(Boolean)),
+    );
+    if (selectedMessageIds.length === 0) return;
+
+    let docs = [];
+    try {
+      docs = await UploadedFileContext.find(
+        {
+          userId: sanitizeId(userId, ""),
+          sessionId: sanitizeId(sessionId, ""),
+          messageId: { $in: selectedMessageIds },
+          expiresAt: { $gt: new Date() },
+        },
+        { messageId: 1, content: 1, preparedAttachmentTokens: 1 },
+      ).lean();
+    } catch (error) {
+      console.warn(
+        `[chat-file-context] 读取已选文件上下文失败（${sessionId}）：`,
+        error?.message || error,
+      );
+      return;
+    }
+    if (!Array.isArray(docs) || docs.length === 0) return;
+
+    const docsByMessageId = new Map();
+    docs.forEach((doc) => {
+      const messageId = sanitizeId(doc?.messageId, "");
+      if (!messageId) return;
+      docsByMessageId.set(messageId, doc);
+    });
+
+    const appendEntries = [];
+    const preparedTokenRefs = [];
+    safeSelections.forEach((item) => {
+      const doc = docsByMessageId.get(item.messageId);
+      if (!doc) return;
+
+      const matchingTextParts = filterUploadedContextContentByFileName(
+        doc?.content,
+        item.name,
+      );
+      if (matchingTextParts.length > 0) {
+        appendEntries.push({ parts: matchingTextParts });
+      }
+
+      if (
+        (item.kind === "pdf" || item.kind === "word") &&
+        Array.isArray(doc?.preparedAttachmentTokens) &&
+        doc.preparedAttachmentTokens.length > 0
+      ) {
+        doc.preparedAttachmentTokens.forEach((token) => {
+          preparedTokenRefs.push({ token });
+        });
+      }
+    });
+
+    if (appendEntries.length > 0) {
+      attachPreparedAttachmentPartsToLatestUserMessage(
+        safeMessages,
+        appendEntries,
+      );
+    }
+
+    if (preparedTokenRefs.length > 0) {
+      const preparedResolution = resolvePreparedAttachmentRefsFromCache({
+        refs: preparedTokenRefs,
+        userId,
+        sessionId,
+        provider,
+        protocol,
+        agentId,
+      });
+      if (Array.isArray(preparedResolution?.entries) && preparedResolution.entries.length > 0) {
+        attachPreparedAttachmentPartsToLatestUserMessage(
+          safeMessages,
+          preparedResolution.entries,
+        );
+      }
+    }
+  }
 
   function buildSessionTitleQuestionText(question, answer) {
     const safeQuestion = sanitizeText(question, "", 600);
@@ -1000,6 +1381,22 @@ export function registerChatAndImageRoutes(app, deps) {
             0,
             GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES,
           );
+          const originalUploadedList = await uploadChatAttachmentsToOss({
+            files: [file],
+            userId,
+            sessionId,
+            source: "chat-attachments-prepare",
+            stopOnError: false,
+          });
+          const originalUploaded = originalUploadedList[0] || null;
+          const originalOssKey = sanitizeGroupChatOssObjectKey(originalUploaded?.ossKey);
+          const originalDirectUrl = sanitizeGroupChatHttpUrl(originalUploaded?.fileUrl);
+          const originalSignedUrl = originalOssKey
+            ? await buildGroupChatFileSignedDownloadUrl({
+                ossKey: originalOssKey,
+                fileName,
+              })
+            : "";
           const token = savePreparedAttachmentToCache({
             userId,
             sessionId,
@@ -1027,6 +1424,8 @@ export function registerChatAndImageRoutes(app, deps) {
             fileName,
             mimeType: mime,
             size: fileSize,
+            ossKey: originalOssKey,
+            url: sanitizeGroupChatHttpUrl(originalSignedUrl || originalDirectUrl),
             pageCount: Math.max(0, Number(converted?.pageCount) || 0),
             imageCount,
             fallbackApplied,
@@ -1069,6 +1468,253 @@ export function registerChatAndImageRoutes(app, deps) {
       } catch (error) {
         res.status(500).json({
           error: error?.message || "会话标题生成失败，请稍后重试。",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/chat/document-preview",
+    requireChatAuth,
+    upload.single("file"),
+    async (req, res) => {
+      const file = req.file;
+      if (!file) {
+        res.status(400).json({ error: "缺少待预览文件。" });
+        return;
+      }
+
+      const ext = getFileExtension(file?.originalname);
+      const mime = sanitizeGroupChatFileMimeType(file?.mimetype);
+      const safeFileName = sanitizeGroupChatFileName(file?.originalname || "document.pdf");
+      const previewFileName = safeFileName.replace(/\.[a-z0-9]+$/i, "") || "document";
+      const lowerExt = String(ext || "").toLowerCase();
+      const isHtmlPreview =
+        mime.includes("html") || lowerExt === "html" || lowerExt === "htm";
+      const isMarkdownPreview =
+        mime.includes("markdown") ||
+        mime.includes("mdx") ||
+        lowerExt === "md" ||
+        lowerExt === "markdown" ||
+        lowerExt === "mdown" ||
+        lowerExt === "mkd";
+
+      if (!Buffer.isBuffer(file?.buffer) || file.buffer.length === 0) {
+        res.status(400).json({ error: "文件内容为空，无法生成预览。" });
+        return;
+      }
+
+      try {
+        let pdfBuffer = Buffer.from([]);
+
+        if (isPdfFile(ext, mime)) {
+          pdfBuffer = file.buffer;
+        } else if (isWordFile(ext, mime)) {
+          if (String(ext || "").toLowerCase() === "doc") {
+            res.status(400).json({
+              error: "暂不支持旧版 .doc 生成预览，请先另存为 .docx 后重试。",
+            });
+            return;
+          }
+
+          const extracted = await mammoth.extractRawText({ buffer: file.buffer });
+          pdfBuffer = await buildDocumentPreviewPdfBuffer({
+            fileName: safeFileName,
+            sourceLabel: "Word 文档",
+            text: extracted?.value || "",
+          });
+        } else if (isHtmlPreview || isMarkdownPreview) {
+          res.setHeader(
+            "Content-Type",
+            isHtmlPreview ? "text/html; charset=utf-8" : "text/markdown; charset=utf-8",
+          );
+          res.setHeader(
+            "Content-Disposition",
+            buildAttachmentContentDisposition(safeFileName),
+          );
+          res.setHeader("Cache-Control", "private, no-store");
+          res.send(file.buffer);
+          return;
+        } else {
+          res.status(400).json({ error: "仅支持 PDF、Word、HTML 或 Markdown 文档预览。" });
+          return;
+        }
+
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          buildAttachmentContentDisposition(`${previewFileName}.pdf`),
+        );
+        res.setHeader("Cache-Control", "private, no-store");
+        res.send(pdfBuffer);
+      } catch (error) {
+        res.status(500).json({
+          error: error?.message || "文档预览生成失败，请稍后重试。",
+        });
+      }
+    },
+  );
+
+  app.get(
+    "/api/chat/document-preview/attachment",
+    requireChatAuth,
+    async (req, res) => {
+      const chatUserId = sanitizeId(req.authUser?._id, "");
+      const storageUserId = sanitizeId(req.authStorageUserId || req.authUser?._id, "");
+      const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+      const sessionId = sanitizeId(req.query?.sessionId, "");
+      const messageId = sanitizeId(req.query?.messageId, "");
+      const attachmentIndex = sanitizeRuntimeInteger(
+        req.query?.attachmentIndex,
+        -1,
+        -1,
+        7,
+      );
+      const fallbackFileName = sanitizeGroupChatFileName(req.query?.fileName || "聊天附件.bin");
+      const fallbackMimeType = sanitizeGroupChatFileMimeType(req.query?.mimeType);
+      const fallbackOssKey = sanitizeGroupChatOssObjectKey(req.query?.ossKey);
+      const fallbackDirectUrl = sanitizeGroupChatHttpUrl(req.query?.url);
+
+      if ((!chatUserId || !sessionId || !messageId || attachmentIndex < 0) && !fallbackOssKey && !fallbackDirectUrl) {
+        res.status(400).json({ error: "无效参数。" });
+        return;
+      }
+
+      let fileName = fallbackFileName;
+      let mimeType = fallbackMimeType;
+      let ossKey = fallbackOssKey;
+      let directUrl = fallbackDirectUrl;
+
+      if (chatUserId && sessionId && messageId && attachmentIndex >= 0) {
+        const stateDoc = await ChatState.findOne(
+          { userId: chatUserId },
+          { sessionMessages: 1, teacherStates: 1 },
+        ).lean();
+        const currentState = normalizeChatStateDoc(stateDoc, teacherScopeKey);
+        const currentMessages = Array.isArray(currentState.sessionMessages?.[sessionId])
+          ? currentState.sessionMessages[sessionId]
+          : [];
+        const message =
+          currentMessages.find((item) => sanitizeId(item?.id, "") === messageId) || null;
+
+        if (message) {
+          const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+          const attachment = attachments[attachmentIndex] || null;
+          if (attachment) {
+            fileName = sanitizeGroupChatFileName(
+              attachment?.name || fileName || `聊天附件-${attachmentIndex + 1}.bin`,
+            );
+            mimeType = sanitizeGroupChatFileMimeType(attachment?.type || mimeType);
+            ossKey = ossKey || sanitizeGroupChatOssObjectKey(attachment?.ossKey);
+            directUrl = directUrl || sanitizeGroupChatHttpUrl(attachment?.url || attachment?.fileUrl);
+
+            if (!ossKey || !directUrl) {
+              const uploadedContextDoc = await UploadedFileContext.findOne({
+                userId: storageUserId,
+                sessionId,
+                messageId,
+              })
+                .select({ ossFiles: 1 })
+                .lean();
+              const resolved = resolveChatAttachmentLinkFromOssFiles(
+                attachment,
+                attachmentIndex,
+                uploadedContextDoc?.ossFiles,
+              );
+              if (resolved) {
+                ossKey = ossKey || sanitizeGroupChatOssObjectKey(resolved.ossKey);
+                directUrl = directUrl || sanitizeGroupChatHttpUrl(resolved.url);
+              }
+            }
+          }
+        }
+      }
+
+      const ext = getFileExtension(fileName);
+      const lowerExt = String(ext || "").toLowerCase();
+      const isHtmlPreview =
+        mimeType.includes("html") || lowerExt === "html" || lowerExt === "htm";
+      const isMarkdownPreview =
+        mimeType.includes("markdown") ||
+        mimeType.includes("mdx") ||
+        lowerExt === "md" ||
+        lowerExt === "markdown" ||
+        lowerExt === "mdown" ||
+        lowerExt === "mkd";
+
+      const downloadUrl =
+        (ossKey
+          ? await buildTeacherLessonFileDownloadUrl({
+              ossKey,
+              fileName,
+            })
+          : "") ||
+        directUrl ||
+        (ossKey ? buildGroupChatOssObjectUrl(ossKey) : "");
+
+      if (!downloadUrl) {
+        res.status(404).json({ error: "附件缺少可预览地址。" });
+        return;
+      }
+
+      try {
+        const upstream = await fetch(downloadUrl);
+        if (!upstream.ok) {
+          throw new Error(`预览文件下载失败（${upstream.status}）`);
+        }
+        const fileBuffer = Buffer.from(await upstream.arrayBuffer());
+        if (!fileBuffer.length) {
+          throw new Error("附件内容为空，无法预览。");
+        }
+
+        if (isPdfFile(ext, mimeType)) {
+          res.setHeader("Content-Type", "application/pdf");
+          res.setHeader(
+            "Content-Disposition",
+            buildAttachmentContentDisposition(fileName),
+          );
+          res.setHeader("Cache-Control", "private, no-store");
+          res.send(fileBuffer);
+          return;
+        }
+
+        if (isWordFile(ext, mimeType)) {
+          if (String(ext || "").toLowerCase() === "doc") {
+            res.status(400).json({
+              error: "暂不支持旧版 .doc 生成预览，请先另存为 .docx 后重试。",
+            });
+            return;
+          }
+          const extracted = await mammoth.extractRawText({ buffer: fileBuffer });
+          const previewPdf = await buildDocumentPreviewPdfBuffer({
+            fileName,
+            sourceLabel: "Word 文档",
+            text: extracted?.value || "",
+          });
+          res.setHeader("Content-Type", "application/pdf");
+          res.setHeader(
+            "Content-Disposition",
+            buildAttachmentContentDisposition(`${fileName.replace(/\.[a-z0-9]+$/i, "") || "document"}.pdf`),
+          );
+          res.setHeader("Cache-Control", "private, no-store");
+          res.send(previewPdf);
+          return;
+        }
+
+        if (isHtmlPreview || isMarkdownPreview) {
+          res.setHeader(
+            "Content-Type",
+            isHtmlPreview ? "text/html; charset=utf-8" : "text/markdown; charset=utf-8",
+          );
+          res.setHeader("Cache-Control", "private, no-store");
+          res.send(fileBuffer);
+          return;
+        }
+
+        res.status(400).json({ error: "当前附件类型暂不支持预览。" });
+      } catch (error) {
+        res.status(500).json({
+          error: error?.message || "附件预览生成失败，请稍后重试。",
         });
       }
     },
@@ -1227,6 +1873,22 @@ export function registerChatAndImageRoutes(app, deps) {
             0,
             GROUP_CHAT_FILE_MAX_FILE_SIZE_BYTES,
           );
+          const originalUploadedList = await uploadChatAttachmentsToOss({
+            files: [file],
+            userId,
+            sessionId,
+            source: "chat-attachments-prepare",
+            stopOnError: false,
+          });
+          const originalUploaded = originalUploadedList[0] || null;
+          const originalOssKey = sanitizeGroupChatOssObjectKey(originalUploaded?.ossKey);
+          const originalDirectUrl = sanitizeGroupChatHttpUrl(originalUploaded?.fileUrl);
+          const originalSignedUrl = originalOssKey
+            ? await buildGroupChatFileSignedDownloadUrl({
+                ossKey: originalOssKey,
+                fileName,
+              })
+            : "";
           const token = savePreparedAttachmentToCache({
             userId,
             sessionId,
@@ -1254,6 +1916,8 @@ export function registerChatAndImageRoutes(app, deps) {
             fileName,
             mimeType: mime,
             size: fileSize,
+            ossKey: originalOssKey,
+            url: sanitizeGroupChatHttpUrl(originalSignedUrl || originalDirectUrl),
             pageCount: Math.max(0, Number(converted?.pageCount) || 0),
             imageCount,
             fallbackApplied,
@@ -1299,12 +1963,33 @@ export function registerChatAndImageRoutes(app, deps) {
       const preparedAttachmentRefs = readRequestPreparedAttachmentRefs(
         req.body?.preparedAttachmentRefs,
       );
+      const selectedContextFiles = sanitizeSelectedContextFiles(
+        req.body?.selectedContextFiles,
+      );
       let messages = [];
       try {
         messages = JSON.parse(req.body.messages || "[]");
       } catch {
         res.status(400).json({ error: "Invalid messages JSON" });
         return;
+      }
+
+      if (selectedContextFiles.length > 0) {
+        const runtimeConfig = await getResolvedAgentRuntimeConfig(agentId);
+        const provider = getProviderByAgent(agentId, runtimeConfig);
+        const model = getModelByAgent(agentId, runtimeConfig);
+        const protocol = resolveRequestProtocol(
+          runtimeConfig.protocol,
+          provider,
+          model,
+        ).value;
+        await injectSelectedContextFilesIntoMessages(messages, selectedContextFiles, {
+          userId: String(req.authStorageUserId || req.authUser?._id || ""),
+          sessionId,
+          provider,
+          protocol,
+          agentId,
+        });
       }
 
       await streamAgentResponse({
@@ -1347,12 +2032,33 @@ export function registerChatAndImageRoutes(app, deps) {
       const preparedAttachmentRefs = readRequestPreparedAttachmentRefs(
         req.body?.preparedAttachmentRefs,
       );
+      const selectedContextFiles = sanitizeSelectedContextFiles(
+        req.body?.selectedContextFiles,
+      );
       let messages = [];
       try {
         messages = JSON.parse(req.body.messages || "[]");
       } catch {
         res.status(400).json({ error: "Invalid messages JSON" });
         return;
+      }
+
+      if (selectedContextFiles.length > 0) {
+        const runtimeConfig = await getResolvedAgentRuntimeConfig(AGENT_E_ID);
+        const provider = getProviderByAgent(AGENT_E_ID, runtimeConfig);
+        const model = getModelByAgent(AGENT_E_ID, runtimeConfig);
+        const protocol = resolveRequestProtocol(
+          runtimeConfig.protocol,
+          provider,
+          model,
+        ).value;
+        await injectSelectedContextFilesIntoMessages(messages, selectedContextFiles, {
+          userId: String(req.authStorageUserId || req.authUser?._id || ""),
+          sessionId,
+          provider,
+          protocol,
+          agentId: AGENT_E_ID,
+        });
       }
 
       await streamAgentEResponse({

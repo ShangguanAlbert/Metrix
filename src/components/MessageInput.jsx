@@ -84,6 +84,7 @@ export default function MessageInput({
   onClearQuote,
   onConsumeQuote,
   onPrepareFiles,
+  onFilesChange,
 }) {
   const [text, setText] = useState("");
   const [files, setFiles] = useState([]);
@@ -217,6 +218,10 @@ export default function MessageInput({
       previews.forEach((item) => URL.revokeObjectURL(item.url));
     };
   }, [files]);
+
+  useEffect(() => {
+    onFilesChange?.(files);
+  }, [files, onFilesChange]);
 
   return (
     <div

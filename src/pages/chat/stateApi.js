@@ -129,15 +129,105 @@ export async function prepareChatAttachments({
   return data;
 }
 
-export function downloadChatAttachment({
+export async function fetchChatDocumentPreviewBlob({ file, signal } = {}) {
+  if (!(file instanceof File)) {
+    throw new Error("缺少可预览的文档文件。");
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const resp = await fetch("/api/chat/document-preview", {
+    method: "POST",
+    headers: authHeaders(),
+    body: formData,
+    signal,
+  });
+
+  if (!resp.ok) {
+    const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
+    if (contentType.includes("application/json")) {
+      const data = await readJson(resp);
+      const message = data?.error || data?.message || `请求失败（${resp.status}）`;
+      throw new Error(message);
+    }
+    const text = await resp.text().catch(() => "");
+    throw new Error(text || `请求失败（${resp.status}）`);
+  }
+
+  return resp.blob();
+}
+
+export async function fetchChatAttachmentDocumentPreviewBlob({
   sessionId = "",
   messageId = "",
   attachmentIndex = -1,
+  attachment = null,
+  signal,
 } = {}) {
   const params = new URLSearchParams();
   params.set("sessionId", String(sessionId || "").trim());
   params.set("messageId", String(messageId || "").trim());
   params.set("attachmentIndex", String(Number(attachmentIndex)));
+  const ossKey = String(attachment?.ossKey || "").trim();
+  const url = String(attachment?.url || attachment?.fileUrl || "").trim();
+  const fileName = String(attachment?.name || attachment?.fileName || "").trim();
+  const mimeType = String(attachment?.type || attachment?.mimeType || "").trim();
+  if (ossKey) params.set("ossKey", ossKey);
+  if (url) params.set("url", url);
+  if (fileName) params.set("fileName", fileName);
+  if (mimeType) params.set("mimeType", mimeType);
+
+  const resp = await fetch(`/api/chat/document-preview/attachment?${params.toString()}`, {
+    method: "GET",
+    headers: authHeaders(),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
+    if (contentType.includes("application/json")) {
+      const data = await readJson(resp);
+      const message = data?.error || data?.message || `请求失败（${resp.status}）`;
+      throw new Error(message);
+    }
+    const text = await resp.text().catch(() => "");
+    throw new Error(text || `请求失败（${resp.status}）`);
+  }
+
+  return resp.blob();
+}
+
+export async function fetchChatDocumentPreviewPdf(options = {}) {
+  return fetchChatDocumentPreviewBlob(options);
+}
+
+export async function fetchChatAttachmentDocumentPreviewPdf(options = {}) {
+  return fetchChatAttachmentDocumentPreviewBlob(options);
+}
+
+export function downloadChatAttachment({
+  sessionId = "",
+  messageId = "",
+  attachmentIndex = -1,
+  mode = "download",
+  attachment = null,
+} = {}) {
+  const params = new URLSearchParams();
+  params.set("sessionId", String(sessionId || "").trim());
+  params.set("messageId", String(messageId || "").trim());
+  params.set("attachmentIndex", String(Number(attachmentIndex)));
+  if (String(mode || "").trim()) {
+    params.set("mode", String(mode || "").trim());
+  }
+  const ossKey = String(attachment?.ossKey || "").trim();
+  const url = String(attachment?.url || attachment?.fileUrl || "").trim();
+  const fileName = String(attachment?.name || attachment?.fileName || "").trim();
+  const mimeType = String(attachment?.type || attachment?.mimeType || "").trim();
+  if (ossKey) params.set("ossKey", ossKey);
+  if (url) params.set("url", url);
+  if (fileName) params.set("fileName", fileName);
+  if (mimeType) params.set("mimeType", mimeType);
   return request(`/api/chat/attachments/download?${params.toString()}`);
 }
 

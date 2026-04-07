@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Lock, LockOpen, LogOut, X } from "lucide-react";
+import { FileOutput, Lock, LockOpen, LogOut, PanelRightOpen, X } from "lucide-react";
 import {
   useBeforeUnload,
   useLocation,
@@ -10,6 +10,7 @@ import Sidebar from "../../../components/Sidebar.jsx";
 import AgentSelect from "../../../components/AgentSelect.jsx";
 import MessageList from "../../../components/MessageList.jsx";
 import MessageInput from "../../../components/MessageInput.jsx";
+import ChatDocumentPreview from "../../../components/chat/ChatDocumentPreview.jsx";
 import ExportUserInfoModal from "../../../components/chat/ExportUserInfoModal.jsx";
 import {
   AGENT_META,
@@ -96,6 +97,9 @@ const DEFAULT_SESSION_MESSAGES = {
 };
 const CONTEXT_USER_ROUNDS = 10;
 const VIDEO_EXTENSIONS = new Set(["mp4", "avi", "mov"]);
+const WORD_PREVIEW_EXTENSIONS = new Set(["doc", "docx"]);
+const HTML_PREVIEW_EXTENSIONS = new Set(["html", "htm"]);
+const MARKDOWN_PREVIEW_EXTENSIONS = new Set(["md", "markdown", "mdown", "mkd"]);
 const CHAT_AGENT_IDS = Object.freeze(["A", "B", "C", "D", "E"]);
 const DEFAULT_AGENT_PROVIDER_MAP = Object.freeze({
   A: "volcengine",
@@ -165,6 +169,141 @@ function isImageUploadFile(file) {
     .trim()
     .toLowerCase();
   return /\.(png|jpg|jpeg|gif|webp|bmp|svg|heic|avif)$/i.test(name);
+}
+
+function readUploadItemFile(item) {
+  if (item instanceof File) return item;
+  if (item?.file instanceof File) return item.file;
+  return null;
+}
+
+function readUploadItemName(item) {
+  const localFile = readUploadItemFile(item);
+  if (localFile) return String(localFile.name || "").trim();
+  return String(item?.name || item?.fileName || "").trim();
+}
+
+function readUploadItemMimeType(item) {
+  const localFile = readUploadItemFile(item);
+  if (localFile) {
+    return String(localFile.type || "")
+      .trim()
+      .toLowerCase();
+  }
+  return String(item?.mimeType || item?.type || "")
+    .trim()
+    .toLowerCase();
+}
+
+function getUploadItemExtension(item) {
+  const name = readUploadItemName(item).toLowerCase();
+  const match = name.match(/\.([a-z0-9]+)$/i);
+  return match?.[1] || "";
+}
+
+function classifyUploadPreviewKind(item) {
+  const mime = readUploadItemMimeType(item);
+  const extension = getUploadItemExtension(item);
+  if (mime.includes("pdf") || extension === "pdf") return "pdf";
+  if (mime.includes("word") || WORD_PREVIEW_EXTENSIONS.has(extension)) {
+    return "word";
+  }
+  if (mime.includes("html") || HTML_PREVIEW_EXTENSIONS.has(extension)) {
+    return "html";
+  }
+  if (mime.includes("markdown") || mime === "text/x-markdown" || MARKDOWN_PREVIEW_EXTENSIONS.has(extension)) {
+    return "markdown";
+  }
+  return "";
+}
+
+function createDocumentPreviewDescriptor(item) {
+  const file = readUploadItemFile(item);
+  if (!(file instanceof File)) return null;
+
+  const kind = classifyUploadPreviewKind(item);
+  if (!kind) return null;
+
+  const name = readUploadItemName(item) || "文档";
+  const mimeType = readUploadItemMimeType(item);
+  return {
+    key: [
+      "composer",
+      kind,
+      name,
+      Number(file.size || 0),
+      Number(file.lastModified || 0),
+      mimeType,
+    ].join("::"),
+    source: "composer",
+    kind,
+    name,
+    file,
+    mimeType,
+    size: Number(file.size || 0),
+  };
+}
+
+function collectComposerDocumentEntries(items) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  return list
+    .map((item) => createDocumentPreviewDescriptor(item))
+    .filter(Boolean);
+}
+
+function createSessionDocumentDescriptor(
+  sessionId,
+  message,
+  attachment,
+  attachmentIndex,
+  messageIndex,
+) {
+  const kind = classifyUploadPreviewKind(attachment);
+  if (!kind) return null;
+  const name = readUploadItemName(attachment) || "文档";
+  return {
+    key: `session::${String(message?.id || "").trim()}::${attachmentIndex}`,
+    source: "session",
+    kind,
+    name,
+    mimeType: readUploadItemMimeType(attachment),
+    size: Number(attachment?.size || 0),
+    sessionId: String(sessionId || "").trim(),
+    messageId: String(message?.id || "").trim(),
+    attachmentIndex,
+    messageIndex,
+    attachment,
+    fileId: String(attachment?.fileId || "").trim(),
+    inputType: String(attachment?.inputType || "")
+      .trim()
+      .toLowerCase(),
+  };
+}
+
+function collectSessionDocumentEntries(sessionId, messages) {
+  const safeMessages = Array.isArray(messages) ? messages : [];
+  const entries = [];
+  safeMessages.forEach((message, messageIndex) => {
+    const attachments = Array.isArray(message?.attachments)
+      ? message.attachments
+      : [];
+    attachments.forEach((attachment, attachmentIndex) => {
+      const entry = createSessionDocumentDescriptor(
+        sessionId,
+        message,
+        attachment,
+        attachmentIndex,
+        messageIndex,
+      );
+      if (entry) entries.push(entry);
+    });
+  });
+  return entries.sort((left, right) => {
+    if (left.messageIndex !== right.messageIndex) {
+      return right.messageIndex - left.messageIndex;
+    }
+    return left.attachmentIndex - right.attachmentIndex;
+  });
 }
 
 function loadImageElementFromObjectUrl(objectUrl) {
@@ -1010,10 +1149,19 @@ export default function ChatDesktopPage() {
   const [dismissedRoundWarningBySession, setDismissedRoundWarningBySession] =
     useState({});
   const [messageBottomInset, setMessageBottomInset] = useState(0);
+  const [composerDocumentEntries, setComposerDocumentEntries] = useState([]);
+  const [selectedContextDocumentKeys, setSelectedContextDocumentKeys] = useState(
+    [],
+  );
+  const [activeDocumentKey, setActiveDocumentKey] = useState("");
+  const [dismissedDocumentPreviewKey, setDismissedDocumentPreviewKey] =
+    useState("");
+  const [documentPreviewClosing, setDocumentPreviewClosing] = useState(false);
 
   const messageListRef = useRef(null);
   const chatInputWrapRef = useRef(null);
   const exportWrapRef = useRef(null);
+  const documentPreviewCloseTimerRef = useRef(null);
   const streamTargetRef = useRef({
     sessionId: "",
     assistantId: "",
@@ -1046,6 +1194,45 @@ export default function ChatDesktopPage() {
   const pendingNavigationSessionIdRef = useRef("");
   const lastReportedRoutePathRef = useRef("");
 
+  function buildFreshAutoSessionBundle({
+    agentBySession: sourceAgentBySession,
+    smartContextEnabledBySessionAgent: sourceSmartContextMap,
+    preferredAgentId = "",
+  } = {}) {
+    const sessionRecord = createNewSessionRecord();
+    const nextAgentId =
+      teacherLockedAgentId ||
+      sanitizeSmartContextAgentId(preferredAgentId) ||
+      sanitizeSmartContextAgentId(agent) ||
+      "A";
+    const nextAgentBySession = patchAgentBySession(
+      sourceAgentBySession,
+      sessionRecord.session.id,
+      nextAgentId,
+    );
+    let nextSmartContextEnabledBySessionAgent = sanitizeSmartContextEnabledMap(
+      sourceSmartContextMap,
+    );
+    if (teacherScopedAgentLocked) {
+      nextSmartContextEnabledBySessionAgent = patchSmartContextEnabledBySessionAgent(
+        nextSmartContextEnabledBySessionAgent,
+        sessionRecord.session.id,
+        nextAgentId,
+        true,
+      );
+    }
+    return {
+      sessionRecord,
+      sessions: [sessionRecord.session],
+      sessionMessages: {
+        [sessionRecord.session.id]: sessionRecord.messages,
+      },
+      activeId: sessionRecord.session.id,
+      agentBySession: nextAgentBySession,
+      smartContextEnabledBySessionAgent: nextSmartContextEnabledBySessionAgent,
+    };
+  }
+
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeId) || null,
     [sessions, activeId],
@@ -1061,6 +1248,40 @@ export default function ChatDesktopPage() {
   const activeSessionTitle = useMemo(
     () => String(activeSession?.title || "").trim() || `智能体 ${agent}`,
     [activeSession, agent],
+  );
+  const sessionDocumentEntries = useMemo(
+    () => collectSessionDocumentEntries(activeId, messages),
+    [activeId, messages],
+  );
+  const documentLibrary = useMemo(
+    () => [...composerDocumentEntries, ...sessionDocumentEntries],
+    [composerDocumentEntries, sessionDocumentEntries],
+  );
+  const activeDocumentPreview = useMemo(
+    () =>
+      documentLibrary.find((item) => item.key === activeDocumentKey) ||
+      documentLibrary[0] ||
+      null,
+    [activeDocumentKey, documentLibrary],
+  );
+  const isDocumentPreviewVisible = Boolean(
+    activeDocumentPreview &&
+      activeDocumentPreview.key !== dismissedDocumentPreviewKey,
+  );
+  const hasHiddenDocumentPreview = Boolean(
+    activeDocumentPreview && !isDocumentPreviewVisible,
+  );
+  const shouldRenderDocumentPreviewPane = Boolean(
+    activeDocumentPreview && (!hasHiddenDocumentPreview || documentPreviewClosing),
+  );
+  const selectedContextDocuments = useMemo(
+    () =>
+      documentLibrary.filter(
+        (item) =>
+          item.source === "session" &&
+          selectedContextDocumentKeys.includes(item.key),
+      ),
+    [documentLibrary, selectedContextDocumentKeys],
   );
 
   useLayoutEffect(() => {
@@ -1939,19 +2160,37 @@ export default function ChatDesktopPage() {
         ? smartContextEnabledBySessionAgentRef.current
         : {};
     const currentActiveId = sanitizeSmartContextSessionId(activeIdRef.current);
-    const nextSessions = currentSessions.filter((session) => session.id !== sessionId);
-    const nextActiveSessionId =
+    let nextSessions = currentSessions.filter((session) => session.id !== sessionId);
+    let nextActiveSessionId =
       sessionId === currentActiveId ? nextSessions[0]?.id || "" : currentActiveId;
-    const nextMessages = { ...currentMessages };
+    let nextMessages = { ...currentMessages };
     delete nextMessages[sessionId];
-    const nextSmartContextMap = removeSmartContextBySessions(
+    let nextSmartContextMap = removeSmartContextBySessions(
       currentSmartContextMap,
       new Set([sessionId]),
     );
-    const nextAgentBySession = removeAgentBySessions(
+    let nextAgentBySession = removeAgentBySessions(
       currentAgentBySession,
       new Set([sessionId]),
     );
+    let autoCreatedSessionRecord = null;
+    if (nextSessions.length === 0) {
+      const freshBundle = buildFreshAutoSessionBundle({
+        agentBySession: nextAgentBySession,
+        smartContextEnabledBySessionAgent: nextSmartContextMap,
+        preferredAgentId: readAgentBySession(
+          currentAgentBySession,
+          currentActiveId,
+          teacherLockedAgentId || agent || "A",
+        ),
+      });
+      autoCreatedSessionRecord = freshBundle.sessionRecord;
+      nextSessions = freshBundle.sessions;
+      nextMessages = freshBundle.sessionMessages;
+      nextActiveSessionId = freshBundle.activeId;
+      nextSmartContextMap = freshBundle.smartContextEnabledBySessionAgent;
+      nextAgentBySession = freshBundle.agentBySession;
+    }
     const persistResult = await persistSessionStateImmediately({
       nextSessions,
       nextSessionMessages: nextMessages,
@@ -1960,6 +2199,20 @@ export default function ChatDesktopPage() {
       nextSmartContextEnabledBySessionAgent: nextSmartContextMap,
     });
     if (!persistResult.ok) return;
+    if (autoCreatedSessionRecord) {
+      try {
+        await persistMessageUpsertsImmediately(
+          autoCreatedSessionRecord.messages.map((message) => ({
+            sessionId: autoCreatedSessionRecord.session.id,
+            message,
+          })),
+          { awaitCompletion: true },
+        );
+      } catch (error) {
+        setStateSaveError(error?.message || "聊天记录保存失败");
+        return;
+      }
+    }
 
     emitChatDebugLog("delete_session_apply", {
       clickedSessionId: sanitizeSmartContextSessionId(sessionId),
@@ -1984,11 +2237,9 @@ export default function ChatDesktopPage() {
         persistResult.smartContextEnabledBySessionAgent,
     });
     if (sessionId === currentActiveId) {
-      if (nextSessions.length > 0) {
-        activateSession(nextSessions[0].id);
-      } else {
-        activateSession("", { replace: true });
-      }
+      activateSession(nextActiveSessionId || nextSessions[0]?.id || "", {
+        replace: autoCreatedSessionRecord !== null,
+      });
     }
     setDismissedRoundWarningBySession((prev) => {
       if (!prev[sessionId]) return prev;
@@ -2030,19 +2281,37 @@ export default function ChatDesktopPage() {
         ? smartContextEnabledBySessionAgentRef.current
         : {};
     const currentActiveId = sanitizeSmartContextSessionId(activeIdRef.current);
-    const nextSessions = currentSessions.filter((session) => !remove.has(session.id));
-    const nextActiveSessionId = remove.has(currentActiveId)
+    let nextSessions = currentSessions.filter((session) => !remove.has(session.id));
+    let nextActiveSessionId = remove.has(currentActiveId)
       ? nextSessions[0]?.id || ""
       : currentActiveId;
-    const nextMessages = { ...currentMessages };
+    let nextMessages = { ...currentMessages };
     sessionIds.forEach((id) => {
       delete nextMessages[id];
     });
-    const nextSmartContextMap = removeSmartContextBySessions(
+    let nextSmartContextMap = removeSmartContextBySessions(
       currentSmartContextMap,
       remove,
     );
-    const nextAgentBySession = removeAgentBySessions(currentAgentBySession, remove);
+    let nextAgentBySession = removeAgentBySessions(currentAgentBySession, remove);
+    let autoCreatedSessionRecord = null;
+    if (nextSessions.length === 0) {
+      const freshBundle = buildFreshAutoSessionBundle({
+        agentBySession: nextAgentBySession,
+        smartContextEnabledBySessionAgent: nextSmartContextMap,
+        preferredAgentId: readAgentBySession(
+          currentAgentBySession,
+          currentActiveId,
+          teacherLockedAgentId || agent || "A",
+        ),
+      });
+      autoCreatedSessionRecord = freshBundle.sessionRecord;
+      nextSessions = freshBundle.sessions;
+      nextMessages = freshBundle.sessionMessages;
+      nextActiveSessionId = freshBundle.activeId;
+      nextSmartContextMap = freshBundle.smartContextEnabledBySessionAgent;
+      nextAgentBySession = freshBundle.agentBySession;
+    }
     const persistResult = await persistSessionStateImmediately({
       nextSessions,
       nextSessionMessages: nextMessages,
@@ -2051,6 +2320,20 @@ export default function ChatDesktopPage() {
       nextSmartContextEnabledBySessionAgent: nextSmartContextMap,
     });
     if (!persistResult.ok) return;
+    if (autoCreatedSessionRecord) {
+      try {
+        await persistMessageUpsertsImmediately(
+          autoCreatedSessionRecord.messages.map((message) => ({
+            sessionId: autoCreatedSessionRecord.session.id,
+            message,
+          })),
+          { awaitCompletion: true },
+        );
+      } catch (error) {
+        setStateSaveError(error?.message || "聊天记录保存失败");
+        return;
+      }
+    }
 
     emitChatDebugLog("batch_delete_sessions_apply", {
       clickedSessionIds: Array.from(remove),
@@ -2075,11 +2358,9 @@ export default function ChatDesktopPage() {
         persistResult.smartContextEnabledBySessionAgent,
     });
     if (remove.has(currentActiveId)) {
-      if (nextSessions.length > 0) {
-        activateSession(nextSessions[0].id);
-      } else {
-        activateSession("", { replace: true });
-      }
+      activateSession(nextActiveSessionId || nextSessions[0]?.id || "", {
+        replace: autoCreatedSessionRecord !== null,
+      });
     }
     setDismissedRoundWarningBySession((prev) => {
       const next = { ...prev };
@@ -2584,6 +2865,8 @@ export default function ChatDesktopPage() {
             size: Number(ref?.size || file?.size || 0),
             type: String(ref?.mimeType || file?.type || ""),
             mimeType: String(ref?.mimeType || file?.type || ""),
+            url: String(ref?.url || "").trim(),
+            ossKey: String(ref?.ossKey || "").trim(),
             preparedToken,
           };
         });
@@ -2716,6 +2999,8 @@ export default function ChatDesktopPage() {
           name: String(item?.name || "文件"),
           size: Number(item?.size || 0),
           type: String(item?.mimeType || item?.type || ""),
+          url: String(item?.url || "").trim(),
+          ossKey: String(item?.ossKey || "").trim(),
           thumbnailUrl: String(item?.thumbnailUrl || "").trim(),
         };
       }
@@ -2863,6 +3148,23 @@ export default function ChatDesktopPage() {
       formData.append(
         "preparedAttachmentRefs",
         JSON.stringify(preparedAttachmentRefs),
+      );
+    }
+    if (selectedContextDocuments.length > 0) {
+      formData.append(
+        "selectedContextFiles",
+        JSON.stringify(
+          selectedContextDocuments.map((item) => ({
+            key: item.key,
+            messageId: item.messageId,
+            attachmentIndex: item.attachmentIndex,
+            name: item.name,
+            type: item.mimeType,
+            fileId: item.fileId,
+            inputType: item.inputType,
+            kind: item.kind,
+          })),
+        ),
       );
     }
 
@@ -3377,10 +3679,19 @@ export default function ChatDesktopPage() {
     abortActiveStream("user");
   }
 
-  async function handleMessageAttachmentDownload(message, _attachment, attachmentIndex) {
+  async function handleMessageAttachmentDownload(
+    message,
+    _attachment,
+    attachmentIndex,
+    options = {},
+  ) {
     const sessionId = sanitizeSmartContextSessionId(activeIdRef.current);
     const messageId = sanitizeSmartContextSessionId(message?.id);
     const safeAttachmentIndex = Number(attachmentIndex);
+    const mode =
+      String(options?.mode || "").trim().toLowerCase() === "inline"
+        ? "inline"
+        : "download";
     if (!sessionId || !messageId || !Number.isInteger(safeAttachmentIndex)) {
       throw new Error("无效附件下载参数");
     }
@@ -3388,7 +3699,54 @@ export default function ChatDesktopPage() {
       sessionId,
       messageId,
       attachmentIndex: safeAttachmentIndex,
+      mode,
+      attachment: _attachment,
     });
+  }
+
+  async function handleDocumentPreviewDownload(documentEntry) {
+    if (!documentEntry) return;
+
+    if (documentEntry.source === "composer" && documentEntry.file instanceof File) {
+      const objectUrl = URL.createObjectURL(documentEntry.file);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = String(documentEntry.name || documentEntry.file.name || "document").trim();
+      anchor.rel = "noopener noreferrer";
+      anchor.target = "_blank";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+      }, 1000);
+      return;
+    }
+
+    if (documentEntry.source === "session") {
+      const result = await handleMessageAttachmentDownload(
+        { id: documentEntry.messageId },
+        documentEntry.attachment,
+        documentEntry.attachmentIndex,
+      );
+      const downloadUrl = String(result?.downloadUrl || result?.url || "").trim();
+      const fileName = String(
+        result?.fileName || result?.filename || documentEntry.name || "document",
+      ).trim();
+      if (!downloadUrl) {
+        throw new Error("文档下载地址生成失败");
+      }
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      if (fileName) {
+        anchor.download = fileName;
+      }
+      anchor.rel = "noopener noreferrer";
+      anchor.target = "_blank";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    }
   }
 
   function scrollToLatestRound(duration = 420) {
@@ -3595,27 +3953,39 @@ export default function ChatDesktopPage() {
         if (cancelled) return;
 
         const state = data?.state || {};
-        const nextSessions =
-          Array.isArray(state.sessions) && state.sessions.length > 0
-            ? state.sessions
-            : DEFAULT_SESSIONS;
+        const hasStoredSessions = Array.isArray(state.sessions);
+        let bootstrapAutoSessionBundle = null;
+        let nextSessions = hasStoredSessions ? state.sessions : DEFAULT_SESSIONS;
         const nextGroups = stripLegacyPlaceholderGroups(
           Array.isArray(state.groups) ? state.groups : DEFAULT_GROUPS,
           nextSessions,
         );
-        const nextSessionMessages =
+        let nextSessionMessages =
           state.sessionMessages && typeof state.sessionMessages === "object"
             ? state.sessionMessages
             : nextSessions.length > 0
               ? DEFAULT_SESSION_MESSAGES
               : {};
-        const rawActiveId = String(
-          state.activeId || nextSessions[0]?.id || "",
-        );
         const stateSettings =
           state.settings && typeof state.settings === "object"
             ? state.settings
             : {};
+        if (hasStoredSessions && nextSessions.length === 0) {
+          bootstrapAutoSessionBundle = buildFreshAutoSessionBundle({
+            agentBySession: stateSettings.agentBySession,
+            smartContextEnabledBySessionAgent:
+              stateSettings.smartContextEnabledBySessionAgent,
+            preferredAgentId: stateSettings.agent,
+          });
+          nextSessions = bootstrapAutoSessionBundle.sessions;
+          nextSessionMessages = bootstrapAutoSessionBundle.sessionMessages;
+        }
+        let rawActiveId = String(
+          state.activeId || nextSessions[0]?.id || "",
+        );
+        if (bootstrapAutoSessionBundle) {
+          rawActiveId = bootstrapAutoSessionBundle.activeId;
+        }
         const nextTeacherScopeKey = normalizeTeacherScopeKey(
           data?.teacherScopeKey,
         );
@@ -3692,11 +4062,13 @@ export default function ChatDesktopPage() {
           resolvedSessionIds: Array.from(resolvedSessionIds),
         });
 
-        let nextAgentBySession = ensureAgentBySessionMap(
-          stateSettings.agentBySession,
-          resolvedSessions,
-          fallbackAgent,
-        );
+        let nextAgentBySession = bootstrapAutoSessionBundle
+          ? bootstrapAutoSessionBundle.agentBySession
+          : ensureAgentBySessionMap(
+              stateSettings.agentBySession,
+              resolvedSessions,
+              fallbackAgent,
+            );
         if (
           !lockedAgentId &&
           canRestoreSession &&
@@ -3735,6 +4107,10 @@ export default function ChatDesktopPage() {
           nextProviderDefaults,
         );
 
+        if (bootstrapAutoSessionBundle) {
+          nextSmartContextEnabledMap =
+            bootstrapAutoSessionBundle.smartContextEnabledBySessionAgent;
+        }
         if (
           stateSettings.smartContextEnabled &&
           nextProvider === "volcengine"
@@ -3798,6 +4174,26 @@ export default function ChatDesktopPage() {
         } else {
           setForceUserInfoModal(false);
           setShowUserInfoModal(false);
+        }
+
+        if (bootstrapAutoSessionBundle && !cancelled) {
+          const persistResult = await persistSessionStateImmediately({
+            nextGroups,
+            nextSessions: resolvedSessions,
+            nextSessionMessages: resolvedMessages,
+            nextActiveId: resolvedActiveId,
+            nextAgentBySession,
+            nextSmartContextEnabledBySessionAgent: nextSmartContextEnabledMap,
+          });
+          if (persistResult.ok) {
+            await persistMessageUpsertsImmediately(
+              bootstrapAutoSessionBundle.sessionRecord.messages.map((message) => ({
+                sessionId: bootstrapAutoSessionBundle.sessionRecord.session.id,
+                message,
+              })),
+              { awaitCompletion: true },
+            );
+          }
         }
 
         persistReadyRef.current = true;
@@ -4060,10 +4456,124 @@ export default function ChatDesktopPage() {
 
 
   useEffect(() => {
+    return () => {
+      if (documentPreviewCloseTimerRef.current) {
+        clearTimeout(documentPreviewCloseTimerRef.current);
+        documentPreviewCloseTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     setSelectedAskText("");
     setFocusUserMessageId("");
     setIsAtLatest(true);
+    setComposerDocumentEntries([]);
+    setSelectedContextDocumentKeys([]);
+    setActiveDocumentKey("");
+    setDismissedDocumentPreviewKey("");
+    setDocumentPreviewClosing(false);
   }, [activeId]);
+
+  useEffect(() => {
+    if (documentLibrary.length === 0) {
+      setDismissedDocumentPreviewKey("");
+      setDocumentPreviewClosing(false);
+    }
+  }, [documentLibrary.length]);
+
+  useEffect(() => {
+    if (isDocumentPreviewVisible) {
+      setDocumentPreviewClosing(false);
+    }
+  }, [isDocumentPreviewVisible]);
+
+  useEffect(() => {
+    if (
+      activeDocumentKey &&
+      documentLibrary.some((item) => item.key === activeDocumentKey)
+    ) {
+      return;
+    }
+    setActiveDocumentKey(documentLibrary[0]?.key || "");
+  }, [activeDocumentKey, documentLibrary]);
+
+  useEffect(() => {
+    setSelectedContextDocumentKeys((prev) =>
+      prev.filter((key) =>
+        documentLibrary.some(
+          (item) => item.key === key && item.source === "session",
+        ),
+      ),
+    );
+  }, [documentLibrary]);
+
+  const handleComposerFilesChange = useCallback((nextFiles) => {
+    const nextEntries = collectComposerDocumentEntries(nextFiles);
+    setComposerDocumentEntries(nextEntries);
+    if (nextEntries.length > 0) {
+      if (documentPreviewCloseTimerRef.current) {
+        clearTimeout(documentPreviewCloseTimerRef.current);
+        documentPreviewCloseTimerRef.current = null;
+      }
+      setDocumentPreviewClosing(false);
+      setActiveDocumentKey(nextEntries[nextEntries.length - 1].key);
+      setDismissedDocumentPreviewKey("");
+    }
+  }, []);
+
+  const handleSelectDocument = useCallback((documentEntry) => {
+    const nextKey = String(documentEntry?.key || "").trim();
+    if (!nextKey) return;
+    if (documentPreviewCloseTimerRef.current) {
+      clearTimeout(documentPreviewCloseTimerRef.current);
+      documentPreviewCloseTimerRef.current = null;
+    }
+    setDocumentPreviewClosing(false);
+    setActiveDocumentKey(nextKey);
+    setDismissedDocumentPreviewKey("");
+  }, []);
+
+  const handleToggleContextDocument = useCallback((documentEntry) => {
+    if (documentEntry?.source !== "session") return;
+    const nextKey = String(documentEntry?.key || "").trim();
+    if (!nextKey) return;
+    if (documentPreviewCloseTimerRef.current) {
+      clearTimeout(documentPreviewCloseTimerRef.current);
+      documentPreviewCloseTimerRef.current = null;
+    }
+    setDocumentPreviewClosing(false);
+    setSelectedContextDocumentKeys((prev) =>
+      prev.includes(nextKey)
+        ? prev.filter((key) => key !== nextKey)
+        : [...prev, nextKey],
+    );
+    setActiveDocumentKey(nextKey);
+    setDismissedDocumentPreviewKey("");
+  }, []);
+
+  const handleCloseDocumentPreview = useCallback(() => {
+    const previewKey = String(activeDocumentPreview?.key || "").trim();
+    if (!previewKey) return;
+    if (documentPreviewCloseTimerRef.current) {
+      clearTimeout(documentPreviewCloseTimerRef.current);
+    }
+    setDocumentPreviewClosing(true);
+    documentPreviewCloseTimerRef.current = setTimeout(() => {
+      setDismissedDocumentPreviewKey(previewKey);
+      setDocumentPreviewClosing(false);
+      documentPreviewCloseTimerRef.current = null;
+    }, 220);
+  }, [activeDocumentPreview]);
+
+  const handleReopenDocumentPreview = useCallback(() => {
+    if (documentPreviewCloseTimerRef.current) {
+      clearTimeout(documentPreviewCloseTimerRef.current);
+      documentPreviewCloseTimerRef.current = null;
+    }
+    setDocumentPreviewClosing(false);
+    setDismissedDocumentPreviewKey("");
+  }, []);
 
   return (
     <div className="chat-layout">
@@ -4093,7 +4603,9 @@ export default function ChatDesktopPage() {
         sessionActionsDisabled={sessionActionsLocked}
       />
       <div
-        className={`chat-main ${hasStartedConversation ? "is-thread-stage" : "is-home-stage"}`}
+        className={`chat-main ${hasStartedConversation ? "is-thread-stage" : "is-home-stage"}${
+          isDocumentPreviewVisible ? " has-document-preview" : ""
+        }`}
       >
         <div className="chat-topbar">
           <div className="chat-topbar-left">
@@ -4124,13 +4636,26 @@ export default function ChatDesktopPage() {
             </div>
           </div>
           <div className="chat-topbar-right">
+            {hasHiddenDocumentPreview ? (
+              <button
+                type="button"
+                className="chat-doc-preview-toggle"
+                onClick={handleReopenDocumentPreview}
+                title={activeDocumentPreview?.name || "打开文档"}
+                aria-label={activeDocumentPreview?.name || "打开文档"}
+              >
+                <PanelRightOpen size={17} />
+              </button>
+            ) : null}
             <div className="export-wrap" ref={exportWrapRef}>
               <button
                 type="button"
                 className="export-trigger"
                 onClick={() => setShowExportMenu((v) => !v)}
+                title="导出"
+                aria-label="导出"
               >
-                导出
+                <FileOutput size={17} />
               </button>
               {showExportMenu && (
                 <div className="export-menu">
@@ -4183,74 +4708,97 @@ export default function ChatDesktopPage() {
           </div>
         )}
 
-        {!hasStartedConversation && (
-          <div className="chat-home-stage" aria-hidden="true">
-            <div className="chat-home-stage-inner">
-              <h1 className="chat-home-stage-title">{CHAT_HOME_HEADLINE}</h1>
-            </div>
-          </div>
-        )}
-
-        <MessageList
-          ref={messageListRef}
-          activeSessionId={activeId}
-          messages={displayedMessages}
-          isStreaming={isStreaming}
-          streamingStatusText={streamingStatusText}
-          focusMessageId={focusUserMessageId}
-          bottomInset={messageBottomInset}
-          onDownloadAttachment={handleMessageAttachmentDownload}
-          onAssistantFeedback={onAssistantFeedback}
-          onAssistantRegenerate={onAssistantRegenerate}
-          onAskSelection={onAskSelection}
-          onLatestChange={setIsAtLatest}
-        />
-
-        <div className="chat-input-wrap" ref={chatInputWrapRef}>
-          {roundCount >= CHAT_ROUND_WARNING_THRESHOLD &&
-            !roundWarningDismissed && (
-              <div className="chat-round-warning" role="status">
-                <span>继续当前对话可能导致页面卡顿，请新建一个对话。</span>
-                <button
-                  type="button"
-                  className="chat-round-warning-close"
-                  onClick={closeRoundWarning}
-                  aria-label="关闭提示"
-                  title="关闭提示"
-                >
-                  <X size={14} />
-                </button>
+        <div className="chat-body">
+          <div className="chat-thread-pane">
+            {!hasStartedConversation && (
+              <div className="chat-home-stage" aria-hidden="true">
+                <div className="chat-home-stage-inner">
+                  <h1 className="chat-home-stage-title">{CHAT_HOME_HEADLINE}</h1>
+                </div>
               </div>
             )}
 
-          {!isAtLatest && (
-            <div className="chat-scroll-latest-row">
-              <button
-                type="button"
-                className="chat-scroll-latest-btn"
-                onClick={() => scrollToLatestRound()}
-                aria-label="跳转到最新消息"
-                title="跳转到最新消息"
-              >
-                跳转到最新消息
-              </button>
-            </div>
-          )}
+            <MessageList
+              ref={messageListRef}
+              activeSessionId={activeId}
+              messages={displayedMessages}
+              isStreaming={isStreaming}
+              streamingStatusText={streamingStatusText}
+              focusMessageId={focusUserMessageId}
+              bottomInset={messageBottomInset}
+              onDownloadAttachment={handleMessageAttachmentDownload}
+              onAssistantFeedback={onAssistantFeedback}
+              onAssistantRegenerate={onAssistantRegenerate}
+              onAskSelection={onAskSelection}
+              onLatestChange={setIsAtLatest}
+            />
 
-          <MessageInput
-            onSend={onSend}
-            onStop={onStopStreaming}
-            onPrepareFiles={onPrepareFiles}
-            disabled={interactionLocked || !canUseMessageInput}
-            isStreaming={isStreaming}
-            layoutMode={hasStartedConversation ? "thread" : "home"}
-            quoteText={selectedAskText}
-            onClearQuote={() => setSelectedAskText("")}
-            onConsumeQuote={() => setSelectedAskText("")}
-          />
-          <p className="chat-disclaimer">
-            智能体也可能会犯错，请以批判的视角看待他的回答。你可以为每条点赞或踩。
-          </p>
+            <div className="chat-input-wrap" ref={chatInputWrapRef}>
+              {roundCount >= CHAT_ROUND_WARNING_THRESHOLD &&
+                !roundWarningDismissed && (
+                  <div className="chat-round-warning" role="status">
+                    <span>继续当前对话可能导致页面卡顿，请新建一个对话。</span>
+                    <button
+                      type="button"
+                      className="chat-round-warning-close"
+                      onClick={closeRoundWarning}
+                      aria-label="关闭提示"
+                      title="关闭提示"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
+
+              {!isAtLatest && (
+                <div className="chat-scroll-latest-row">
+                  <button
+                    type="button"
+                    className="chat-scroll-latest-btn"
+                    onClick={() => scrollToLatestRound()}
+                    aria-label="跳转到最新消息"
+                    title="跳转到最新消息"
+                  >
+                    跳转到最新消息
+                  </button>
+                </div>
+              )}
+
+              <MessageInput
+                onSend={onSend}
+                onStop={onStopStreaming}
+                onPrepareFiles={onPrepareFiles}
+                onFilesChange={handleComposerFilesChange}
+                disabled={interactionLocked || !canUseMessageInput}
+                isStreaming={isStreaming}
+                layoutMode={hasStartedConversation ? "thread" : "home"}
+                quoteText={selectedAskText}
+                onClearQuote={() => setSelectedAskText("")}
+                onConsumeQuote={() => setSelectedAskText("")}
+              />
+              <p className="chat-disclaimer">
+                智能体也可能会犯错，请以批判的视角看待他的回答。你可以为每条点赞或踩。
+              </p>
+            </div>
+          </div>
+
+          {shouldRenderDocumentPreviewPane ? (
+            <div
+              className={`chat-document-pane${isDocumentPreviewVisible ? " is-visible" : ""}${
+                documentPreviewClosing ? " is-closing" : ""
+              }`}
+            >
+              <ChatDocumentPreview
+                document={activeDocumentPreview}
+                documents={documentLibrary}
+                selectedContextDocumentKeys={selectedContextDocumentKeys}
+                onSelectDocument={handleSelectDocument}
+                onToggleContextDocument={handleToggleContextDocument}
+                onDownloadDocument={handleDocumentPreviewDownload}
+                onClose={handleCloseDocumentPreview}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
 

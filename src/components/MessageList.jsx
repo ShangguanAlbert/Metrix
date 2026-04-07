@@ -888,7 +888,8 @@ const MessageItem = memo(function MessageItem({
   const showMessageFooter = showAssistantActionRow || showRuntimeDebug;
   const openImagePreview = useCallback((image) => {
     const imageSrc = String(image?.src || "").trim();
-    if (!imageSrc) return;
+    const isLoadingOriginal = Boolean(image?.isLoadingOriginal);
+    if (!imageSrc && !isLoadingOriginal) return;
     setPreviewImage({
       src: imageSrc,
       alt: String(image?.alt || image?.name || "图片").trim() || "图片",
@@ -901,7 +902,7 @@ const MessageItem = memo(function MessageItem({
         ? image.attachmentIndex
         : -1,
       canResolveDownload: Boolean(image?.canResolveDownload || imageSrc),
-      isLoadingOriginal: Boolean(image?.isLoadingOriginal),
+      isLoadingOriginal,
     });
   }, []);
   const markdownComponents = useMemo(
@@ -973,44 +974,31 @@ const MessageItem = memo(function MessageItem({
   async function downloadResolvedUrl(resolvedUrl, resolvedFilename) {
     if (!resolvedUrl) return;
 
-    const triggerDownload = (href, suggestedName = "") => {
-      const link = document.createElement("a");
-      link.href = href;
-      if (suggestedName) link.download = suggestedName;
-      link.rel = "noopener noreferrer";
-      link.target = "_blank";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    };
-
-    try {
-      const response = await fetch(resolvedUrl, {
-        credentials: "include",
-      });
-      if (!response.ok) {
-        throw new Error(`download failed: ${response.status}`);
-      }
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      triggerDownload(objectUrl, resolvedFilename);
-      window.setTimeout(() => {
-        URL.revokeObjectURL(objectUrl);
-      }, 1000);
-    } catch {
-      triggerDownload(resolvedUrl, resolvedFilename);
-    }
+    const link = document.createElement("a");
+    link.href = resolvedUrl;
+    if (resolvedFilename) link.download = resolvedFilename;
+    link.rel = "noopener noreferrer";
+    link.target = "_blank";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 
-  async function resolveAttachmentTarget(attachment, attachmentIndex) {
+  async function resolveAttachmentTarget(attachment, attachmentIndex, options = {}) {
     const fallbackUrl = readAttachmentUrl(attachment);
     const fallbackFilename = String(attachment?.name || "").trim();
-    let resolvedUrl = fallbackUrl;
+    const shouldPreferFreshDownload = typeof onDownloadAttachment === "function";
+    let resolvedUrl = shouldPreferFreshDownload ? "" : fallbackUrl;
     let resolvedFilename = fallbackFilename;
 
-    if (typeof onDownloadAttachment === "function") {
+    if (shouldPreferFreshDownload) {
       try {
-        const result = await onDownloadAttachment(m, attachment, attachmentIndex);
+        const result = await onDownloadAttachment(
+          m,
+          attachment,
+          attachmentIndex,
+          options,
+        );
         const nextUrl = String(result?.downloadUrl || result?.url || "").trim();
         const nextFilename = String(
           result?.fileName || result?.filename || fallbackFilename,
@@ -1021,8 +1009,8 @@ const MessageItem = memo(function MessageItem({
         if (nextFilename) {
           resolvedFilename = nextFilename;
         }
-      } catch (error) {
-        void error;
+      } catch {
+        return null;
       }
     }
 
@@ -1068,19 +1056,47 @@ const MessageItem = memo(function MessageItem({
     const previewName = String(attachment?.name || "图片附件").trim() || "图片附件";
     const shouldResolveOriginal =
       typeof onDownloadAttachment === "function" && canResolveDownload;
-    openImagePreview({
-      src: directUrl || fallbackUrl,
-      alt: previewName,
-      name: previewName,
-      attachment,
-      attachmentIndex,
-      canResolveDownload,
-      isLoadingOriginal: shouldResolveOriginal,
+    if (!shouldResolveOriginal) {
+      openImagePreview({
+        src: directUrl || fallbackUrl,
+        alt: previewName,
+        name: previewName,
+        attachment,
+        attachmentIndex,
+        canResolveDownload,
+        isLoadingOriginal: false,
+      });
+      return;
+    }
+
+    if (fallbackUrl) {
+      openImagePreview({
+        src: fallbackUrl,
+        alt: previewName,
+        name: previewName,
+        attachment,
+        attachmentIndex,
+        canResolveDownload,
+        isLoadingOriginal: true,
+      });
+    }
+
+    const target = await resolveAttachmentTarget(attachment, attachmentIndex, {
+      mode: "inline",
     });
+    if (!fallbackUrl && target?.url) {
+      openImagePreview({
+        src: target.url,
+        alt: previewName,
+        name: target.filename || previewName,
+        attachment,
+        attachmentIndex,
+        canResolveDownload: true,
+        isLoadingOriginal: false,
+      });
+      return;
+    }
 
-    if (!shouldResolveOriginal) return;
-
-    const target = await resolveAttachmentTarget(attachment, attachmentIndex);
     setPreviewImage((current) => {
       if (
         !current ||
@@ -1153,7 +1169,7 @@ const MessageItem = memo(function MessageItem({
                         event,
                         a,
                         idx,
-                        imageSrc,
+                        attachmentThumbnailUrl,
                         canResolveDownload,
                       );
                     }}
@@ -1180,7 +1196,7 @@ const MessageItem = memo(function MessageItem({
               return (
                 <a
                   key={attachmentKey}
-                  href={attachmentUrl || undefined}
+                  href={typeof onDownloadAttachment === "function" ? undefined : attachmentUrl || undefined}
                   className={`${cardClassName} ${canResolveDownload ? "file-card-link" : "file-card-static"}`}
                   aria-disabled={!canResolveDownload}
                   onClick={(event) => {
@@ -1322,13 +1338,15 @@ const MessageItem = memo(function MessageItem({
           >
             <div className="chat-image-preview-stage">
               <div className="chat-image-preview-media">
-                <img
-                  src={previewImage.src}
-                  alt={previewImage.alt}
-                  className="chat-image-preview-image"
-                  loading="eager"
-                  decoding="async"
-                />
+                {previewImage.src ? (
+                  <img
+                    src={previewImage.src}
+                    alt={previewImage.alt}
+                    className="chat-image-preview-image"
+                    loading="eager"
+                    decoding="async"
+                  />
+                ) : null}
                 <div className="chat-image-preview-actions">
                   <button
                     type="button"
@@ -1502,6 +1520,10 @@ function getAttachmentTypeLabel(kind) {
       return "PPT";
     case "pdf":
       return "PDF";
+    case "html":
+      return "HTML";
+    case "markdown":
+      return "Markdown";
     default:
       return "文件";
   }
@@ -1512,6 +1534,8 @@ function getAttachmentBadgeLabel(attachment, kind) {
   if (kind === "excel") return "XLS";
   if (kind === "ppt") return "PPT";
   if (kind === "pdf") return "PDF";
+  if (kind === "html") return "HTML";
+  if (kind === "markdown") return "MD";
   if (kind === "image") return "IMG";
 
   const ext = getAttachmentExtension(attachment).toUpperCase();
