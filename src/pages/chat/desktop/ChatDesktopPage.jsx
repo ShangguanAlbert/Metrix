@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { FileOutput, Lock, LockOpen, LogOut, PanelRightOpen, X } from "lucide-react";
+import {
+  FileOutput,
+  Lock,
+  LockOpen,
+  LogOut,
+  PanelLeftOpen,
+  PanelRightOpen,
+  X,
+} from "lucide-react";
 import {
   useBeforeUnload,
   useLocation,
@@ -71,6 +79,7 @@ import {
   suggestChatSessionTitle,
   uploadVolcengineChatFiles,
 } from "../stateApi.js";
+import { captureNoteFromChat } from "../../../modules/notes/api/notesApi.js";
 import {
   clearUserAuthSession,
   withAuthSlot,
@@ -100,6 +109,7 @@ const VIDEO_EXTENSIONS = new Set(["mp4", "avi", "mov"]);
 const WORD_PREVIEW_EXTENSIONS = new Set(["doc", "docx"]);
 const HTML_PREVIEW_EXTENSIONS = new Set(["html", "htm"]);
 const MARKDOWN_PREVIEW_EXTENSIONS = new Set(["md", "markdown", "mdown", "mkd"]);
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "educhat.chat.sidebar-collapsed";
 const TEXT_PREVIEW_EXTENSIONS = new Set([
   "txt",
   "c",
@@ -1199,8 +1209,15 @@ export default function ChatDesktopPage() {
   const [userInfoSaving, setUserInfoSaving] = useState(false);
   const [sessionMutationPending, setSessionMutationPending] = useState(false);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+  });
   const [bootstrapPending, setBootstrapPending] = useState(true);
   const [bootstrapError, setBootstrapError] = useState("");
+  const [noteActionError, setNoteActionError] = useState("");
   const [teacherScopeKey, setTeacherScopeKey] = useState(
     () => initialViewState.teacherScopeKey,
   );
@@ -1251,6 +1268,18 @@ export default function ChatDesktopPage() {
   const pendingRouteSessionIdRef = useRef("");
   const pendingNavigationSessionIdRef = useRef("");
   const lastReportedRoutePathRef = useRef("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_COLLAPSED_STORAGE_KEY,
+        sidebarCollapsed ? "1" : "0",
+      );
+    } catch {}
+  }, [sidebarCollapsed]);
 
   function buildFreshAutoSessionBundle({
     agentBySession: sourceAgentBySession,
@@ -2172,6 +2201,11 @@ export default function ChatDesktopPage() {
     });
   }
 
+  function onOpenNotes() {
+    if (!confirmStreamingExit("leave-page")) return;
+    navigate(withAuthSlot("/notes"));
+  }
+
   function onOpenGroupChat() {
     if (!confirmStreamingExit("leave-page")) return;
     const nextReturnTarget =
@@ -2197,6 +2231,55 @@ export default function ChatDesktopPage() {
       params.set("exportDate", teacherHomeExportContext.exportDate);
     }
     navigate(withAuthSlot(`/party?${params.toString()}`));
+  }
+
+  function readMessageTextForNote(message) {
+    const content = message?.content;
+    if (typeof content === "string") {
+      return content.trim();
+    }
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => {
+          if (typeof part === "string") return part;
+          if (typeof part?.text === "string") return part.text;
+          if (typeof part?.content === "string") return part.content;
+          return "";
+        })
+        .join("\n")
+        .trim();
+    }
+    return "";
+  }
+
+  async function onSaveMessageAsNote(message, selectedText = "") {
+    const safeMessageId = String(message?.id || "").trim();
+    const safeSessionId = String(activeId || "").trim();
+    const safeMessageText = readMessageTextForNote(message);
+    if (!safeSessionId || !safeMessageId || (!safeMessageText && !selectedText)) {
+      setNoteActionError("当前消息没有可保存的文本内容。");
+      return;
+    }
+
+    setNoteActionError("");
+    try {
+      const activeSession = sessions.find((session) => session?.id === safeSessionId) || null;
+      const data = await captureNoteFromChat({
+        sessionId: safeSessionId,
+        messageId: safeMessageId,
+        selectedText: String(selectedText || "").trim(),
+        messageText: safeMessageText,
+        messageRole: String(message?.role || "").trim(),
+        sessionTitle: String(activeSession?.title || "").trim(),
+      });
+      const noteId = String(data?.note?.id || "").trim();
+      if (!noteId) {
+        throw new Error("笔记创建成功，但未返回笔记 ID。");
+      }
+      navigate(withAuthSlot(`/notes/${noteId}`));
+    } catch (error) {
+      setNoteActionError(error?.message || "保存为笔记失败，请稍后重试。");
+    }
   }
 
   async function onDeleteSession(sessionId) {
@@ -3815,6 +3898,7 @@ export default function ChatDesktopPage() {
     setStreamError("");
     setStateSaveError("");
     setBootstrapError("");
+    setNoteActionError("");
   }
 
   function closeRoundWarning() {
@@ -4634,7 +4718,7 @@ export default function ChatDesktopPage() {
   }, []);
 
   return (
-    <div className="chat-layout">
+    <div className={`chat-layout${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
       <Sidebar
         sessions={sessions}
         groups={groups}
@@ -4645,6 +4729,7 @@ export default function ChatDesktopPage() {
         onNewChat={() => {
           onNewChat();
         }}
+        onOpenNotes={onOpenNotes}
         onOpenImageGeneration={onOpenImageGeneration}
         onOpenGroupChat={onOpenGroupChat}
         onDeleteSession={onDeleteSession}
@@ -4659,6 +4744,8 @@ export default function ChatDesktopPage() {
         hasUserInfo={userInfoComplete}
         onOpenUserInfoModal={() => openUserInfoModal(false)}
         sessionActionsDisabled={sessionActionsLocked}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
       />
       <div
         className={`chat-main ${hasStartedConversation ? "is-thread-stage" : "is-home-stage"}${
@@ -4667,6 +4754,17 @@ export default function ChatDesktopPage() {
       >
         <div className="chat-topbar">
           <div className="chat-topbar-left">
+            {sidebarCollapsed ? (
+              <button
+                type="button"
+                className="chat-sidebar-toggle floating"
+                onClick={() => setSidebarCollapsed(false)}
+                aria-label="展开侧边栏"
+                title="展开侧边栏"
+              >
+                <PanelLeftOpen size={18} />
+              </button>
+            ) : null}
             <AgentSelect
               key={agentSwitchLocked ? "agent-locked" : "agent-unlocked"}
               value={agent}
@@ -4739,18 +4837,16 @@ export default function ChatDesktopPage() {
               className="chat-logout-btn"
               onClick={onLogout}
               aria-label={logoutText}
-              title={logoutText}
             >
-              <span className="chat-logout-tip">{logoutText}</span>
               <LogOut size={16} aria-hidden="true" />
             </button>
           </div>
         </div>
 
-        {(streamError || stateSaveError || bootstrapError) && (
+        {(streamError || stateSaveError || bootstrapError || noteActionError) && (
           <div className="stream-error">
             <span>
-              {[streamError, stateSaveError, bootstrapError]
+              {[streamError, stateSaveError, bootstrapError, noteActionError]
                 .filter(Boolean)
                 .join(" | ")}
             </span>
@@ -4787,6 +4883,7 @@ export default function ChatDesktopPage() {
               onDownloadAttachment={handleMessageAttachmentDownload}
               onAssistantFeedback={onAssistantFeedback}
               onAssistantRegenerate={onAssistantRegenerate}
+              onSaveNote={onSaveMessageAsNote}
               onAskSelection={onAskSelection}
               onLatestChange={setIsAtLatest}
             />

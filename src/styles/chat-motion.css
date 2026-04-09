@@ -10,31 +10,38 @@
 @media (min-width: 721px) {
   .chat-layout .sidebar {
     width: var(--layout-sidebar-width);
-    min-width: var(--layout-sidebar-width);
+    flex-basis: var(--layout-sidebar-width);
+    min-width: 0;
     overflow: hidden;
     transition:
-      width var(--motion-sidebar-duration) var(--motion-sidebar-sync),
-      border-color var(--motion-sidebar-duration) var(--motion-sidebar-sync),
-      box-shadow var(--motion-sidebar-duration) var(--motion-sidebar-sync);
-    will-change: width;
+      width var(--motion-sidebar-duration) var(--motion-spring-out),
+      flex-basis var(--motion-sidebar-duration) var(--motion-spring-out),
+      border-color 260ms var(--motion-smooth-out),
+      box-shadow var(--motion-sidebar-duration) var(--motion-spring-out);
+    will-change: width, flex-basis;
   }
 
+  .chat-layout.is-sidebar-collapsed .sidebar,
   .chat-layout.sidebar-hidden .sidebar {
-    display: flex;
     border-right-color: transparent;
     box-shadow: none;
     pointer-events: none;
   }
 
-  .chat-layout .sidebar > * {
+  .chat-layout .sidebar .sidebar-motion-shell {
     transition:
-      opacity var(--motion-sidebar-duration) var(--motion-sidebar-sync),
-      transform var(--motion-sidebar-duration) var(--motion-sidebar-sync);
+      opacity 240ms var(--motion-smooth-out),
+      transform var(--motion-sidebar-duration) var(--motion-spring-out),
+      filter 240ms var(--motion-smooth-out);
+    will-change: opacity, transform, filter;
+    transform-origin: left center;
   }
 
-  .chat-layout.sidebar-hidden .sidebar > * {
+  .chat-layout.is-sidebar-collapsed .sidebar .sidebar-motion-shell,
+  .chat-layout.sidebar-hidden .sidebar .sidebar-motion-shell {
     opacity: 0;
-    transform: translateX(-10px);
+    transform: translateX(-18px) scale(0.985);
+    filter: blur(1.5px);
   }
 
   .chat-input-wrap {

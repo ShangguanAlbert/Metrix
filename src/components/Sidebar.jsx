@@ -9,6 +9,8 @@ import {
   MessageSquarePlus,
   MessagesSquare,
   MoreHorizontal,
+  NotebookPen,
+  PanelLeftClose,
   Pencil,
   Pin,
   Settings,
@@ -27,6 +29,11 @@ export default function Sidebar({
   activeId,
   onSelect,
   onNewChat,
+  onPrimaryAction,
+  primaryActionLabel = "新聊天",
+  PrimaryActionIcon = MessageSquarePlus,
+  activeWorkbench = "",
+  onOpenNotes,
   onOpenImageGeneration,
   onOpenGroupChat,
   onDeleteSession,
@@ -41,6 +48,8 @@ export default function Sidebar({
   hasUserInfo = false,
   onOpenUserInfoModal,
   sessionActionsDisabled = false,
+  collapsed = false,
+  onToggleCollapsed,
 }) {
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState("");
@@ -286,6 +295,10 @@ export default function Sidebar({
 
   function handleNewChatClick() {
     if (sessionActionsDisabled) return;
+    if (typeof onPrimaryAction === "function") {
+      onPrimaryAction();
+      return;
+    }
     expectInsertAnimationRef.current = true;
     onNewChat?.();
   }
@@ -731,266 +744,289 @@ export default function Sidebar({
   }
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-top">
-        <div className="sidebar-brand-row">
-          <div className="sidebar-brand-mark">元</div>
-          <div className="sidebar-brand-copy">
-            <strong className="sidebar-brand-title">元协坊</strong>
-            <span className="sidebar-brand-subtitle">对话与创作工作台</span>
-          </div>
-        </div>
-        <div className="sidebar-actions sidebar-actions-primary">
-          <button
-            className="sidebar-new"
-            onClick={handleNewChatClick}
-            disabled={sessionActionsDisabled}
-          >
-            <MessageSquarePlus size={17} />
-            <span>新聊天</span>
-          </button>
-        </div>
-        <div className="sidebar-workbench">
-          <div className="sidebar-section-label">工作台</div>
-          <div className="sidebar-actions">
-          <button
-            className="sidebar-image-entry"
-            onClick={() => onOpenImageGeneration?.()}
-          >
-            <ImagePlus size={17} />
-            <span>图片生成</span>
-          </button>
-          <button
-            className="sidebar-party-entry"
-            onClick={() => onOpenGroupChat?.()}
-          >
-            <MessagesSquare size={17} />
-            <span>派 · 协作</span>
-          </button>
-        </div>
-        </div>
-
-        {batchMode && (
-          <div className="sidebar-batch-bar">
-            <p className="sidebar-batch-count">
-              已选择 {selectedSessionIdList.length} 项
-            </p>
-            <div className="sidebar-batch-actions">
-              <button
-                className="sidebar-batch-btn danger"
-                type="button"
-                disabled={!selectedSessionIdList.length || sessionActionsDisabled}
-                onClick={handleBatchDelete}
-              >
-                删除所选
-              </button>
-
-              <button
-                className="sidebar-batch-btn"
-                type="button"
-                disabled={!selectedSessionIdList.length || sessionActionsDisabled}
-                onClick={() => setShowBatchMove((v) => !v)}
-              >
-                移动到项目
-              </button>
-
-              <button
-                className="sidebar-batch-btn"
-                type="button"
-                onClick={exitBatchMode}
-              >
-                取消
-              </button>
+    <aside
+      className={`sidebar${collapsed ? " is-collapsed" : ""}`}
+      aria-hidden={collapsed}
+    >
+      <div className="sidebar-motion-shell">
+        <div className="sidebar-top">
+          <div className="sidebar-brand-row">
+            <div className="sidebar-brand-mark">元</div>
+            <div className="sidebar-brand-copy">
+              <strong className="sidebar-brand-title">元协坊</strong>
+              <span className="sidebar-brand-subtitle">对话与创作工作台</span>
             </div>
-
-            {showBatchMove && (
-              <div className="sidebar-batch-move-list">
-                {groupMoveOptions.map((g) => (
-                  <button
-                    key={g.id || "ungrouped-batch"}
-                    className="sidebar-batch-move-item"
-                    type="button"
-                    onClick={() => handleBatchMove(g.id)}
-                  >
-                    {g.name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div
-        className="sidebar-list"
-        onScroll={() => {
-          closeChatMenu();
-          closeProjectMenu();
-          setShowBatchMove(false);
-        }}
-      >
-        <section className="sidebar-list-section">
-          <div className="sidebar-section-head">
             <button
-              className="sidebar-section-toggle"
               type="button"
-              aria-expanded={!projectsSectionCollapsed}
-              onClick={() =>
-                setProjectsSectionCollapsed((current) => !current)
-              }
+              className="sidebar-collapse-toggle"
+              onClick={() => onToggleCollapsed?.()}
+              aria-label="隐藏侧边栏"
+              title="隐藏侧边栏"
             >
-              <span className="sidebar-section-label">项目</span>
-              <span className="sidebar-section-toggle-icon" aria-hidden="true">
-                {projectsSectionCollapsed ? (
-                  <ChevronRight size={15} />
-                ) : (
-                  <ChevronDown size={15} />
-                )}
-              </span>
+              <PanelLeftClose size={18} />
             </button>
           </div>
-          {!projectsSectionCollapsed && !batchMode && (
+          <div className="sidebar-actions sidebar-actions-primary">
             <button
-              className="sidebar-project-create"
-              type="button"
-              onClick={openCreateGroup}
+              className="sidebar-new"
+              onClick={handleNewChatClick}
               disabled={sessionActionsDisabled}
             >
-              <FolderPlus size={17} />
-              <span>新项目</span>
-            </button>
-          )}
-
-          {!projectsSectionCollapsed &&
-            grouped.groups.map((g) => {
-              const isCollapsed = !!collapsedProjectIds[g.id];
-              const isProjectActive = g.sessions.some(
-                (session) => session.id === activeId,
-              );
-
-              return (
-                <section key={g.id} className="sidebar-project">
-                  <div className="sidebar-project-row">
-                    <button
-                      className={`sidebar-project-toggle ${isProjectActive ? "active" : ""}`}
-                      type="button"
-                      onClick={() => toggleProjectCollapse(g.id)}
-                    >
-                      <span className="sidebar-project-icon" aria-hidden="true">
-                        {isCollapsed ? <Folder size={17} /> : <FolderOpen size={17} />}
-                      </span>
-                      <span className="sidebar-project-name">{g.name}</span>
-                      {g.sessions.length > 0 ? (
-                        <span className="sidebar-project-count">{g.sessions.length}</span>
-                      ) : null}
-                    </button>
-
-                    {!batchMode && (
-                      <div className="sidebar-project-menu-wrap">
-                        <button
-                          className="sidebar-project-menu-trigger"
-                          type="button"
-                          aria-label={`项目菜单 ${g.name}`}
-                          aria-expanded={projectMenuGroupId === g.id}
-                          title="更多操作"
-                          disabled={sessionActionsDisabled}
-                          onClick={() => toggleProjectMenu(g.id)}
-                        >
-                          <MoreHorizontal size={16} />
-                        </button>
-
-                        {projectMenuGroupId === g.id ? (
-                          <div className="sidebar-project-menu" role="menu">
-                            <button
-                              className="sidebar-row-menu-item"
-                              type="button"
-                              onClick={() => openRenameGroup(g)}
-                            >
-                              重命名项目
-                            </button>
-                            <button
-                              className="sidebar-row-menu-item danger"
-                              type="button"
-                              onClick={() => {
-                                closeProjectMenu();
-                                onDeleteGroup?.(g.id);
-                              }}
-                            >
-                              删除项目
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-
-                  {!isCollapsed ? (
-                    <div className="sidebar-project-session-list">
-                      {g.description ? (
-                        <p className="sidebar-group-desc" title={g.description}>
-                          {g.description}
-                        </p>
-                      ) : null}
-                      {g.sessions.length === 0 ? (
-                        <p className="sidebar-empty-group">此项目暂无聊天</p>
-                      ) : (
-                        g.sessions.map((s) => renderSessionRow(s))
-                      )}
-                    </div>
-                  ) : null}
-                </section>
-              );
-            })}
-        </section>
-
-        <section className="sidebar-list-section">
-          <div className="sidebar-section-head">
-            <button
-              className="sidebar-section-toggle"
-              type="button"
-              aria-expanded={!recentSectionCollapsed}
-              onClick={() =>
-                setRecentSectionCollapsed((current) => !current)
-              }
-            >
-              <span className="sidebar-section-label">最近</span>
-              <span className="sidebar-section-toggle-icon" aria-hidden="true">
-                {recentSectionCollapsed ? (
-                  <ChevronRight size={15} />
-                ) : (
-                  <ChevronDown size={15} />
-                )}
-              </span>
+              <PrimaryActionIcon size={17} />
+              <span>{primaryActionLabel}</span>
             </button>
           </div>
-          {!recentSectionCollapsed && (
-            <section className="sidebar-group">
-              <div className="sidebar-group-list">
-                {grouped.ungrouped.length > 0 ? (
-                  grouped.ungrouped.map((s) => renderSessionRow(s))
-                ) : (
-                  <p className="sidebar-empty-group">暂无最近对话</p>
-                )}
-              </div>
-            </section>
-          )}
-        </section>
-      </div>
+          <div className="sidebar-workbench">
+            <div className="sidebar-section-label">工作台</div>
+            <div className="sidebar-actions">
+              <button
+                className={`sidebar-notes-entry${activeWorkbench === "notes" ? " active" : ""}`}
+                onClick={() => onOpenNotes?.()}
+                type="button"
+              >
+                <NotebookPen size={17} />
+                <span>笔记</span>
+              </button>
+              <button
+                className={`sidebar-image-entry${activeWorkbench === "image" ? " active" : ""}`}
+                onClick={() => onOpenImageGeneration?.()}
+                type="button"
+              >
+                <ImagePlus size={17} />
+                <span>图片生成</span>
+              </button>
+              <button
+                className={`sidebar-party-entry${activeWorkbench === "party" ? " active" : ""}`}
+                onClick={() => onOpenGroupChat?.()}
+                type="button"
+              >
+                <MessagesSquare size={17} />
+                <span>派 · 协作</span>
+              </button>
+            </div>
+          </div>
 
-      <div className="sidebar-bottom">
-        <button
-          className="sidebar-user-info-trigger"
-          type="button"
-          onClick={() => onOpenUserInfoModal?.()}
+          {batchMode && (
+            <div className="sidebar-batch-bar">
+              <p className="sidebar-batch-count">
+                已选择 {selectedSessionIdList.length} 项
+              </p>
+              <div className="sidebar-batch-actions">
+                <button
+                  className="sidebar-batch-btn danger"
+                  type="button"
+                  disabled={!selectedSessionIdList.length || sessionActionsDisabled}
+                  onClick={handleBatchDelete}
+                >
+                  删除所选
+                </button>
+
+                <button
+                  className="sidebar-batch-btn"
+                  type="button"
+                  disabled={!selectedSessionIdList.length || sessionActionsDisabled}
+                  onClick={() => setShowBatchMove((v) => !v)}
+                >
+                  移动到项目
+                </button>
+
+                <button
+                  className="sidebar-batch-btn"
+                  type="button"
+                  onClick={exitBatchMode}
+                >
+                  取消
+                </button>
+              </div>
+
+              {showBatchMove && (
+                <div className="sidebar-batch-move-list">
+                  {groupMoveOptions.map((g) => (
+                    <button
+                      key={g.id || "ungrouped-batch"}
+                      className="sidebar-batch-move-item"
+                      type="button"
+                      onClick={() => handleBatchMove(g.id)}
+                    >
+                      {g.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div
+          className="sidebar-list"
+          onScroll={() => {
+            closeChatMenu();
+            closeProjectMenu();
+            setShowBatchMove(false);
+          }}
         >
-          <Settings size={16} strokeWidth={2} />
-          <span>用户信息</span>
-          <span
-            className={`sidebar-user-info-status ${hasUserInfo ? "filled" : ""}`}
+          <section className="sidebar-list-section">
+            <div className="sidebar-section-head">
+              <button
+                className="sidebar-section-toggle"
+                type="button"
+                aria-expanded={!projectsSectionCollapsed}
+                onClick={() =>
+                  setProjectsSectionCollapsed((current) => !current)
+                }
+              >
+                <span className="sidebar-section-label">项目</span>
+                <span className="sidebar-section-toggle-icon" aria-hidden="true">
+                  {projectsSectionCollapsed ? (
+                    <ChevronRight size={15} />
+                  ) : (
+                    <ChevronDown size={15} />
+                  )}
+                </span>
+              </button>
+            </div>
+            {!projectsSectionCollapsed && !batchMode && (
+              <button
+                className="sidebar-project-create"
+                type="button"
+                onClick={openCreateGroup}
+                disabled={sessionActionsDisabled}
+              >
+                <FolderPlus size={17} />
+                <span>新项目</span>
+              </button>
+            )}
+
+            {!projectsSectionCollapsed &&
+              grouped.groups.map((g) => {
+                const isCollapsed = !!collapsedProjectIds[g.id];
+                const isProjectActive = g.sessions.some(
+                  (session) => session.id === activeId,
+                );
+
+                return (
+                  <section key={g.id} className="sidebar-project">
+                    <div className="sidebar-project-row">
+                      <button
+                        className={`sidebar-project-toggle ${isProjectActive ? "active" : ""}`}
+                        type="button"
+                        onClick={() => toggleProjectCollapse(g.id)}
+                      >
+                        <span className="sidebar-project-icon" aria-hidden="true">
+                          {isCollapsed ? <Folder size={17} /> : <FolderOpen size={17} />}
+                        </span>
+                        <span className="sidebar-project-name">{g.name}</span>
+                        {g.sessions.length > 0 ? (
+                          <span className="sidebar-project-count">{g.sessions.length}</span>
+                        ) : null}
+                      </button>
+
+                      {!batchMode && (
+                        <div className="sidebar-project-menu-wrap">
+                          <button
+                            className="sidebar-project-menu-trigger"
+                            type="button"
+                            aria-label={`项目菜单 ${g.name}`}
+                            aria-expanded={projectMenuGroupId === g.id}
+                            title="更多操作"
+                            disabled={sessionActionsDisabled}
+                            onClick={() => toggleProjectMenu(g.id)}
+                          >
+                            <MoreHorizontal size={16} />
+                          </button>
+
+                          {projectMenuGroupId === g.id ? (
+                            <div className="sidebar-project-menu" role="menu">
+                              <button
+                                className="sidebar-row-menu-item"
+                                type="button"
+                                onClick={() => openRenameGroup(g)}
+                              >
+                                重命名项目
+                              </button>
+                              <button
+                                className="sidebar-row-menu-item danger"
+                                type="button"
+                                onClick={() => {
+                                  closeProjectMenu();
+                                  onDeleteGroup?.(g.id);
+                                }}
+                              >
+                                删除项目
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+
+                    {!isCollapsed ? (
+                      <div className="sidebar-project-session-list">
+                        {g.description ? (
+                          <p className="sidebar-group-desc" title={g.description}>
+                            {g.description}
+                          </p>
+                        ) : null}
+                        {g.sessions.length === 0 ? (
+                          <p className="sidebar-empty-group">此项目暂无聊天</p>
+                        ) : (
+                          g.sessions.map((s) => renderSessionRow(s))
+                        )}
+                      </div>
+                    ) : null}
+                  </section>
+                );
+              })}
+          </section>
+
+          <section className="sidebar-list-section">
+            <div className="sidebar-section-head">
+              <button
+                className="sidebar-section-toggle"
+                type="button"
+                aria-expanded={!recentSectionCollapsed}
+                onClick={() =>
+                  setRecentSectionCollapsed((current) => !current)
+                }
+              >
+                <span className="sidebar-section-label">最近</span>
+                <span className="sidebar-section-toggle-icon" aria-hidden="true">
+                  {recentSectionCollapsed ? (
+                    <ChevronRight size={15} />
+                  ) : (
+                    <ChevronDown size={15} />
+                  )}
+                </span>
+              </button>
+            </div>
+            {!recentSectionCollapsed && (
+              <section className="sidebar-group">
+                <div className="sidebar-group-list">
+                  {grouped.ungrouped.length > 0 ? (
+                    grouped.ungrouped.map((s) => renderSessionRow(s))
+                  ) : (
+                    <p className="sidebar-empty-group">暂无最近对话</p>
+                  )}
+                </div>
+              </section>
+            )}
+          </section>
+        </div>
+
+        <div className="sidebar-bottom">
+          <button
+            className="sidebar-user-info-trigger"
+            type="button"
+            onClick={() => onOpenUserInfoModal?.()}
           >
-            {hasUserInfo ? "已填写" : "未填写"}
-          </span>
-        </button>
+            <Settings size={16} strokeWidth={2} />
+            <span>用户信息</span>
+            <span
+              className={`sidebar-user-info-status ${hasUserInfo ? "filled" : ""}`}
+            >
+              {hasUserInfo ? "已填写" : "未填写"}
+            </span>
+          </button>
+        </div>
       </div>
 
       {showCreateGroup && (

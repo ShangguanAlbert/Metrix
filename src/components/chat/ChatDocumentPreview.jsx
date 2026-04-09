@@ -26,6 +26,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.vers
 const MIN_SCALE = 0.8;
 const MAX_SCALE = 2.4;
 const SCALE_STEP = 0.2;
+const PREVIEW_RESIZE_SETTLE_MS = 180;
 
 export default function ChatDocumentPreview({
   document: activeDocument,
@@ -97,23 +98,41 @@ export default function ChatDocumentPreview({
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return undefined;
+    let resizeTimer = 0;
 
     const updateWidth = () => {
       setViewportWidth(viewport.clientWidth || 0);
+    };
+    const scheduleWidthUpdate = () => {
+      if (resizeTimer) {
+        window.clearTimeout(resizeTimer);
+      }
+      resizeTimer = window.setTimeout(() => {
+        resizeTimer = 0;
+        updateWidth();
+      }, PREVIEW_RESIZE_SETTLE_MS);
     };
 
     updateWidth();
     if (typeof ResizeObserver === "function") {
       const observer = new ResizeObserver(() => {
-        updateWidth();
+        scheduleWidthUpdate();
       });
       observer.observe(viewport);
-      return () => observer.disconnect();
+      return () => {
+        observer.disconnect();
+        if (resizeTimer) {
+          window.clearTimeout(resizeTimer);
+        }
+      };
     }
 
-    window.addEventListener("resize", updateWidth);
+    window.addEventListener("resize", scheduleWidthUpdate);
     return () => {
-      window.removeEventListener("resize", updateWidth);
+      window.removeEventListener("resize", scheduleWidthUpdate);
+      if (resizeTimer) {
+        window.clearTimeout(resizeTimer);
+      }
     };
   }, []);
 

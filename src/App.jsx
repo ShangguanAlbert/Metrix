@@ -4,6 +4,7 @@ import LoginPage from "./pages/LoginPage.jsx";
 import LicensePage from "./pages/LicensePage.jsx";
 import ChatPage from "./pages/ChatPage.jsx";
 import ChatEntryPage from "./pages/ChatEntryPage.jsx";
+import NotesPage from "./pages/NotesPage.jsx";
 import ModeSelectionPage from "./pages/ModeSelectionPage.jsx";
 import ProductImprovementTaskPage from "./pages/ProductImprovementTaskPage.jsx";
 import AdminSettingsPage from "./pages/AdminSettingsPage.jsx";
@@ -87,6 +88,22 @@ export default function App() {
         element={
           <RequireAuth>
             <ChatPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/notes"
+        element={
+          <RequireAuth>
+            <NotesPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/notes/:noteId"
+        element={
+          <RequireAuth>
+            <NotesPage />
           </RequireAuth>
         }
       />

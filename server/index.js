@@ -10,6 +10,7 @@ import { registerAdminRoutes } from "./routes/admin.js";
 import { registerChatAndImageRoutes } from "./routes/chat-and-images.js";
 import { registerGroupChatRoutes } from "./routes/group-chat.js";
 import { registerAgentLabRoutes } from "./routes/agent-lab.js";
+import { registerNotesRoutes } from "./routes/notes.js";
 import { createGroupChatRealtimeHub } from "./runtime/group-chat-realtime-hub.js";
 import { createAgentLabRealtimeHub } from "./runtime/agent-lab-realtime-hub.js";
 
@@ -23,6 +24,7 @@ const agentLabRealtimeHub = createAgentLabRealtimeHub(deps);
 registerAuthUserClassroomRoutes(app, deps);
 registerAdminRoutes(app, deps);
 registerChatAndImageRoutes(app, deps);
+registerNotesRoutes(app, deps);
 registerGroupChatRoutes(app, deps);
 registerAgentLabRoutes(app, { ...deps, agentLabRealtimeHub });
 
