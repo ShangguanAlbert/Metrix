@@ -97,13 +97,6 @@ export function captureNoteFromChat(payload = {}) {
   });
 }
 
-export function generateNoteAiDraft(noteId) {
-  return request(`/api/notes/${encodeURIComponent(String(noteId || "").trim())}/ai-draft`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
 export function exportNoteWord(noteId) {
   return requestBlob(`/api/notes/${encodeURIComponent(String(noteId || "").trim())}/export-word`, {
     method: "POST",

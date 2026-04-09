@@ -887,7 +887,10 @@ const MessageItem = memo(function MessageItem({
   const showAssistantActionRow =
     showAssistantActions && m.role === "assistant" && !m.streaming;
   const showSaveNoteAction =
-    typeof onSaveNote === "function" && !m.streaming && !!contentMarkdown.trim();
+    typeof onSaveNote === "function" &&
+    m.role === "assistant" &&
+    !m.streaming &&
+    !!contentMarkdown.trim();
   const showRuntimeDebug =
     m.role === "assistant" &&
     runtime?.usage &&
@@ -1341,7 +1344,10 @@ const MessageItem = memo(function MessageItem({
                     aria-label="保存为笔记"
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={(event) =>
-                      onSaveNote?.(m, readSelectedTextWithinCurrentMessage(event))
+                      onSaveNote?.(m, {
+                        selectedText: readSelectedTextWithinCurrentMessage(event),
+                        promptMessageId,
+                      })
                     }
                     disabled={isStreaming}
                   >
@@ -1360,7 +1366,10 @@ const MessageItem = memo(function MessageItem({
                   aria-label="保存为笔记"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={(event) =>
-                    onSaveNote?.(m, readSelectedTextWithinCurrentMessage(event))
+                    onSaveNote?.(m, {
+                      selectedText: readSelectedTextWithinCurrentMessage(event),
+                      promptMessageId,
+                    })
                   }
                   disabled={isStreaming}
                 >

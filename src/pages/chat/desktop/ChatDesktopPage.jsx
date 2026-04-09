@@ -1306,7 +1306,9 @@ export default function ChatDesktopPage() {
         SIDEBAR_COLLAPSED_STORAGE_KEY,
         sidebarCollapsed ? "1" : "0",
       );
-    } catch {}
+    } catch {
+      return;
+    }
   }, [sidebarCollapsed]);
 
   function buildFreshAutoSessionBundle({
@@ -2280,11 +2282,30 @@ export default function ChatDesktopPage() {
     return "";
   }
 
-  async function onSaveMessageAsNote(message, selectedText = "") {
+  async function onSaveMessageAsNote(message, payload = {}) {
     const safeMessageId = String(message?.id || "").trim();
     const safeSessionId = String(activeId || "").trim();
+    const safeSelectedText =
+      typeof payload === "string"
+        ? String(payload || "").trim()
+        : String(payload?.selectedText || "").trim();
+    const safePromptMessageId =
+      typeof payload === "string"
+        ? ""
+        : String(payload?.promptMessageId || "").trim();
     const safeMessageText = readMessageTextForNote(message);
-    if (!safeSessionId || !safeMessageId || (!safeMessageText && !selectedText)) {
+    const currentMessages = Array.isArray(sessionMessages[safeSessionId])
+      ? sessionMessages[safeSessionId]
+      : [];
+    const promptMessage =
+      safePromptMessageId && message?.role === "assistant"
+        ? currentMessages.find(
+            (item) =>
+              String(item?.id || "").trim() === safePromptMessageId && item?.role === "user",
+          ) || null
+        : null;
+    const promptText = readMessageTextForNote(promptMessage);
+    if (!safeSessionId || !safeMessageId || (!safeMessageText && !safeSelectedText)) {
       setNoteActionError("当前消息没有可保存的文本内容。");
       return;
     }
@@ -2295,9 +2316,11 @@ export default function ChatDesktopPage() {
       const data = await captureNoteFromChat({
         sessionId: safeSessionId,
         messageId: safeMessageId,
-        selectedText: String(selectedText || "").trim(),
+        selectedText: safeSelectedText,
         messageText: safeMessageText,
         messageRole: String(message?.role || "").trim(),
+        promptMessageId: safePromptMessageId,
+        promptText,
         sessionTitle: String(activeSession?.title || "").trim(),
       });
       const noteId = String(data?.note?.id || "").trim();

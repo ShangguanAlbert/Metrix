@@ -7,7 +7,6 @@ import {
   createNote,
   deleteNote,
   exportNoteWord,
-  generateNoteAiDraft,
   getNote,
   listNotes,
   toggleNoteStar,
@@ -104,7 +103,6 @@ export default function NotesPage() {
   const [draftStatus, setDraftStatus] = useState("draft");
   const [savePending, setSavePending] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
-  const [aiPending, setAiPending] = useState(false);
   const [starPending, setStarPending] = useState(false);
   const [exportPending, setExportPending] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -435,24 +433,6 @@ export default function NotesPage() {
     }
   }
 
-  async function handleGenerateAi() {
-    if (!selectedNote?.id) return;
-    const saved = await flushPendingSave();
-    if (!saved) return;
-
-    setAiPending(true);
-    setActionError("");
-    try {
-      const data = await generateNoteAiDraft(selectedNote.id);
-      const note = data?.note || null;
-      commitNote(note, { replaceDraft: true });
-    } catch (error) {
-      setActionError(error?.message || "AI 整理失败。");
-    } finally {
-      setAiPending(false);
-    }
-  }
-
   async function handleManualSave() {
     if (!selectedNote?.id) return;
     return flushPendingSave();
@@ -546,7 +526,6 @@ export default function NotesPage() {
                 status={draftStatus}
                 saving={savePending}
                 deleting={deletePending}
-                aiPending={aiPending}
                 starPending={starPending}
                 exportPending={exportPending}
                 dirty={isDirty}
@@ -557,7 +536,6 @@ export default function NotesPage() {
                 onTagsChange={handleTagsChange}
                 onStatusChange={handleStatusChange}
                 onDelete={handleDelete}
-                onGenerateAi={handleGenerateAi}
                 onOpenSourceChat={handleOpenSourceChat}
                 onToggleStar={handleToggleStar}
                 onExportWord={handleExportWord}

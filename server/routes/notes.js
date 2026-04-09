@@ -1,5 +1,4 @@
 import { Note, isValidNoteObjectId, normalizeNoteDoc } from "../services/notes/note-model.js";
-import { generateNoteAiDraft } from "../services/notes/notes-ai-service.js";
 import { exportNoteMarkdownToWord } from "../services/notes/notes-word-export.js";
 
 const NOTE_STATUS_VALUES = new Set(["draft", "active", "archived"]);
@@ -98,9 +97,19 @@ function buildCapturedMarkdown({
   sourceExcerpt = "",
   sessionTitle = "",
   sourceRole = "",
+  promptText = "",
+  answerText = "",
 } = {}) {
   const lines = [];
-  lines.push(`# ${buildExcerptTitle(sourceExcerpt, sessionTitle)}`);
+  const normalizedPromptText = String(promptText || "").trim();
+  const normalizedAnswerText = String(answerText || "").trim();
+  const hasQaPair = !!normalizedPromptText && !!normalizedAnswerText;
+  lines.push(
+    `# ${buildExcerptTitle(
+      hasQaPair ? normalizedPromptText : sourceExcerpt,
+      sessionTitle,
+    )}`,
+  );
   lines.push("");
 
   if (sessionTitle) {
@@ -108,7 +117,16 @@ function buildCapturedMarkdown({
     lines.push("");
   }
 
-  if (sourceExcerpt) {
+  if (hasQaPair) {
+    lines.push("## 用户问题");
+    lines.push("");
+    lines.push(toBlockquote(normalizedPromptText));
+    lines.push("");
+    lines.push("## AI 回答");
+    lines.push("");
+    lines.push(toBlockquote(normalizedAnswerText));
+    lines.push("");
+  } else if (sourceExcerpt) {
     lines.push("## 对话摘录");
     lines.push("");
     lines.push(toBlockquote(sourceExcerpt));
@@ -287,10 +305,16 @@ export function registerNotesRoutes(app, deps) {
 
     const sessionId = sanitizeId(req.body?.sessionId);
     const messageId = sanitizeId(req.body?.messageId);
+    const promptMessageId = sanitizeId(req.body?.promptMessageId);
     const selectedText = sanitizeLooseText(req.body?.selectedText, 8000).trim();
     const messageText = sanitizeLooseText(req.body?.messageText, 20000).trim();
-    const sourceExcerpt = selectedText || messageText;
     const messageRole = sanitizeRole(req.body?.messageRole);
+    const promptText = sanitizeLooseText(req.body?.promptText, 20000).trim();
+    const answerText = selectedText || messageText;
+    const sourceExcerpt =
+      messageRole === "assistant" && promptText && answerText
+        ? [promptText, answerText].filter(Boolean).join("\n\n")
+        : answerText;
     const sessionTitle = sanitizeText(req.body?.sessionTitle, 120);
 
     if (!sessionId || !messageId || !sourceExcerpt) {
@@ -306,13 +330,15 @@ export function registerNotesRoutes(app, deps) {
           sourceExcerpt,
           sessionTitle,
           sourceRole: messageRole,
+          promptText,
+          answerText,
         }),
         summary: "",
         tags: [],
         starred: false,
         status: "draft",
         sourceSessionId: sessionId,
-        sourceMessageId: messageId,
+        sourceMessageId: promptMessageId || messageId,
         sourceExcerpt,
         sourceRole: messageRole,
         createdFrom: "chat_capture",
@@ -343,7 +369,7 @@ export function registerNotesRoutes(app, deps) {
       }
 
       const incomingStarred = sanitizeBoolean(req.body?.starred, null);
-      existing.starred = incomingStarred === null ? !Boolean(existing.starred) : incomingStarred;
+      existing.starred = incomingStarred === null ? !existing.starred : incomingStarred;
       await existing.save();
 
       res.json({ ok: true, note: normalizeNoteDoc(existing) });
@@ -393,40 +419,4 @@ export function registerNotesRoutes(app, deps) {
     }
   });
 
-  app.post("/api/notes/:id/ai-draft", requireChatAuth, async (req, res) => {
-    const userId = sanitizeId(req.authUser?._id);
-    const noteId = sanitizeId(req.params?.id);
-    if (!userId || !isValidNoteObjectId(noteId)) {
-      res.status(404).json({ error: "笔记不存在。" });
-      return;
-    }
-
-    try {
-      const existing = await Note.findOne({ _id: noteId, userId });
-      if (!existing) {
-        res.status(404).json({ error: "笔记不存在。" });
-        return;
-      }
-
-      const previousCreatedFrom = String(existing.createdFrom || "manual").trim() || "manual";
-      const draft = await generateNoteAiDraft(deps, {
-        contentMarkdown: existing.contentMarkdown,
-        sourceExcerpt: existing.sourceExcerpt,
-      });
-
-      existing.contentMarkdown = draft.contentMarkdown;
-      existing.summary = draft.summary;
-      existing.tags = draft.tags;
-      if (previousCreatedFrom === "manual") {
-        existing.createdFrom = "ai_draft";
-      }
-      await existing.save();
-
-      res.json({ ok: true, note: normalizeNoteDoc(existing) });
-    } catch (error) {
-      res.status(500).json({
-        error: error?.message || "AI 整理失败，请稍后重试。",
-      });
-    }
-  });
 }

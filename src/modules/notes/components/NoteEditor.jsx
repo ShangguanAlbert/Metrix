@@ -78,7 +78,7 @@ function stripMarkdownForCount(value = "") {
     .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
     .replace(/\[([^\]]+)]\(([^)]+)\)/g, "$1")
     .replace(/<[^>]+>/g, " ")
-    .replace(/[#>*_~\-\[\]\(\)|]/g, " ")
+    .replace(/[#>*_~\-[\]()|]/g, " ")
     .replace(/\s+/g, "");
 }
 
@@ -464,7 +464,6 @@ export default function NoteEditor({
   status = "draft",
   saving = false,
   deleting = false,
-  aiPending = false,
   starPending = false,
   exportPending = false,
   dirty = false,
@@ -475,7 +474,6 @@ export default function NoteEditor({
   onTagsChange,
   onStatusChange,
   onDelete,
-  onGenerateAi,
   onOpenSourceChat,
   onToggleStar,
   onExportWord,
@@ -486,9 +484,12 @@ export default function NoteEditor({
   const [fontMenuOpen, setFontMenuOpen] = useState(false);
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const [localMessage, setLocalMessage] = useState("");
+  const [aiNotice, setAiNotice] = useState({ text: "", exiting: false, key: 0 });
   const menuRef = useRef(null);
   const editorSurfaceRef = useRef(null);
   const tagsInputRef = useRef(null);
+  const aiNoticeTimerRef = useRef(0);
+  const aiNoticeExitTimerRef = useRef(0);
 
   const headings = useMemo(() => extractHeadings(contentMarkdown), [contentMarkdown]);
   const visibleHeadings = useMemo(
@@ -532,6 +533,18 @@ export default function NoteEditor({
     return () => window.clearTimeout(timer);
   }, [localMessage]);
 
+  useEffect(
+    () => () => {
+      if (aiNoticeTimerRef.current) {
+        window.clearTimeout(aiNoticeTimerRef.current);
+      }
+      if (aiNoticeExitTimerRef.current) {
+        window.clearTimeout(aiNoticeExitTimerRef.current);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!tagsExpanded) return undefined;
     const timer = window.setTimeout(() => {
@@ -543,6 +556,31 @@ export default function NoteEditor({
 
   function updateSettings(patch) {
     setSettings((current) => ({ ...current, ...patch }));
+  }
+
+  function handleAiDraftClick() {
+    const key = Date.now();
+    if (aiNoticeTimerRef.current) {
+      window.clearTimeout(aiNoticeTimerRef.current);
+    }
+    if (aiNoticeExitTimerRef.current) {
+      window.clearTimeout(aiNoticeExitTimerRef.current);
+    }
+    setAiNotice({
+      text: "该功能正在开发中",
+      exiting: false,
+      key,
+    });
+    aiNoticeTimerRef.current = window.setTimeout(() => {
+      setAiNotice((current) =>
+        current.key === key ? { ...current, exiting: true } : current,
+      );
+    }, 2000);
+    aiNoticeExitTimerRef.current = window.setTimeout(() => {
+      setAiNotice((current) =>
+        current.key === key ? { text: "", exiting: false, key: 0 } : current,
+      );
+    }, 2360);
   }
 
   async function handleCopyContent() {
@@ -616,6 +654,16 @@ export default function NoteEditor({
     <section
       className={`notes-editor-shell notes-editor-v2 font-${settings.fontFamily} size-${settings.fontSize}${settings.isNarrowWidth ? " is-narrow-width" : ""}${settings.showTableOfContents ? " has-toc" : ""}`}
     >
+      {aiNotice.text ? (
+        <div
+          className={`notes-editor-ai-toast${aiNotice.exiting ? " is-exiting" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
+          {aiNotice.text}
+        </div>
+      ) : null}
+
       <header className="notes-editor-navbar">
         <div className="notes-editor-navbar-main">
           <input
@@ -675,10 +723,10 @@ export default function NoteEditor({
           <button
             type="button"
             className="notes-editor-ai-btn icon-only"
-            onClick={onGenerateAi}
-            disabled={aiPending || deleting}
-            title="基于当前内容生成 AI 初稿"
-            aria-label="AI 整理"
+            onClick={handleAiDraftClick}
+            disabled={deleting}
+            title="AI 摘录（开发中）"
+            aria-label="AI 摘录（开发中）"
           >
             <EditorIconSpark />
           </button>
