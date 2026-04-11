@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
-  Bot,
   BookOpenCheck,
   Download,
   ExternalLink,
@@ -30,7 +29,6 @@ import {
   updateClassroomSeatAssignment,
   uploadClassroomHomeworkFiles,
 } from "./classroom/classroomApi.js";
-import { fetchAgentLabAccessStatus } from "./agent-lab/agentLabApi.js";
 import "../styles/teacher-home.css";
 import "../styles/mode-selection.css";
 import "../styles/student-home.css";
@@ -329,7 +327,6 @@ export default function ModeSelectionPage() {
   const [seatSaving, setSeatSaving] = useState(false);
   const [seatRefreshing, setSeatRefreshing] = useState(false);
   const [seatError, setSeatError] = useState("");
-  const [agentLabEligible, setAgentLabEligible] = useState(false);
   const [seatSelectedIndex, setSeatSelectedIndex] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [taskSettings, setTaskSettings] = useState({
@@ -507,10 +504,6 @@ export default function ModeSelectionPage() {
 
   function onOpenParty() {
     navigate(withAuthSlot("/party?returnTo=mode-selection", activeSlot));
-  }
-
-  function onOpenAgentLab() {
-    navigate(withAuthSlot("/agent-lab?returnTo=mode-selection", activeSlot));
   }
 
   function appendHomeworkDraftFiles(lessonId, fileList) {
@@ -729,14 +722,6 @@ export default function ModeSelectionPage() {
       hint: "进入元协坊派协作功能",
     },
   ];
-  if (agentLabEligible) {
-    sidebarItems.push({
-      key: "agent-lab",
-      label: "Agent Lab",
-      icon: Bot,
-      hint: "进入邀请制主动 AI 测试群",
-    });
-  }
 
   const username = String(storedUser?.username || "").trim() || "同学";
   const avatarText = username.slice(0, 1).toUpperCase() || "学";
@@ -947,24 +932,6 @@ export default function ModeSelectionPage() {
     return () => window.clearInterval(timer);
   }, [activePanel, isShangguanTeacher, onRefreshSeatLayout]);
 
-  useEffect(() => {
-    let disposed = false;
-    async function loadAgentLabStatus() {
-      try {
-        const data = await fetchAgentLabAccessStatus();
-        if (disposed) return;
-        setAgentLabEligible(data?.granted === true);
-      } catch {
-        if (disposed) return;
-        setAgentLabEligible(false);
-      }
-    }
-    void loadAgentLabStatus();
-    return () => {
-      disposed = true;
-    };
-  }, []);
-
   if (!isShangguanTeacher) {
     return <Navigate to={withAuthSlot("/chat", activeSlot)} replace />;
   }
@@ -1007,9 +974,6 @@ export default function ModeSelectionPage() {
                       onOpenParty();
                       return;
                     }
-                    if (item.key === "agent-lab") {
-                      onOpenAgentLab();
-                    }
                   }}
                   title={item.hint}
                 >
@@ -1017,8 +981,7 @@ export default function ModeSelectionPage() {
                   <span className="teacher-home-nav-label">{item.label}</span>
                   {item.key === "workshop" ||
                   item.key === "image-generation" ||
-                  item.key === "party" ||
-                  item.key === "agent-lab" ? (
+                  item.key === "party" ? (
                     <span className="teacher-home-nav-open-indicator" aria-hidden="true">
                       <ExternalLink size={13} />
                     </span>

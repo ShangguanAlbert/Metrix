@@ -257,21 +257,17 @@
 
 .image-ideogram-brand-copy {
   min-width: 0;
-  display: grid;
-  gap: 1px;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
 }
 
 .image-ideogram-brand-title {
   color: var(--text-primary);
   font-size: 23px;
   line-height: 1;
-  font-family: var(--image-reading-font-family);
+  font-family: var(--app-font-family), "PingFang SC", "Microsoft YaHei", sans-serif;
   font-weight: 600;
-}
-
-.image-ideogram-brand-subtitle {
-  color: var(--text-secondary);
-  font-size: 11px;
 }
 
 .image-ideogram-workbench {

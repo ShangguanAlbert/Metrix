@@ -78,6 +78,101 @@ const EXPLORE_FILTERS = [
   { key: "poster", label: "海报" },
   { key: "logo", label: "标志" },
 ];
+const EXPLORE_CATEGORY_KEYWORDS = {
+  people: [
+    "人像",
+    "人物",
+    "写真",
+    "肖像",
+    "半身",
+    "全身",
+    "女生",
+    "男生",
+    "女孩",
+    "男孩",
+    "角色",
+    "portrait",
+    "person",
+    "people",
+    "character",
+    "model",
+    "face",
+    "selfie",
+  ],
+  product: [
+    "产品",
+    "商品",
+    "电商",
+    "包装",
+    "瓶",
+    "杯",
+    "鞋",
+    "包",
+    "手表",
+    "耳机",
+    "手机",
+    "电脑",
+    "珠宝",
+    "护肤",
+    "香水",
+    "product",
+    "packaging",
+    "bottle",
+    "cosmetic",
+    "device",
+    "mockup",
+  ],
+  nature: [
+    "自然",
+    "风景",
+    "山",
+    "海",
+    "湖",
+    "河",
+    "森林",
+    "草地",
+    "花",
+    "荷花",
+    "鸟",
+    "鸭",
+    "动物",
+    "植物",
+    "nature",
+    "landscape",
+    "mountain",
+    "ocean",
+    "forest",
+    "flower",
+    "bird",
+    "animal",
+  ],
+  poster: [
+    "海报",
+    "宣传",
+    "广告",
+    "横幅",
+    "封面",
+    "视觉",
+    "poster",
+    "banner",
+    "ad",
+    "advertisement",
+    "campaign",
+    "flyer",
+  ],
+  logo: [
+    "标志",
+    "logo",
+    "logomark",
+    "标识",
+    "图标",
+    "icon",
+    "徽标",
+    "品牌",
+    "brandmark",
+    "symbol",
+  ],
+};
 
 const LIBRARY_VIEWS = [
   { key: "explore", label: "探索", icon: Compass },
@@ -149,6 +244,44 @@ function formatHistoryTime(value) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+  });
+}
+
+function normalizeExploreMatchText(item) {
+  return [item?.prompt, item?.model, item?.size]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function inferExploreCategories(item) {
+  const matchText = normalizeExploreMatchText(item);
+  const categories = new Set(["explore"]);
+  if (!matchText) {
+    return categories;
+  }
+  Object.entries(EXPLORE_CATEGORY_KEYWORDS).forEach(([categoryKey, keywords]) => {
+    if (keywords.some((keyword) => matchText.includes(keyword))) {
+      categories.add(categoryKey);
+    }
+  });
+  return categories;
+}
+
+function parseCreatedTime(value) {
+  const timestamp = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortByNewest(items) {
+  return [...items].sort((left, right) => parseCreatedTime(right.createdAt) - parseCreatedTime(left.createdAt));
+}
+
+function sortByTop(items, likedKeySet) {
+  return [...items].sort((left, right) => {
+    const likedDiff = Number(likedKeySet.has(right.key)) - Number(likedKeySet.has(left.key));
+    if (likedDiff !== 0) return likedDiff;
+    return parseCreatedTime(right.createdAt) - parseCreatedTime(left.createdAt);
   });
 }
 
@@ -791,18 +924,19 @@ export default function ImageGenerationDesktopPage({
       .filter(Boolean);
   }, [activeCollection, previewMap]);
   const exploreItems = useMemo(() => {
-    const pendingItems = galleryItems.filter((item) => item.source === "generated" && item.status === "pending");
-    const settledItems = galleryItems.filter((item) => !(item.source === "generated" && item.status === "pending"));
-    if (exploreFilter === "explore" || exploreFilter === "top") {
-      return [...pendingItems, ...settledItems];
+    const matchFilter = (item) =>
+      exploreFilter === "explore" || inferExploreCategories(item).has(exploreFilter);
+    const pendingItems = galleryItems.filter(
+      (item) => item.source === "generated" && item.status === "pending" && matchFilter(item),
+    );
+    const settledItems = galleryItems.filter(
+      (item) => !(item.source === "generated" && item.status === "pending") && matchFilter(item),
+    );
+    if (exploreFilter === "top") {
+      return [...pendingItems, ...sortByTop(settledItems, likedKeySet)];
     }
-    const filterSeed = EXPLORE_FILTERS.findIndex((item) => item.key === exploreFilter);
-    if (filterSeed <= 0) return [...pendingItems, ...settledItems];
-    return [
-      ...pendingItems,
-      ...settledItems.filter((item, index) => (index + filterSeed) % 3 !== 0),
-    ];
-  }, [exploreFilter, galleryItems]);
+    return [...pendingItems, ...sortByNewest(settledItems)];
+  }, [exploreFilter, galleryItems, likedKeySet]);
 
   const loadHistory = useCallback(async ({ silent = false } = {}) => {
     if (termsLocked) return;
@@ -1560,8 +1694,7 @@ export default function ImageGenerationDesktopPage({
                 <Sparkles size={18} />
               </div>
               <div className="image-ideogram-brand-copy">
-                <strong className="image-ideogram-brand-title">图片工坊</strong>
-                <span className="image-ideogram-brand-subtitle">图像生成与灵感工作台</span>
+                <strong className="image-ideogram-brand-title">图片生成</strong>
               </div>
             </div>
           </div>

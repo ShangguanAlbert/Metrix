@@ -50,6 +50,23 @@ async function requestBlob(path, options = {}) {
   };
 }
 
+async function requestForm(path, formData, options = {}) {
+  const resp = await fetch(path, {
+    method: "POST",
+    ...options,
+    headers: {
+      ...getAuthTokenHeader(),
+      ...(options.headers || {}),
+    },
+    body: formData,
+  });
+  const data = await readJson(resp);
+  if (!resp.ok) {
+    throw new Error(data?.error || data?.message || `请求失败（${resp.status}）`);
+  }
+  return data;
+}
+
 export function listNotes({ q = "", tag = "", status = "" } = {}) {
   const params = new URLSearchParams();
   if (String(q || "").trim()) params.set("q", String(q || "").trim());
@@ -101,4 +118,13 @@ export function exportNoteWord(noteId) {
   return requestBlob(`/api/notes/${encodeURIComponent(String(noteId || "").trim())}/export-word`, {
     method: "POST",
   });
+}
+
+export function uploadNoteImage(noteId, file) {
+  const formData = new FormData();
+  formData.append("image", file);
+  if (String(noteId || "").trim()) {
+    formData.append("noteId", String(noteId || "").trim());
+  }
+  return requestForm("/api/notes/images/upload", formData);
 }

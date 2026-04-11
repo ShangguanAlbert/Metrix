@@ -816,7 +816,6 @@ function resolveTeacherFeatureTransitionLabel(pathname) {
   if (safePath === "/image-generation") return "正在进入图片生成...";
   if (safePath === "/party") return "正在进入派·协作...";
   if (safePath === "/admin/agent-settings") return "正在进入智能体管理...";
-  if (safePath === "/admin/agent-lab") return "正在进入 Agent Lab...";
   return "正在切换页面...";
 }
 
@@ -2095,12 +2094,6 @@ export default function TeacherHomePage() {
         items: [
           { key: "agent", label: "智能体管理", icon: Bot, external: true },
           {
-            key: "agent-lab",
-            label: "Agent Lab",
-            icon: Sparkles,
-            external: true,
-          },
-          {
             key: "workshop",
             label: "进入元协坊",
             icon: Sparkles,
@@ -2227,14 +2220,6 @@ export default function TeacherHomePage() {
         label: resolveTeacherFeatureTransitionLabel("/admin/agent-settings"),
       });
       navigate(withAuthSlot("/admin/agent-settings", activeSlot));
-      return;
-    }
-    if (safeItemKey === "agent-lab") {
-      setFeatureTransition({
-        active: true,
-        label: resolveTeacherFeatureTransitionLabel("/admin/agent-lab"),
-      });
-      navigate(withAuthSlot("/admin/agent-lab", activeSlot));
       return;
     }
     if (safeItemKey === "workshop") {

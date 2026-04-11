@@ -212,13 +212,6 @@ export default function AdminOnlineUsersPage() {
             </button>
             <button
               type="button"
-              className="admin-ghost-btn"
-              onClick={() => navigate(withAuthSlot("/admin/agent-lab", activeSlot))}
-            >
-              <span>Agent Lab</span>
-            </button>
-            <button
-              type="button"
               className="admin-ghost-btn admin-online-refresh-btn"
               onClick={onRefreshNow}
               disabled={loading || refreshing}

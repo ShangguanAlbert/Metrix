@@ -13,8 +13,6 @@ import AdminClassroomSettingsPage from "./pages/AdminClassroomSettingsPage.jsx";
 import TeacherHomePage from "./pages/TeacherHomePage.jsx";
 import ImageGenerationPage from "./pages/ImageGenerationPage.jsx";
 import PartyChatPage from "./pages/PartyChatPage.jsx";
-import AgentLabPage from "./pages/agent-lab/AgentLabPage.jsx";
-import AdminAgentLabPage from "./pages/agent-lab/AdminAgentLabPage.jsx";
 import RequireAuth from "./app/RequireAuth.jsx";
 import RequireAdminAuth from "./app/RequireAdminAuth.jsx";
 import { resolveActiveAuthSlot, syncAuthSlotFromLocation, withAuthSlot } from "./app/authStorage.js";
@@ -138,7 +136,7 @@ export default function App() {
         path="/agent-lab"
         element={
           <RequireAuth>
-            <AgentLabPage />
+            <Navigate to={withAuthSlot("/mode-selection", activeSlot)} replace />
           </RequireAuth>
         }
       />
@@ -183,7 +181,7 @@ export default function App() {
         path="/admin/agent-lab"
         element={
           <RequireAdminAuth>
-            <AdminAgentLabPage />
+            <Navigate to={withAuthSlot("/admin/settings", activeSlot)} replace />
           </RequireAdminAuth>
         }
       />

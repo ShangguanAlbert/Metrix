@@ -1,7 +1,26 @@
+import { Buffer } from "node:buffer";
+import crypto from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import process from "node:process";
+import multer from "multer";
 import { Note, isValidNoteObjectId, normalizeNoteDoc } from "../services/notes/note-model.js";
 import { exportNoteMarkdownToWord } from "../services/notes/notes-word-export.js";
 
 const NOTE_STATUS_VALUES = new Set(["draft", "active", "archived"]);
+const NOTE_IMAGE_UPLOAD = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 1,
+  },
+});
+const NOTE_IMAGE_EXT_BY_MIME = new Map([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/webp", ".webp"],
+  ["image/gif", ".gif"],
+]);
 
 function sanitizeText(value, maxLength = 4000) {
   const text = String(value || "").split("\u0000").join("").trim();
@@ -55,6 +74,17 @@ function sanitizeTags(value) {
         .slice(0, 20),
     ),
   );
+}
+
+function resolveNoteImageExtension(file = null) {
+  const mimeType = String(file?.mimetype || "").trim().toLowerCase();
+  if (NOTE_IMAGE_EXT_BY_MIME.has(mimeType)) {
+    return NOTE_IMAGE_EXT_BY_MIME.get(mimeType);
+  }
+
+  const originalName = String(file?.originalname || "").trim().toLowerCase();
+  const ext = path.extname(originalName || "");
+  return NOTE_IMAGE_EXT_BY_MIME.get(mimeType) || ext || ".png";
 }
 
 function escapeRegex(value) {
@@ -151,6 +181,58 @@ function buildManualMarkdown() {
 
 export function registerNotesRoutes(app, deps) {
   const { requireChatAuth } = deps;
+
+  app.post(
+    "/api/notes/images/upload",
+    requireChatAuth,
+    NOTE_IMAGE_UPLOAD.single("image"),
+    async (req, res) => {
+      const userId = sanitizeId(req.authUser?._id);
+      if (!userId) {
+        res.status(400).json({ error: "无效用户身份。" });
+        return;
+      }
+
+      const file = req.file;
+      if (!file) {
+        res.status(400).json({ error: "请先选择图片文件。" });
+        return;
+      }
+
+      const mimeType = String(file.mimetype || "").trim().toLowerCase();
+      if (!NOTE_IMAGE_EXT_BY_MIME.has(mimeType)) {
+        res.status(400).json({ error: "仅支持 PNG、JPG、WEBP、GIF 图片。" });
+        return;
+      }
+
+      if (!Buffer.isBuffer(file.buffer) || file.buffer.length === 0) {
+        res.status(400).json({ error: "图片内容为空，请重新上传。" });
+        return;
+      }
+
+      try {
+        const uploadDir = path.resolve(process.cwd(), "uploads", "notes", userId);
+        await mkdir(uploadDir, { recursive: true });
+
+        const extension = resolveNoteImageExtension(file);
+        const fileName = `${Date.now()}-${crypto.randomUUID()}${extension}`;
+        const filePath = path.join(uploadDir, fileName);
+        await writeFile(filePath, file.buffer);
+
+        res.json({
+          ok: true,
+          url: `/uploads/notes/${encodeURIComponent(userId)}/${encodeURIComponent(fileName)}`,
+          fileName: String(file.originalname || "图片").trim() || "图片",
+          mimeType,
+          size: Number(file.size || file.buffer.length || 0),
+        });
+      } catch (error) {
+        res.status(500).json({
+          error: error?.message || "图片上传失败，请稍后重试。",
+        });
+      }
+    },
+  );
 
   app.get("/api/notes", requireChatAuth, async (req, res) => {
     const userId = sanitizeId(req.authUser?._id);

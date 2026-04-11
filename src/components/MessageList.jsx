@@ -27,6 +27,7 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import StreamingMarkdown from "./streaming/StreamingMarkdown.jsx";
 import { useSessionStreamDraft } from "../pages/chat/streamDraftStore.js";
 import { normalizeRuntimeSnapshot } from "../pages/chat/chatHelpers.js";
 
@@ -799,7 +800,9 @@ const MessageList = forwardRef(function MessageList({
 export default MessageList;
 
 const ReasoningDisclosure = memo(function ReasoningDisclosure({
-  reasoningMarkdown,
+  reasoningContent,
+  isStreaming = false,
+  normalizeContent,
   onReasoningToggle,
   markdownComponents = MARKDOWN_COMPONENTS,
 }) {
@@ -824,7 +827,7 @@ const ReasoningDisclosure = memo(function ReasoningDisclosure({
     });
     observer.observe(contentRef.current);
     return () => observer.disconnect();
-  }, [reasoningMarkdown]);
+  }, [reasoningContent, isStreaming]);
 
   const handleToggle = useCallback(() => {
     onReasoningToggle?.();
@@ -851,13 +854,14 @@ const ReasoningDisclosure = memo(function ReasoningDisclosure({
       </button>
       <div className="reasoning-collapse" aria-hidden={!open}>
         <div ref={contentRef} className="reasoning-content">
-          <ReactMarkdown
+          <StreamingMarkdown
+            content={reasoningContent}
+            streaming={isStreaming}
+            normalizeContent={normalizeContent}
             remarkPlugins={MARKDOWN_REMARK_PLUGINS}
             rehypePlugins={[rehypeRaw]}
             components={markdownComponents}
-          >
-            {reasoningMarkdown}
-          </ReactMarkdown>
+          />
         </div>
       </div>
     </div>
@@ -881,8 +885,16 @@ const MessageItem = memo(function MessageItem({
   const [copyStatus, setCopyStatus] = useState("idle");
   const [previewImage, setPreviewImage] = useState(null);
   const [previewDownloadPending, setPreviewDownloadPending] = useState(false);
-  const reasoningMarkdown = normalizeRenderedMarkdown(m.reasoning);
-  const contentMarkdown = normalizeRenderedMarkdown(m.content);
+  const rawReasoning = String(m.reasoning || "");
+  const rawContent = String(m.content || "");
+  const reasoningMarkdown = m.streaming
+    ? ""
+    : normalizeRenderedMarkdown(rawReasoning);
+  const contentMarkdown = m.streaming ? "" : normalizeRenderedMarkdown(rawContent);
+  const hasReasoningContent = m.streaming
+    ? rawReasoning.length > 0
+    : !!reasoningMarkdown.trim();
+  const hasContent = m.streaming ? rawContent.length > 0 : !!contentMarkdown.trim();
   const runtime = normalizeRuntimeSnapshot(m.runtime);
   const showAssistantActionRow =
     showAssistantActions && m.role === "assistant" && !m.streaming;
@@ -1148,9 +1160,11 @@ const MessageItem = memo(function MessageItem({
     <>
       <div className={`msg ${m.role}`}>
         <div className={`msg-bubble ${m.role}`}>
-        {reasoningMarkdown.trim() && (
+        {hasReasoningContent && (
           <ReasoningDisclosure
-            reasoningMarkdown={reasoningMarkdown}
+            reasoningContent={rawReasoning}
+            isStreaming={!!m.streaming}
+            normalizeContent={normalizeRenderedMarkdown}
             onReasoningToggle={onReasoningToggle}
             markdownComponents={markdownComponents}
           />
@@ -1251,15 +1265,26 @@ const MessageItem = memo(function MessageItem({
           </div>
         )}
 
-        {contentMarkdown.trim() ? (
+        {hasContent ? (
           <div className="msg-text md-body">
-            <ReactMarkdown
-              remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-              rehypePlugins={[rehypeRaw]}
-              components={markdownComponents}
-            >
-              {contentMarkdown}
-            </ReactMarkdown>
+            {m.streaming ? (
+              <StreamingMarkdown
+                content={rawContent}
+                streaming={!!m.streaming}
+                normalizeContent={normalizeRenderedMarkdown}
+                remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+                rehypePlugins={[rehypeRaw]}
+                components={markdownComponents}
+              />
+            ) : (
+              <ReactMarkdown
+                remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+                rehypePlugins={[rehypeRaw]}
+                components={markdownComponents}
+              >
+                {contentMarkdown}
+              </ReactMarkdown>
+            )}
           </div>
         ) : m.streaming ? (
           <div className="streaming-placeholder">

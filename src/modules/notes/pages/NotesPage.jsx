@@ -515,7 +515,7 @@ export default function NotesPage() {
           <section className="notes-editor-panel">
             {detailLoading ? (
               <div className="notes-editor-empty">
-                <h2>正在加载笔记...</h2>
+                <span className="notes-loading-spinner" aria-label="正在加载笔记" />
               </div>
             ) : (
               <NoteEditor

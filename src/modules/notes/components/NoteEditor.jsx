@@ -1,16 +1,17 @@
-import { createElement, useEffect, useMemo, useRef, useState } from "react";
-import MDEditor, { commands } from "@uiw/react-md-editor";
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import { visit } from "unist-util-visit";
+import RichTextEditor from "../editor/RichTextEditor.jsx";
+import SourceTextEditor from "../editor/SourceTextEditor.jsx";
 
 const EDITOR_SETTINGS_KEY = "educhat.notes.editor-settings.v2";
 
 const DEFAULT_EDITOR_SETTINGS = {
-  viewMode: "live",
+  viewMode: "edit",
   fontFamily: "default",
   fontSize: "medium",
   showTableOfContents: true,
@@ -19,7 +20,7 @@ const DEFAULT_EDITOR_SETTINGS = {
 };
 
 const VIEW_MODE_OPTIONS = [
-  { value: "live", label: "实时预览" },
+  { value: "edit", label: "编辑模式" },
   { value: "source", label: "源码模式" },
   { value: "read", label: "阅读模式" },
 ];
@@ -44,6 +45,10 @@ function loadEditorSettings() {
     return {
       ...DEFAULT_EDITOR_SETTINGS,
       ...(parsed && typeof parsed === "object" ? parsed : {}),
+      viewMode:
+        parsed?.viewMode === "live"
+          ? "edit"
+          : parsed?.viewMode || DEFAULT_EDITOR_SETTINGS.viewMode,
     };
   } catch {
     return DEFAULT_EDITOR_SETTINGS;
@@ -136,121 +141,6 @@ function createIconPath(path) {
   );
 }
 
-function wrapSelection(state, textApi, prefix = "", suffix = "") {
-  const selectedText = state.selectedText || "";
-  const nextValue = `${prefix}${selectedText}${suffix}`;
-  textApi.replaceSelection(nextValue || `${prefix}${suffix}`);
-  if (!selectedText && textApi?.textArea) {
-    const cursorStart = state.selection.start + prefix.length;
-    const cursorEnd = cursorStart;
-    textApi.setSelectionRange({ start: cursorStart, end: cursorEnd });
-  }
-}
-
-function createHeadingCommand(level = 1) {
-  const prefix = `${"#".repeat(level)} `;
-  return {
-    name: `heading-${level}`,
-    keyCommand: `heading-${level}`,
-    buttonProps: { "aria-label": `H${level}` },
-    icon: <span className="notes-editor-toolbar-text">H{level}</span>,
-    execute: (state, textApi) => {
-      const selectedText = String(state.selectedText || "");
-      const nextText = selectedText
-        ? `${prefix}${selectedText.replace(/^\s*#{1,6}\s+/, "")}`
-        : prefix;
-      textApi.replaceSelection(nextText);
-      if (!selectedText && textApi?.textArea) {
-        const cursor = state.selection.start + prefix.length;
-        textApi.setSelectionRange({ start: cursor, end: cursor });
-      }
-    },
-  };
-}
-
-const UNDERLINE_COMMAND = {
-  name: "underline",
-  keyCommand: "underline",
-  buttonProps: { "aria-label": "下划线" },
-  icon: createIconPath(
-    <path
-      d="M5 4.75V9.2C5 11.851 7.149 14 9.8 14C12.451 14 14.6 11.851 14.6 9.2V4.75M4.6 16H15"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />,
-  ),
-  execute: (state, textApi) => {
-    wrapSelection(state, textApi, "<u>", "</u>");
-  },
-};
-
-const UNDO_COMMAND = {
-  name: "undo",
-  keyCommand: "undo",
-  buttonProps: { "aria-label": "撤销" },
-  icon: createIconPath(
-    <path
-      d="M7.5 6L4.5 9L7.5 12M5 9H10.25C12.873 9 15 11.127 15 13.75V14.5"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />,
-  ),
-  execute: (_state, textApi) => {
-    textApi?.textArea?.focus();
-    document.execCommand("undo");
-  },
-};
-
-const REDO_COMMAND = {
-  name: "redo",
-  keyCommand: "redo",
-  buttonProps: { "aria-label": "重做" },
-  icon: createIconPath(
-    <path
-      d="M12.5 6L15.5 9L12.5 12M15 9H9.75C7.127 9 5 11.127 5 13.75V14.5"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />,
-  ),
-  execute: (_state, textApi) => {
-    textApi?.textArea?.focus();
-    document.execCommand("redo");
-  },
-};
-
-const HEADING_1_COMMAND = createHeadingCommand(1);
-const HEADING_2_COMMAND = createHeadingCommand(2);
-const HEADING_3_COMMAND = createHeadingCommand(3);
-
-const EDITOR_COMMANDS = [
-  commands.bold,
-  commands.italic,
-  UNDERLINE_COMMAND,
-  commands.strikethrough,
-  commands.code,
-  commands.divider,
-  HEADING_1_COMMAND,
-  HEADING_2_COMMAND,
-  HEADING_3_COMMAND,
-  commands.divider,
-  commands.unorderedListCommand,
-  commands.orderedListCommand,
-  commands.checkedListCommand,
-  commands.quote,
-  commands.codeBlock,
-  commands.table,
-  commands.link,
-  commands.divider,
-  UNDO_COMMAND,
-  REDO_COMMAND,
-];
-
 function extractTextFromReactChildren(children) {
   return Array.isArray(children)
     ? children.map((child) => extractTextFromReactChildren(child)).join("")
@@ -261,7 +151,7 @@ function extractTextFromReactChildren(children) {
         : "";
 }
 
-function buildHeadingComponents(headings = []) {
+function buildMarkdownComponents(headings = [], onCopyCode) {
   const cursor = { current: 0 };
 
   function renderHeading(tagName, props) {
@@ -279,6 +169,25 @@ function buildHeadingComponents(headings = []) {
     h4: (props) => renderHeading("h4", props),
     h5: (props) => renderHeading("h5", props),
     h6: (props) => renderHeading("h6", props),
+    pre: (props) => {
+      const { children } = props;
+      const preProps = { ...props };
+      delete preProps.node;
+      const codeText = String(extractTextFromReactChildren(children) || "").replace(/\n$/, "");
+      return (
+        <div className="notes-code-block-frame">
+          <button
+            type="button"
+            className="notes-code-block-copy-btn"
+            onClick={() => onCopyCode?.(codeText)}
+          >
+            <EditorIconCopy />
+            <span>复制</span>
+          </button>
+          {createElement("pre", preProps, children)}
+        </div>
+      );
+    },
   };
 }
 
@@ -490,13 +399,40 @@ export default function NoteEditor({
   const tagsInputRef = useRef(null);
   const aiNoticeTimerRef = useRef(0);
   const aiNoticeExitTimerRef = useRef(0);
+  const richEditorInstanceRef = useRef(null);
+  const [richHeadings, setRichHeadings] = useState([]);
+
+  function flashLocatedHeading(element) {
+    if (!(element instanceof HTMLElement)) return;
+    element.classList.remove("notes-locate-highlight");
+    void element.offsetWidth;
+    element.classList.add("notes-locate-highlight");
+    window.setTimeout(() => {
+      element.classList.remove("notes-locate-highlight");
+    }, 1400);
+  }
 
   const headings = useMemo(() => extractHeadings(contentMarkdown), [contentMarkdown]);
-  const visibleHeadings = useMemo(
-    () => headings.filter((item) => item.depth >= 1 && item.depth <= 3),
-    [headings],
+  const visibleHeadings = useMemo(() => {
+    if (settings.viewMode === "edit" && richHeadings.length > 0) {
+      return richHeadings;
+    }
+    return headings.filter((item) => item.depth >= 1 && item.depth <= 3);
+  }, [headings, richHeadings, settings.viewMode]);
+  const handleCopyCodeBlock = useCallback(async (value = "") => {
+    const text = String(value || "");
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // ignore copy failures
+    }
+  }, []);
+
+  const markdownComponents = useMemo(
+    () => buildMarkdownComponents(headings, handleCopyCodeBlock),
+    [headings, handleCopyCodeBlock],
   );
-  const headingComponents = useMemo(() => buildHeadingComponents(headings), [headings]);
   const wordCount = useMemo(() => countVisibleCharacters(contentMarkdown), [contentMarkdown]);
   const tagsPreview = useMemo(
     () =>
@@ -604,7 +540,7 @@ export default function NoteEditor({
   async function handleManualSaveClick() {
     try {
       const result = await onSave?.();
-      setLocalMessage(result === false ? "保存失败，请稍后重试。" : dirty ? "已手动保存。" : "当前内容已保存。");
+      setLocalMessage(result === false ? "保存失败，请稍后重试。" : "");
       if (result !== false) {
         setMenuOpen(false);
         setMoreSettingsOpen(false);
@@ -617,8 +553,26 @@ export default function NoteEditor({
 
   function scrollToHeading(heading) {
     if (!heading) return;
+    if (settings.viewMode === "edit" && richEditorInstanceRef.current && Number.isFinite(heading.pos)) {
+      richEditorInstanceRef.current
+        .chain()
+        .focus()
+        .setTextSelection(Number(heading.pos) || 0)
+        .scrollIntoView()
+        .run();
+      window.setTimeout(() => {
+        const target = editorSurfaceRef.current?.querySelector(
+          `[data-notes-heading-id="${CSS.escape(String(heading.id || ""))}"]`,
+        );
+        if (target) {
+          flashLocatedHeading(target);
+        }
+      }, 120);
+      return;
+    }
+
     if (settings.viewMode === "source") {
-      const textarea = editorSurfaceRef.current?.querySelector("textarea");
+      const textarea = editorSurfaceRef.current?.querySelector(".notes-source-editor");
       if (!textarea) return;
       textarea.focus();
       const offset = Number.isFinite(heading.offset) ? heading.offset : 0;
@@ -630,10 +584,24 @@ export default function NoteEditor({
       return;
     }
 
-    const target = editorSurfaceRef.current?.querySelector(
+    let target = editorSurfaceRef.current?.querySelector(
       `[data-notes-heading-id="${CSS.escape(heading.id)}"]`,
     );
+    if (!target && settings.viewMode === "edit") {
+      const richHeadings = Array.from(
+        editorSurfaceRef.current?.querySelectorAll(
+          ".notes-rich-editor-content h1, .notes-rich-editor-content h2, .notes-rich-editor-content h3",
+        ) || [],
+      );
+      const matchingHeadings = richHeadings.filter(
+        (element) => String(element.textContent || "").trim() === String(heading.text || "").trim(),
+      );
+      target = matchingHeadings[0] || null;
+    }
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (target) {
+      window.setTimeout(() => flashLocatedHeading(target), 180);
+    }
   }
 
   if (!note) {
@@ -648,8 +616,6 @@ export default function NoteEditor({
   const saveLabel = deleting ? "删除中..." : saving ? "自动保存中..." : dirty ? "等待保存" : "已保存";
   const saveTone = deleting ? "danger" : saving ? "syncing" : dirty ? "pending" : "saved";
   const isArchived = status === "archived";
-  const mdEditorPreview = settings.viewMode === "live" ? "live" : "edit";
-
   return (
     <section
       className={`notes-editor-shell notes-editor-v2 font-${settings.fontFamily} size-${settings.fontSize}${settings.isNarrowWidth ? " is-narrow-width" : ""}${settings.showTableOfContents ? " has-toc" : ""}`}
@@ -928,20 +894,7 @@ export default function NoteEditor({
             <span>{note.summary}</span>
           </div>
         ) : null}
-        {note.sourceSessionId ? (
-          <button type="button" className="notes-editor-source-btn" onClick={onOpenSourceChat}>
-            <EditorIconLink />
-            <span>查看来源聊天</span>
-          </button>
-        ) : null}
       </div>
-
-      {note.sourceExcerpt ? (
-        <div className="notes-editor-source-snippet">
-          <strong>摘录来源</strong>
-          <p>{note.sourceExcerpt}</p>
-        </div>
-      ) : null}
 
       {error || localMessage ? (
         <div className={`notes-editor-banner${error ? " is-error" : ""}`}>
@@ -963,31 +916,29 @@ export default function NoteEditor({
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
                       rehypePlugins={[rehypeRaw]}
-                      components={headingComponents}
+                      components={markdownComponents}
                     >
                       {contentMarkdown || "*暂无内容*"}
                     </ReactMarkdown>
                   </div>
-                ) : (
-                  <MDEditor
+                ) : settings.viewMode === "source" ? (
+                  <SourceTextEditor
                     value={contentMarkdown}
-                    onChange={(value) => onContentChange?.(String(value || ""))}
-                    preview={mdEditorPreview}
-                    commands={EDITOR_COMMANDS}
-                    extraCommands={[]}
-                    hideToolbar={settings.viewMode !== "live"}
-                    visibleDragbar={false}
-                    textareaProps={{
-                      spellCheck: settings.spellCheckEnabled,
-                      placeholder: "在这里记录你的 Markdown 笔记",
+                    onChange={onContentChange}
+                    spellCheckEnabled={settings.spellCheckEnabled}
+                  />
+                ) : (
+                  <RichTextEditor
+                    noteId={note.id}
+                    markdown={contentMarkdown}
+                    onMarkdownChange={onContentChange}
+                    onTocChange={setRichHeadings}
+                    onEditorReady={(instance) => {
+                      richEditorInstanceRef.current = instance;
                     }}
-                    previewOptions={{
-                      remarkPlugins: [remarkGfm],
-                      rehypePlugins: [rehypeRaw],
-                      components: headingComponents,
-                    }}
-                    className={`notes-md-editor view-${settings.viewMode}`}
-                    height="100%"
+                    editable
+                    spellCheckEnabled={settings.spellCheckEnabled}
+                    placeholder="像文档一样写下你的笔记…"
                   />
                 )}
               </div>
@@ -1003,7 +954,7 @@ export default function NoteEditor({
                         <button
                           key={heading.id}
                           type="button"
-                          className={`notes-editor-toc-item depth-${heading.depth}`}
+                          className={`notes-editor-toc-item depth-${heading.depth}${heading.isActive ? " active" : ""}`}
                           onClick={() => scrollToHeading(heading)}
                           title={heading.text}
                         >
