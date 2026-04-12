@@ -281,7 +281,9 @@ export default function MessageInput({
     <div
       className={`composer${inputDisabled ? " is-disabled" : ""}${
         isHomeLayout ? " is-home-layout" : ""
-      }${isComposerExpanded ? " is-expanded" : " is-compact"}`}
+      }${hasQuote ? " has-quote" : ""}${
+        isComposerExpanded ? " is-expanded" : " is-compact"
+      }`}
     >
       {hasQuote && (
         <div className="composer-quote">

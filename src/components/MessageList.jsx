@@ -35,6 +35,7 @@ const MARKDOWN_REMARK_PLUGINS = [[remarkGfm, { singleTilde: false }]];
 const REASONING_TOGGLE_ANIMATION_MS = 280;
 const SESSION_SWITCH_SETTLE_MAX_MS = 1200;
 const SESSION_SWITCH_SETTLE_QUIET_MS = 180;
+const ASK_POPOVER_EDGE_MARGIN = 56;
 const CJK_PUNCTUATION_PATTERN = /([，。！？；：、“”‘’（）《》〈〉「」『』【】〔〕…—·]+)/g;
 const TYPOGRAPHY_SKIP_TAGS = new Set(["code", "pre", "kbd", "samp"]);
 
@@ -677,7 +678,7 @@ const MessageList = forwardRef(function MessageList({
     }
 
     const range = selection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
+    const rect = getAskPopoverAnchorRect(range);
     if (!rect || rect.width === 0 || rect.height === 0) {
       closeAskPopover();
       return;
@@ -713,8 +714,8 @@ const MessageList = forwardRef(function MessageList({
     setAskPopover({
       open: true,
       text,
-      x: rect.left + rect.width / 2,
-      y: Math.max(8, rect.top - 8),
+      x: clampToViewport(rect.left + rect.width / 2, ASK_POPOVER_EDGE_MARGIN),
+      y: Math.max(46, rect.top - 8),
     });
   }, [closeAskPopover, onAskSelection]);
 
@@ -1518,6 +1519,21 @@ function getElementFromNode(node) {
   if (!node) return null;
   if (node.nodeType === window.Node.ELEMENT_NODE) return node;
   return node.parentElement || null;
+}
+
+function getAskPopoverAnchorRect(range) {
+  const lineRects = Array.from(range.getClientRects())
+    .filter((rect) => rect.width > 0 && rect.height > 0)
+    .sort((a, b) => (a.top === b.top ? a.left - b.left : a.top - b.top));
+
+  return lineRects[0] || range.getBoundingClientRect();
+}
+
+function clampToViewport(value, margin) {
+  const viewportWidth =
+    typeof window === "undefined" ? 0 : Number(window.innerWidth) || 0;
+  if (viewportWidth <= margin * 2) return value;
+  return Math.min(viewportWidth - margin, Math.max(margin, value));
 }
 
 function readAttachmentUrl(attachment) {
