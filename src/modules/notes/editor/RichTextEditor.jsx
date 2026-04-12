@@ -35,6 +35,10 @@ export default function RichTextEditor({
     startLinkTitleEdit,
     insertImageFromFile,
     closeTableMenu,
+    selectTableRowFromHandle,
+    selectTableColumnFromHandle,
+    insertTableRowAtHover,
+    insertTableColumnAtHover,
     closeImageToolbar,
     setImageAlign,
     setImageSize,
@@ -52,6 +56,13 @@ export default function RichTextEditor({
   useEffect(() => {
     onTocChange?.(tocItems);
   }, [onTocChange, tocItems]);
+
+  useEffect(
+    () => () => {
+      onTocChange?.([]);
+    },
+    [noteId, onTocChange],
+  );
 
   useEffect(() => {
     onEditorReady?.(editor || null);
@@ -121,8 +132,16 @@ export default function RichTextEditor({
           visible={tableUI.visible}
           triggerPosition={tableUI.triggerPosition}
           menuPosition={tableUI.menuPosition}
+          tableRect={tableUI.tableRect}
+          rowHandle={tableUI.rowHandle}
+          columnHandle={tableUI.columnHandle}
+          hoverInsert={tableUI.hoverInsert}
           actions={tableUI.actions}
           onToggle={toggleTableMenu}
+          onSelectRow={selectTableRowFromHandle}
+          onSelectColumn={selectTableColumnFromHandle}
+          onInsertRow={insertTableRowAtHover}
+          onInsertColumn={insertTableColumnAtHover}
           onClose={closeTableMenu}
         />
       ) : null}

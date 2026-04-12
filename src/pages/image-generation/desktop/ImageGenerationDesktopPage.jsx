@@ -25,6 +25,10 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { getUserToken, withAuthSlot } from "../../../app/authStorage.js";
 import { stripAppBasePath } from "../../../app/basePath.js";
 import {
+  readReturnUrlFromSearch,
+  redirectToReturnUrl,
+} from "../../../app/returnNavigation.js";
+import {
   clearImageGenerationHistory,
   deleteImageGenerationHistoryItem,
   fetchImageGenerationHistory,
@@ -783,6 +787,10 @@ export default function ImageGenerationDesktopPage({
       };
     }
   }, [location.search]);
+  const returnUrl = useMemo(
+    () => readReturnUrlFromSearch(location.search),
+    [location.search],
+  );
   const backButtonLabel = returnTarget === "teacher-home" ? "返回教师主页" : "返回";
   const backButtonStatusLabel = useMemo(() => {
     if (returnTarget === "teacher-home") return "教师端";
@@ -1081,10 +1089,16 @@ export default function ImageGenerationDesktopPage({
 
   function handleBackToChat() {
     if (returnTarget === "mode-selection") {
+      if (redirectToReturnUrl(returnUrl, { replace: true })) {
+        return;
+      }
       navigate(withAuthSlot("/mode-selection"));
       return;
     }
     if (returnTarget === "teacher-home") {
+      if (redirectToReturnUrl(returnUrl, { replace: true })) {
+        return;
+      }
       const params = new URLSearchParams();
       if (teacherHomePanelParam) {
         params.set("teacherPanel", teacherHomePanelParam);

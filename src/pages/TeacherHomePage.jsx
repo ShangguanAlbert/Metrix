@@ -95,6 +95,7 @@ import {
   setUserToken,
   withAuthSlot,
 } from "../app/authStorage.js";
+import { buildAbsoluteAppUrl } from "../app/returnNavigation.js";
 import "../styles/teacher-home.css";
 
 const TARGET_CLASS_NAMES = Object.freeze(["教技231", "810班", "811班"]);
@@ -2168,18 +2169,29 @@ export default function TeacherHomePage() {
       const joiner = safePath.includes("?") ? "&" : "?";
       const nextParams = new URLSearchParams();
       nextParams.set("returnTo", "teacher-home");
+      const returnParams = new URLSearchParams();
       if (TEACHER_HOME_PANEL_KEYS.has(String(activePanel || "").trim())) {
         nextParams.set("teacherPanel", String(activePanel || "").trim());
+        returnParams.set("teacherPanel", String(activePanel || "").trim());
       }
       if (String(activePanel || "").trim() === "export-center") {
         const safeTeacherScopeKey = String(exportCenterScopeKey || "").trim();
         const safeExportDate = String(exportCenterDate || "").trim();
         if (safeTeacherScopeKey) {
           nextParams.set("exportTeacherScopeKey", safeTeacherScopeKey);
+          returnParams.set("exportTeacherScopeKey", safeTeacherScopeKey);
         }
         if (isValidDateInputValue(safeExportDate)) {
           nextParams.set("exportDate", safeExportDate);
+          returnParams.set("exportDate", safeExportDate);
         }
+      }
+      const returnPath = returnParams.toString()
+        ? `/admin/settings?${returnParams.toString()}`
+        : "/admin/settings";
+      const returnUrl = buildAbsoluteAppUrl(returnPath, activeSlot);
+      if (returnUrl) {
+        nextParams.set("returnUrl", returnUrl);
       }
       navigate(
         withAuthSlot(

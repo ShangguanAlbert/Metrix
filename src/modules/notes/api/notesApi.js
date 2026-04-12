@@ -128,3 +128,10 @@ export function uploadNoteImage(noteId, file) {
   }
   return requestForm("/api/notes/images/upload", formData);
 }
+
+export function migrateNoteImages() {
+  return request("/api/notes/migrate-images", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}

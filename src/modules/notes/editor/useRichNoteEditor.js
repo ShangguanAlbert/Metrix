@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NodeSelection } from "@tiptap/pm/state";
+import { CellSelection, TableMap } from "@tiptap/pm/tables";
 import { useEditor, useEditorState } from "@tiptap/react";
 import Heading from "@tiptap/extension-heading";
 import StarterKit from "@tiptap/starter-kit";
@@ -7,6 +8,9 @@ import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
+import TableOfContents, {
+  getHierarchicalIndexes,
+} from "@tiptap/extension-table-of-contents";
 import { Table } from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
@@ -19,8 +23,369 @@ import { ImagePlaceholder, NoteImage } from "./extensions/enhancedImage.js";
 import { htmlToMarkdown, markdownToHtml, normalizeMarkdown } from "./markdown.js";
 import { uploadNoteImageFile } from "./services/mediaUploadService.js";
 import { findMarkRangeAtPos, getEditorRectForRange } from "./utils/editorPosition.js";
-import { buildTocItemsFromDoc } from "./utils/toc.js";
 import { createEditorStableId } from "./utils/editorIds.js";
+
+function rectToPlainObject(rect) {
+  if (!rect) return null;
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function findTableElementNearSelection(editor) {
+  if (!editor?.view || !editor?.state?.selection) return null;
+
+  const { view, state } = editor;
+  const { selection } = state;
+  const resolvedPositions = [
+    selection.$from,
+    selection.$anchorCell,
+    selection.$headCell,
+  ].filter(Boolean);
+
+  for (const resolvedPos of resolvedPositions) {
+    for (let depth = resolvedPos.depth; depth > 0; depth -= 1) {
+      if (resolvedPos.node(depth)?.type?.name !== "table") continue;
+      const tablePos = resolvedPos.before(depth);
+      const tableDom = view.nodeDOM(tablePos);
+      if (tableDom instanceof HTMLElement) {
+        if (tableDom.tagName === "TABLE") return tableDom;
+        const nestedTable = tableDom.querySelector?.("table");
+        if (nestedTable instanceof HTMLElement) return nestedTable;
+      }
+    }
+  }
+
+  try {
+    const nearbyDom = view.domAtPos(selection.from)?.node;
+    const nearbyElement =
+      nearbyDom instanceof HTMLElement ? nearbyDom : nearbyDom?.parentElement;
+    return nearbyElement?.closest?.("table") || null;
+  } catch {
+    return null;
+  }
+}
+
+function getActiveTableRect(editor) {
+  const tableElement = findTableElementNearSelection(editor);
+  if (!tableElement) return null;
+  const rect = tableElement.getBoundingClientRect();
+  if (!rect?.width && !rect?.height) return null;
+  return rectToPlainObject(rect);
+}
+
+function findActiveTableContext(editor) {
+  if (!editor?.view || !editor?.state?.selection) return null;
+
+  const { state, view } = editor;
+  const { selection } = state;
+  const resolvedPositions = [
+    selection.$anchorCell,
+    selection.$headCell,
+    selection.$from,
+  ].filter(Boolean);
+
+  for (const resolvedPos of resolvedPositions) {
+    for (let depth = resolvedPos.depth; depth > 0; depth -= 1) {
+      const tableNode = resolvedPos.node(depth);
+      if (tableNode?.type?.name !== "table") continue;
+      return {
+        state,
+        view,
+        tableNode,
+        tablePos: resolvedPos.before(depth),
+        map: TableMap.get(tableNode),
+      };
+    }
+  }
+
+  return null;
+}
+
+function findCellInTable(context, docPos) {
+  if (!context || !Number.isFinite(docPos)) return null;
+  const { state, tablePos, map } = context;
+
+  for (let rowIndex = 0; rowIndex < map.height; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < map.width; columnIndex += 1) {
+      const mapIndex = rowIndex * map.width + columnIndex;
+      const cellPos = tablePos + 1 + map.map[mapIndex];
+      const cellNode = state.doc.nodeAt(cellPos);
+      if (!cellNode) continue;
+      const cellEnd = cellPos + cellNode.nodeSize;
+      if (docPos >= cellPos && docPos <= cellEnd) {
+        return { rowIndex, columnIndex, cellPos };
+      }
+    }
+  }
+
+  return null;
+}
+
+function getCellRect(context, rowIndex, columnIndex) {
+  if (!context) return null;
+  const { view, tablePos, map } = context;
+  if (
+    rowIndex < 0 ||
+    columnIndex < 0 ||
+    rowIndex >= map.height ||
+    columnIndex >= map.width
+  ) {
+    return null;
+  }
+
+  const mapIndex = rowIndex * map.width + columnIndex;
+  const cellPos = tablePos + 1 + map.map[mapIndex];
+  const cellDom = view.nodeDOM(cellPos);
+  if (!(cellDom instanceof HTMLElement)) return null;
+  return rectToPlainObject(cellDom.getBoundingClientRect());
+}
+
+function setTableRowSelection(editor, rowIndex) {
+  const context = findActiveTableContext(editor);
+  if (!context || rowIndex < 0 || rowIndex >= context.map.height) return false;
+
+  const { state, view, tablePos, map } = context;
+  const anchorCell = tablePos + 1 + map.map[rowIndex * map.width];
+  const headCell = tablePos + 1 + map.map[rowIndex * map.width + map.width - 1];
+  view.focus();
+  view.dispatch(
+    state.tr
+      .setSelection(CellSelection.create(state.doc, anchorCell, headCell))
+      .scrollIntoView(),
+  );
+  return true;
+}
+
+function setTableColumnSelection(editor, columnIndex) {
+  const context = findActiveTableContext(editor);
+  if (!context || columnIndex < 0 || columnIndex >= context.map.width) return false;
+
+  const { state, view, tablePos, map } = context;
+  const anchorCell = tablePos + 1 + map.map[columnIndex];
+  const headCell = tablePos + 1 + map.map[(map.height - 1) * map.width + columnIndex];
+  view.focus();
+  view.dispatch(
+    state.tr
+      .setSelection(CellSelection.create(state.doc, anchorCell, headCell))
+      .scrollIntoView(),
+  );
+  return true;
+}
+
+function setWholeTableSelection(editor) {
+  const context = findActiveTableContext(editor);
+  if (!context) return false;
+
+  const { state, view, tablePos, map } = context;
+  const anchorCell = tablePos + 1 + map.map[0];
+  const headCell = tablePos + 1 + map.map[map.width * map.height - 1];
+  view.focus();
+  view.dispatch(
+    state.tr
+      .setSelection(CellSelection.create(state.doc, anchorCell, headCell))
+      .scrollIntoView(),
+  );
+  return true;
+}
+
+function focusTableCell(editor, rowIndex, columnIndex) {
+  const context = findActiveTableContext(editor);
+  if (!context) return false;
+  const { tablePos, map } = context;
+
+  const safeRowIndex = Math.max(0, Math.min(rowIndex, map.height - 1));
+  const safeColumnIndex = Math.max(0, Math.min(columnIndex, map.width - 1));
+  const cellPos = tablePos + 1 + map.map[safeRowIndex * map.width + safeColumnIndex];
+
+  editor.chain().focus().setTextSelection(cellPos + 1).run();
+  return true;
+}
+
+function getActiveTableOverlayState(editor) {
+  const tableRect = getActiveTableRect(editor);
+  const context = findActiveTableContext(editor);
+  if (!tableRect || !context) return { tableRect, rowHandle: null, columnHandle: null };
+
+  const { state } = context;
+  const { selection } = state;
+  const headCellPos = selection.$headCell?.pos ?? selection.$anchorCell?.pos ?? selection.from;
+  const anchorCellPos = selection.$anchorCell?.pos ?? selection.$headCell?.pos ?? selection.from;
+  const headCell = findCellInTable(context, headCellPos);
+  const anchorCell = findCellInTable(context, anchorCellPos);
+  const activeCell = headCell || anchorCell;
+
+  if (!activeCell) {
+    return { tableRect, rowHandle: null, columnHandle: null };
+  }
+
+  const rowIndex = Math.max(anchorCell?.rowIndex ?? activeCell.rowIndex, activeCell.rowIndex);
+  const columnIndex = Math.max(anchorCell?.columnIndex ?? activeCell.columnIndex, activeCell.columnIndex);
+  const rowCellRect = getCellRect(context, rowIndex, 0);
+  const columnCellRect = getCellRect(context, 0, columnIndex);
+  const isCellSelection = selection instanceof CellSelection;
+  const isRowSelection = Boolean(isCellSelection && selection.isRowSelection?.());
+  const isColumnSelection = Boolean(isCellSelection && selection.isColSelection?.());
+
+  return {
+    tableRect,
+    rowHandle: rowCellRect
+      ? {
+          rowIndex,
+          selected: isRowSelection,
+          position: {
+            left: tableRect.left - 16,
+            top: rowCellRect.top + rowCellRect.height / 2 - 13,
+          },
+        }
+      : null,
+    columnHandle: columnCellRect
+      ? {
+          columnIndex,
+          selected: isColumnSelection,
+          position: {
+            left: columnCellRect.left + columnCellRect.width / 2 - 13,
+            top: tableRect.top - 16,
+          },
+        }
+    : null,
+  };
+}
+
+function getTableSelectionState(editor) {
+  const context = findActiveTableContext(editor);
+  const selection = context?.state?.selection;
+  if (!context || !(selection instanceof CellSelection)) {
+    return {
+      isRowSelected: false,
+      isColumnSelected: false,
+      isTableSelected: false,
+    };
+  }
+
+  const anchorCell = findCellInTable(context, selection.$anchorCell?.pos);
+  const headCell = findCellInTable(context, selection.$headCell?.pos);
+  const fromRow = Math.min(anchorCell?.rowIndex ?? 0, headCell?.rowIndex ?? 0);
+  const toRow = Math.max(anchorCell?.rowIndex ?? 0, headCell?.rowIndex ?? 0);
+  const fromColumn = Math.min(anchorCell?.columnIndex ?? 0, headCell?.columnIndex ?? 0);
+  const toColumn = Math.max(anchorCell?.columnIndex ?? 0, headCell?.columnIndex ?? 0);
+
+  return {
+    isRowSelected: Boolean(selection.isRowSelection?.()),
+    isColumnSelected: Boolean(selection.isColSelection?.()),
+    isTableSelected:
+      fromRow === 0 &&
+      fromColumn === 0 &&
+      toRow === context.map.height - 1 &&
+      toColumn === context.map.width - 1,
+  };
+}
+
+function buildTableUIPosition(editor) {
+  const overlayState = getActiveTableOverlayState(editor);
+  const tableRect = overlayState.tableRect;
+  const selectionRect = rectToPlainObject(getEditorRectForRange(editor));
+  const anchorRect = tableRect || selectionRect;
+  if (!anchorRect) return null;
+
+  const triggerPosition = {
+    left: tableRect ? tableRect.left - 12 : anchorRect.right + 8,
+    top: tableRect ? tableRect.top - 12 : anchorRect.top - 10,
+  };
+
+  return {
+    ...overlayState,
+    triggerPosition,
+    menuPosition: {
+      left: tableRect ? tableRect.left + 28 : triggerPosition.left,
+      top: tableRect ? tableRect.top - 42 : triggerPosition.top + 40,
+    },
+  };
+}
+
+function resolveHoverInsertIndicator(editor, event) {
+  const context = findActiveTableContext(editor);
+  const tableRect = getActiveTableRect(editor);
+  if (!context || !tableRect || !event?.target?.closest) return null;
+
+  const cellElement = event.target.closest("td, th");
+  const tableElement = event.target.closest("table");
+  if (!(cellElement instanceof HTMLElement) || !(tableElement instanceof HTMLElement)) {
+    return null;
+  }
+
+  const activeTableElement = findTableElementNearSelection(editor);
+  if (!activeTableElement || activeTableElement !== tableElement) return null;
+
+  let cellPos = null;
+  try {
+    cellPos = context.view.posAtDOM(cellElement, 0);
+  } catch {
+    cellPos = null;
+  }
+  if (!Number.isFinite(cellPos)) return null;
+
+  const cellInfo = findCellInTable(context, cellPos);
+  if (!cellInfo) return null;
+
+  const cellRect = cellElement.getBoundingClientRect();
+  const threshold = 10;
+  const distances = [
+    { axis: "column", mode: "before", distance: Math.abs(event.clientX - cellRect.left) },
+    { axis: "column", mode: "after", distance: Math.abs(cellRect.right - event.clientX) },
+    { axis: "row", mode: "before", distance: Math.abs(event.clientY - cellRect.top) },
+    { axis: "row", mode: "after", distance: Math.abs(cellRect.bottom - event.clientY) },
+  ]
+    .filter((item) => item.distance <= threshold)
+    .sort((left, right) => left.distance - right.distance);
+
+  const closest = distances[0];
+  if (!closest) return null;
+
+  if (closest.axis === "column") {
+    const lineX = closest.mode === "before" ? cellRect.left : cellRect.right;
+    const targetIndex =
+      closest.mode === "before" ? cellInfo.columnIndex : cellInfo.columnIndex + 1;
+    return {
+      axis: "column",
+      index: targetIndex,
+      mode: closest.mode,
+      lineStyle: {
+        left: lineX - 1,
+        top: tableRect.top + 1,
+        width: 2,
+        height: Math.max(0, tableRect.height - 2),
+      },
+      buttonStyle: {
+        left: lineX - 13,
+        top: tableRect.top + tableRect.height / 2 - 13,
+      },
+    };
+  }
+
+  const lineY = closest.mode === "before" ? cellRect.top : cellRect.bottom;
+  const targetIndex = closest.mode === "before" ? cellInfo.rowIndex : cellInfo.rowIndex + 1;
+  return {
+    axis: "row",
+    index: targetIndex,
+    mode: closest.mode,
+    lineStyle: {
+      left: tableRect.left + 1,
+      top: lineY - 1,
+      width: Math.max(0, tableRect.width - 2),
+      height: 2,
+    },
+    buttonStyle: {
+      left: tableRect.left + tableRect.width / 2 - 13,
+      top: lineY - 13,
+    },
+  };
+}
 
 export function useRichNoteEditor({
   noteId = "",
@@ -49,6 +414,10 @@ export function useRichNoteEditor({
     visible: false,
     triggerPosition: null,
     menuPosition: null,
+    tableRect: null,
+    rowHandle: null,
+    columnHandle: null,
+    hoverInsert: null,
     actions: [],
   });
   const [imageUI, setImageUI] = useState({
@@ -70,13 +439,18 @@ export function useRichNoteEditor({
     linkEditorVisibleRef.current = linkEditor.visible;
   }, [linkEditor.visible]);
 
-  const refreshToc = useCallback((currentEditor) => {
-    if (!currentEditor) {
-      setTocItems([]);
-      return;
-    }
-    const activePos = Number(currentEditor.state.selection?.from || 0);
-    setTocItems(buildTocItemsFromDoc(currentEditor.state.doc, activePos));
+  const handleTocUpdate = useCallback((items = []) => {
+    setTocItems(
+      items
+        .filter((item) => Number(item?.level || 0) >= 1 && Number(item?.level || 0) <= 3)
+        .map((item) => ({
+          id: String(item?.id || "").trim(),
+          text: String(item?.textContent || "").trim(),
+          depth: Number(item?.level || 1),
+          pos: Number(item?.pos || 0),
+          isActive: Boolean(item?.isActive),
+        })),
+    );
   }, []);
 
   const closeLinkEditor = useCallback(() => {
@@ -315,65 +689,122 @@ export function useRichNoteEditor({
 
   const buildTableActions = useCallback((currentEditor) => {
     if (!currentEditor) return [];
+    const selectionState = getTableSelectionState(currentEditor);
 
     const safeRun = (runner) => () => {
       runner?.();
       requestAnimationFrame(() => {
         const nextEditor = editorRef.current;
-        if (nextEditor) {
-          const selectionRect = getEditorRectForRange(nextEditor);
-          if (selectionRect) {
-            const triggerPosition = {
-              left: selectionRect.right + 8,
-              top: selectionRect.top - 10,
-            };
-            setTableUI((current) => ({
-              ...current,
-              triggerPosition,
-              menuPosition: {
-                left: triggerPosition.left,
-                top: triggerPosition.top + 40,
-              },
-            }));
-          }
+        if (!nextEditor) return;
+        if (!nextEditor.isActive("table")) {
+          setTableUI((current) => ({
+          ...current,
+          visible: false,
+          triggerPosition: null,
+          menuPosition: null,
+          tableRect: null,
+          rowHandle: null,
+          columnHandle: null,
+          hoverInsert: null,
+          actions: [],
+        }));
+          return;
         }
+        const nextPosition = buildTableUIPosition(nextEditor);
+        if (!nextPosition) {
+          setTableUI((current) => ({
+          ...current,
+          visible: false,
+          triggerPosition: null,
+          menuPosition: null,
+          tableRect: null,
+          rowHandle: null,
+          columnHandle: null,
+          hoverInsert: null,
+          actions: [],
+        }));
+          return;
+        }
+        setTableUI((current) => ({
+          ...current,
+          ...nextPosition,
+          actions: buildTableActions(nextEditor),
+        }));
       });
     };
 
     return [
       {
+        id: "select-row",
+        label: "当前行",
+        active: selectionState.isRowSelected && !selectionState.isTableSelected,
+        onClick: safeRun(() => setTableRowSelection(currentEditor, getActiveTableOverlayState(currentEditor).rowHandle?.rowIndex ?? 0)),
+      },
+      {
+        id: "select-column",
+        label: "当前列",
+        active: selectionState.isColumnSelected && !selectionState.isTableSelected,
+        onClick: safeRun(() => setTableColumnSelection(currentEditor, getActiveTableOverlayState(currentEditor).columnHandle?.columnIndex ?? 0)),
+      },
+      {
+        id: "select-table",
+        label: "整表",
+        active: selectionState.isTableSelected,
+        onClick: safeRun(() => setWholeTableSelection(currentEditor)),
+      },
+      {
         id: "row-before",
-        label: "上方插入一行",
+        label: "上插行",
         onClick: safeRun(() => currentEditor.chain().focus().addRowBefore().run()),
       },
       {
         id: "row-after",
-        label: "下方插入一行",
+        label: "下插行",
         onClick: safeRun(() => currentEditor.chain().focus().addRowAfter().run()),
       },
       {
         id: "column-before",
-        label: "左侧插入一列",
+        label: "左插列",
         onClick: safeRun(() => currentEditor.chain().focus().addColumnBefore().run()),
       },
       {
         id: "column-after",
-        label: "右侧插入一列",
+        label: "右插列",
         onClick: safeRun(() => currentEditor.chain().focus().addColumnAfter().run()),
       },
       {
+        id: "toggle-header-row",
+        label: "表头行",
+        onClick: safeRun(() => currentEditor.chain().focus().toggleHeaderRow().run()),
+      },
+      {
+        id: "toggle-header-column",
+        label: "表头列",
+        onClick: safeRun(() => currentEditor.chain().focus().toggleHeaderColumn().run()),
+      },
+      {
+        id: "merge-cells",
+        label: "合并",
+        onClick: safeRun(() => currentEditor.chain().focus().mergeCells().run()),
+      },
+      {
+        id: "split-cell",
+        label: "拆分",
+        onClick: safeRun(() => currentEditor.chain().focus().splitCell().run()),
+      },
+      {
         id: "delete-row",
-        label: "删除当前行",
+        label: "删行",
         onClick: safeRun(() => currentEditor.chain().focus().deleteRow().run()),
       },
       {
         id: "delete-column",
-        label: "删除当前列",
+        label: "删列",
         onClick: safeRun(() => currentEditor.chain().focus().deleteColumn().run()),
       },
       {
         id: "delete-table",
-        label: "删除表格",
+        label: "删表",
         danger: true,
         onClick: safeRun(() => currentEditor.chain().focus().deleteTable().run()),
       },
@@ -386,32 +817,120 @@ export function useRichNoteEditor({
         setTableUI((current) => ({
           ...current,
           triggerPosition: null,
+          tableRect: null,
+          rowHandle: null,
+          columnHandle: null,
+          hoverInsert: null,
           visible: false,
           actions: [],
         }));
         return;
       }
 
-      const selectionRect = getEditorRectForRange(currentEditor);
-      if (!selectionRect) return;
-
-      const triggerPosition = {
-        left: selectionRect.right + 8,
-        top: selectionRect.top - 10,
-      };
+      const nextPosition = buildTableUIPosition(currentEditor);
+      if (!nextPosition) return;
 
       setTableUI((current) => ({
         ...current,
-        triggerPosition,
-        menuPosition: {
-          left: triggerPosition.left,
-          top: triggerPosition.top + 40,
-        },
+        ...nextPosition,
+        visible: true,
+        hoverInsert: current.hoverInsert,
         actions: buildTableActions(currentEditor),
       }));
     },
     [buildTableActions],
   );
+
+  const openTableMenuAt = useCallback(
+    (position = null) => {
+      const currentEditor = editorRef.current;
+      if (!currentEditor) return;
+      const nextPosition = buildTableUIPosition(currentEditor);
+      if (!nextPosition) return;
+      setTableUI((current) => ({
+        ...current,
+        ...nextPosition,
+        visible: true,
+        menuPosition: position || nextPosition.menuPosition,
+        actions: buildTableActions(currentEditor),
+      }));
+    },
+    [buildTableActions],
+  );
+
+  const selectTableRowFromHandle = useCallback(
+    (rowIndex, position = null) => {
+      const currentEditor = editorRef.current;
+      if (!currentEditor) return;
+      if (!setTableRowSelection(currentEditor, rowIndex)) return;
+      requestAnimationFrame(() => {
+        openTableMenuAt(
+          position
+            ? {
+                left: position.left + 28,
+                top: position.top - 8,
+              }
+            : null,
+        );
+      });
+    },
+    [openTableMenuAt],
+  );
+
+  const selectTableColumnFromHandle = useCallback(
+    (columnIndex, position = null) => {
+      const currentEditor = editorRef.current;
+      if (!currentEditor) return;
+      if (!setTableColumnSelection(currentEditor, columnIndex)) return;
+      requestAnimationFrame(() => {
+        openTableMenuAt(
+          position
+            ? {
+                left: position.left - 8,
+                top: position.top + 32,
+              }
+            : null,
+        );
+      });
+    },
+    [openTableMenuAt],
+  );
+
+  const insertTableRowAtHover = useCallback(() => {
+    const currentEditor = editorRef.current;
+    if (!currentEditor) return;
+    const hoverInsert = tableUI.hoverInsert;
+    if (!hoverInsert || hoverInsert.axis !== "row") return;
+
+    const targetIndex =
+      hoverInsert.mode === "before" ? hoverInsert.index : Math.max(0, hoverInsert.index - 1);
+    if (!focusTableCell(currentEditor, targetIndex, 0)) return;
+
+    if (hoverInsert.mode === "before") {
+      currentEditor.chain().focus().addRowBefore().run();
+    } else {
+      currentEditor.chain().focus().addRowAfter().run();
+    }
+    requestAnimationFrame(() => refreshTableUI(currentEditor));
+  }, [refreshTableUI, tableUI.hoverInsert]);
+
+  const insertTableColumnAtHover = useCallback(() => {
+    const currentEditor = editorRef.current;
+    if (!currentEditor) return;
+    const hoverInsert = tableUI.hoverInsert;
+    if (!hoverInsert || hoverInsert.axis !== "column") return;
+
+    const targetIndex =
+      hoverInsert.mode === "before" ? hoverInsert.index : Math.max(0, hoverInsert.index - 1);
+    if (!focusTableCell(currentEditor, 0, targetIndex)) return;
+
+    if (hoverInsert.mode === "before") {
+      currentEditor.chain().focus().addColumnBefore().run();
+    } else {
+      currentEditor.chain().focus().addColumnAfter().run();
+    }
+    requestAnimationFrame(() => refreshTableUI(currentEditor));
+  }, [refreshTableUI, tableUI.hoverInsert]);
 
   const refreshLinkBubble = useCallback(
     (currentEditor) => {
@@ -556,6 +1075,14 @@ export function useRichNoteEditor({
         levels: [1, 2, 3, 4, 5, 6],
       }),
       HeadingAnchor,
+      TableOfContents.configure({
+        getIndex: getHierarchicalIndexes,
+        onUpdate: (items) => {
+          handleTocUpdate(items);
+        },
+        scrollParent: () =>
+          editorRef.current?.view?.dom?.closest?.(".notes-rich-editor-content") || window,
+      }),
       EnhancedLink.configure({
         openOnClick: false,
         autolink: true,
@@ -584,7 +1111,8 @@ export function useRichNoteEditor({
         nested: true,
       }),
       Table.configure({
-        resizable: true,
+        resizable: false,
+        lastColumnResizable: false,
       }),
       TableRow,
       TableHeader,
@@ -628,7 +1156,7 @@ export function useRichNoteEditor({
       },
     },
     onCreate({ editor: currentEditor }) {
-      refreshToc(currentEditor);
+      currentEditor.commands.updateTableOfContents?.();
       refreshLinkBubble(currentEditor);
       refreshTableUI(currentEditor);
       refreshImageUI(currentEditor);
@@ -645,13 +1173,11 @@ export function useRichNoteEditor({
       const nextMarkdown = htmlToMarkdown(nextEditor.getHTML());
       lastSyncedMarkdownRef.current = nextMarkdown;
       onMarkdownChange?.(nextMarkdown);
-      refreshToc(nextEditor);
       refreshLinkBubble(nextEditor);
       refreshTableUI(nextEditor);
       refreshImageUI(nextEditor);
     },
     onSelectionUpdate({ editor: currentEditor }) {
-      refreshToc(currentEditor);
       refreshLinkBubble(currentEditor);
       refreshTableUI(currentEditor);
       refreshImageUI(currentEditor);
@@ -676,6 +1202,78 @@ export function useRichNoteEditor({
   }, [editor, spellCheckEnabled]);
 
   useEffect(() => {
+    if (!editor) return undefined;
+    let frameId = 0;
+    const handleViewportChange = () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        frameId = 0;
+        refreshLinkBubble(editor);
+        refreshTableUI(editor);
+        refreshImageUI(editor);
+      });
+    };
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [editor, refreshImageUI, refreshLinkBubble, refreshTableUI]);
+
+  useEffect(() => {
+    if (!editor) return undefined;
+
+    const getHoverKey = (value) =>
+      value
+        ? `${value.axis}:${value.mode}:${value.index}:${Math.round(value.lineStyle.left)}:${Math.round(value.lineStyle.top)}`
+        : "";
+
+    const handlePointerMove = (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const isOverFloatingTableUi = Boolean(
+        target?.closest?.(".notes-table-insert-button")
+        || target?.closest?.(".notes-table-popover")
+        || target?.closest?.(".notes-table-insert-line"),
+      );
+
+      if (isOverFloatingTableUi) {
+        return;
+      }
+
+      if (!editor.isActive("table")) {
+        setTableUI((current) =>
+          current.hoverInsert ? { ...current, hoverInsert: null } : current,
+        );
+        return;
+      }
+
+      const isInsideEditor = target ? editor.view.dom.contains(target) : false;
+      if (!isInsideEditor) {
+        setTableUI((current) =>
+          current.hoverInsert ? { ...current, hoverInsert: null } : current,
+        );
+        return;
+      }
+
+      const nextHoverInsert = resolveHoverInsertIndicator(editor, event);
+      setTableUI((current) => {
+        if (getHoverKey(nextHoverInsert) === getHoverKey(current.hoverInsert)) {
+          return current;
+        }
+        return { ...current, hoverInsert: nextHoverInsert };
+      });
+    };
+
+    window.addEventListener("pointermove", handlePointerMove, true);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove, true);
+    };
+  }, [editor]);
+
+  useEffect(() => {
     setLinkBubble({
       visible: false,
       position: null,
@@ -688,12 +1286,12 @@ export function useRichNoteEditor({
     if (!editor) return;
     if (normalizedMarkdown === lastSyncedMarkdownRef.current) return;
     editor.commands.setContent(markdownToHtml(normalizedMarkdown), false);
+    editor.commands.updateTableOfContents?.();
     lastSyncedMarkdownRef.current = normalizedMarkdown;
-    refreshToc(editor);
     setLinkBubble((current) => ({ ...current, visible: false, position: null }));
     refreshTableUI(editor);
     refreshImageUI(editor);
-  }, [editor, normalizedMarkdown, refreshImageUI, refreshTableUI, refreshToc]);
+  }, [editor, normalizedMarkdown, refreshImageUI, refreshTableUI]);
 
   const formatting = useEditorState({
     editor,
@@ -759,6 +1357,10 @@ export function useRichNoteEditor({
     startLinkTitleEdit,
     insertImageFromFile,
     closeTableMenu,
+    selectTableRowFromHandle,
+    selectTableColumnFromHandle,
+    insertTableRowAtHover,
+    insertTableColumnAtHover,
     closeImageToolbar,
     setImageAlign,
     setImageSize,

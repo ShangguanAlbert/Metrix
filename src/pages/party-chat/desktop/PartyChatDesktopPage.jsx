@@ -29,6 +29,10 @@ import { AGENT_META } from "../../chat/constants.js";
 import { readErrorMessage, readSseStream } from "../../chat/chatHelpers.js";
 import { getUserToken, withAuthSlot } from "../../../app/authStorage.js";
 import {
+  readReturnUrlFromSearch,
+  redirectToReturnUrl,
+} from "../../../app/returnNavigation.js";
+import {
   fetchChatBootstrap,
   getAuthTokenHeader,
   saveChatSessionMessages,
@@ -191,6 +195,10 @@ export default function PartyChatDesktopPage({
       };
     }
   }, [location.search]);
+  const returnUrl = useMemo(
+    () => readReturnUrlFromSearch(location.search),
+    [location.search],
+  );
   const quickJoinRoomCode = useMemo(() => {
     try {
       const params = new URLSearchParams(String(location.search || ""));
@@ -288,6 +296,7 @@ export default function PartyChatDesktopPage({
   const [previewImage, setPreviewImage] = useState(null);
   const [isAtLatest, setIsAtLatest] = useState(true);
   const [showCopyImageToast, setShowCopyImageToast] = useState(false);
+  const [pageEntered, setPageEntered] = useState(false);
   const [readReceiptModal, setReadReceiptModal] = useState({
     open: false,
     messageId: "",
@@ -303,6 +312,17 @@ export default function PartyChatDesktopPage({
     () => rooms.find((room) => room.id === activeRoomId) || null,
     [rooms, activeRoomId],
   );
+
+  useEffect(() => {
+    let frameId = 0;
+    frameId = window.requestAnimationFrame(() => {
+      setPageEntered(true);
+    });
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+    };
+  }, []);
+
   const activeMessages = useMemo(
     () => messagesByRoom[activeRoomId] || [],
     [messagesByRoom, activeRoomId],
@@ -1298,6 +1318,12 @@ export default function PartyChatDesktopPage({
     joinedRoomIdsRef.current = new Set();
     socketRef.current?.close();
     socketRef.current = null;
+    if (
+      (returnTarget === "mode-selection" || returnTarget === "teacher-home") &&
+      redirectToReturnUrl(returnUrl, { replace: true })
+    ) {
+      return;
+    }
     const backPath = returnTarget === "mode-selection"
       ? "/mode-selection"
       : returnTarget === "teacher-home"
@@ -1318,7 +1344,7 @@ export default function PartyChatDesktopPage({
     navigate(withAuthSlot(backPath), {
       replace: true,
     });
-  }, [navigate, returnTarget, teacherHomeExportContext.exportDate, teacherHomeExportContext.exportTeacherScopeKey, teacherHomePanelParam]);
+  }, [navigate, returnTarget, returnUrl, teacherHomeExportContext.exportDate, teacherHomeExportContext.exportTeacherScopeKey, teacherHomePanelParam]);
 
   const mergeMessages = useCallback((roomId, incoming, { replace = false } = {}) => {
     const safeRoomId = String(roomId || "").trim();
@@ -3183,7 +3209,7 @@ export default function PartyChatDesktopPage({
   }, [activeRoomId, activeMessages, isAtLatest, syncRoomReadThroughMessage]);
 
   return (
-    <div className="party-page">
+    <div className={`party-page party-page-enter${pageEntered ? " is-page-entered" : ""}`}>
       <div className={`party-workspace${showSidebar ? "" : " is-side-collapsed"}`}>
         <aside
           id="party-side-panel"

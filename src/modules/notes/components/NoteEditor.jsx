@@ -15,7 +15,8 @@ const DEFAULT_EDITOR_SETTINGS = {
   fontFamily: "default",
   fontSize: "medium",
   showTableOfContents: true,
-  isNarrowWidth: false,
+  isNarrowWidth: true,
+  tableAutoWidth: true,
   spellCheckEnabled: false,
 };
 
@@ -23,17 +24,6 @@ const VIEW_MODE_OPTIONS = [
   { value: "edit", label: "编辑模式" },
   { value: "source", label: "源码模式" },
   { value: "read", label: "阅读模式" },
-];
-
-const FONT_FAMILY_OPTIONS = [
-  { value: "default", label: "默认字体" },
-  { value: "serif", label: "衬线字体" },
-];
-
-const FONT_SIZE_OPTIONS = [
-  { value: "small", label: "小" },
-  { value: "medium", label: "中" },
-  { value: "large", label: "大" },
 ];
 
 function loadEditorSettings() {
@@ -131,6 +121,21 @@ function extractHeadings(markdown = "") {
   });
 
   return headings;
+}
+
+function dedupeHeadings(items = []) {
+  const seen = new Set();
+  return items.filter((item, index) => {
+    const key = [
+      String(item?.id || "").trim(),
+      String(item?.text || "").trim(),
+      Number(item?.depth || 0),
+      Number(item?.pos ?? item?.offset ?? index),
+    ].join("::");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function createIconPath(path) {
@@ -314,18 +319,6 @@ function EditorIconCheck() {
   );
 }
 
-function EditorIconChevronRight() {
-  return createIconPath(
-    <path
-      d="M8 5.5L12.5 10L8 14.5"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />,
-  );
-}
-
 function EditorIconCircleDot({ active = false }) {
   return (
     <svg viewBox="0 0 12 12" fill="none" aria-hidden="true">
@@ -389,8 +382,6 @@ export default function NoteEditor({
 }) {
   const [settings, setSettings] = useState(() => loadEditorSettings());
   const [menuOpen, setMenuOpen] = useState(false);
-  const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
-  const [fontMenuOpen, setFontMenuOpen] = useState(false);
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const [localMessage, setLocalMessage] = useState("");
   const [aiNotice, setAiNotice] = useState({ text: "", exiting: false, key: 0 });
@@ -415,9 +406,11 @@ export default function NoteEditor({
   const headings = useMemo(() => extractHeadings(contentMarkdown), [contentMarkdown]);
   const visibleHeadings = useMemo(() => {
     if (settings.viewMode === "edit" && richHeadings.length > 0) {
-      return richHeadings;
+      return dedupeHeadings(
+        richHeadings.filter((item) => Number(item?.depth || 0) >= 1 && Number(item?.depth || 0) <= 3),
+      );
     }
-    return headings.filter((item) => item.depth >= 1 && item.depth <= 3);
+    return dedupeHeadings(headings.filter((item) => item.depth >= 1 && item.depth <= 3));
   }, [headings, richHeadings, settings.viewMode]);
   const handleCopyCodeBlock = useCallback(async (value = "") => {
     const text = String(value || "");
@@ -454,8 +447,6 @@ export default function NoteEditor({
     function handlePointerDown(event) {
       if (!menuRef.current?.contains(event.target)) {
         setMenuOpen(false);
-        setMoreSettingsOpen(false);
-        setFontMenuOpen(false);
       }
     }
 
@@ -489,6 +480,10 @@ export default function NoteEditor({
     }, 20);
     return () => window.clearTimeout(timer);
   }, [tagsExpanded]);
+
+  useEffect(() => {
+    setRichHeadings([]);
+  }, [note?.id]);
 
   function updateSettings(patch) {
     setSettings((current) => ({ ...current, ...patch }));
@@ -543,8 +538,6 @@ export default function NoteEditor({
       setLocalMessage(result === false ? "保存失败，请稍后重试。" : "");
       if (result !== false) {
         setMenuOpen(false);
-        setMoreSettingsOpen(false);
-        setFontMenuOpen(false);
       }
     } catch {
       setLocalMessage("保存失败，请稍后重试。");
@@ -554,18 +547,50 @@ export default function NoteEditor({
   function scrollToHeading(heading) {
     if (!heading) return;
     if (settings.viewMode === "edit" && richEditorInstanceRef.current && Number.isFinite(heading.pos)) {
-      richEditorInstanceRef.current
+      const editorInstance = richEditorInstanceRef.current;
+      const scrollContainer = editorSurfaceRef.current?.querySelector(".notes-rich-editor-content");
+      const tocId = CSS.escape(String(heading.id || ""));
+      const target =
+        editorSurfaceRef.current?.querySelector(`[data-toc-id="${tocId}"]`) ||
+        editorSurfaceRef.current?.querySelector(`[data-notes-heading-id="${tocId}"]`);
+
+      if (target instanceof HTMLElement && scrollContainer instanceof HTMLElement) {
+        try {
+          const pos = editorInstance.view.posAtDOM(target, 0);
+          editorInstance.chain().focus().setTextSelection(Number(pos) || Number(heading.pos) || 0).run();
+        } catch {
+          editorInstance.chain().focus().setTextSelection(Number(heading.pos) || 0).run();
+        }
+
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const targetScrollTop = scrollContainer.scrollTop + (targetRect.top - containerRect.top) - 18;
+
+        scrollContainer.scrollTo({
+          top: Math.max(0, targetScrollTop),
+          behavior: "smooth",
+        });
+
+        window.setTimeout(() => {
+          flashLocatedHeading(target);
+          scrollContainer.dispatchEvent(new Event("scroll", { bubbles: true }));
+          editorInstance.commands.updateTableOfContents?.();
+        }, 260);
+        return;
+      }
+
+      editorInstance
         .chain()
         .focus()
         .setTextSelection(Number(heading.pos) || 0)
         .scrollIntoView()
         .run();
       window.setTimeout(() => {
-        const target = editorSurfaceRef.current?.querySelector(
-          `[data-notes-heading-id="${CSS.escape(String(heading.id || ""))}"]`,
-        );
-        if (target) {
-          flashLocatedHeading(target);
+        const fallbackTarget =
+          editorSurfaceRef.current?.querySelector(`[data-toc-id="${tocId}"]`) ||
+          editorSurfaceRef.current?.querySelector(`[data-notes-heading-id="${tocId}"]`);
+        if (fallbackTarget) {
+          flashLocatedHeading(fallbackTarget);
         }
       }, 120);
       return;
@@ -618,7 +643,7 @@ export default function NoteEditor({
   const isArchived = status === "archived";
   return (
     <section
-      className={`notes-editor-shell notes-editor-v2 font-${settings.fontFamily} size-${settings.fontSize}${settings.isNarrowWidth ? " is-narrow-width" : ""}${settings.showTableOfContents ? " has-toc" : ""}`}
+      className={`notes-editor-shell notes-editor-v2 font-${settings.fontFamily} size-${settings.fontSize}${settings.isNarrowWidth ? " is-narrow-width" : ""}${settings.tableAutoWidth ? " is-table-auto-width" : ""}${settings.showTableOfContents ? " has-toc" : ""}`}
     >
       {aiNotice.text ? (
         <div
@@ -714,8 +739,6 @@ export default function NoteEditor({
               className={`notes-editor-menu-btn${menuOpen ? " active" : ""}`}
               onClick={() => {
                 setMenuOpen((current) => !current);
-                setMoreSettingsOpen(false);
-                setFontMenuOpen(false);
               }}
               aria-label="更多操作"
               title="更多操作"
@@ -746,8 +769,6 @@ export default function NoteEditor({
                   onClick={() => {
                     onExportWord?.();
                     setMenuOpen(false);
-                    setMoreSettingsOpen(false);
-                    setFontMenuOpen(false);
                   }}
                   disabled={exportPending}
                 >
@@ -765,6 +786,15 @@ export default function NoteEditor({
                 </button>
                 <button
                   type="button"
+                  className={`notes-editor-menu-item${settings.tableAutoWidth ? " active" : ""}`}
+                  onClick={() => updateSettings({ tableAutoWidth: !settings.tableAutoWidth })}
+                >
+                  <EditorIconWidth />
+                  <span>表格自适应宽度</span>
+                  {settings.tableAutoWidth ? <EditorIconCheck /> : null}
+                </button>
+                <button
+                  type="button"
                   className={`notes-editor-menu-item${settings.showTableOfContents ? " active" : ""}`}
                   onClick={() =>
                     updateSettings({ showTableOfContents: !settings.showTableOfContents })
@@ -774,106 +804,41 @@ export default function NoteEditor({
                   <span>显示目录大纲</span>
                   {settings.showTableOfContents ? <EditorIconCheck /> : null}
                 </button>
-
                 <button
                   type="button"
-                  className={`notes-editor-menu-item${fontMenuOpen ? " active" : ""}`}
+                  className="notes-editor-menu-item"
                   onClick={() => {
-                    setFontMenuOpen((current) => !current);
-                    setMoreSettingsOpen(false);
+                    onStatusChange?.(isArchived ? "active" : "archived");
+                    setMenuOpen(false);
                   }}
                 >
                   <EditorIconToc />
-                  <span>字体设置</span>
-                  <EditorIconChevronRight />
+                  <span>{isArchived ? "取消归档" : "归档当前笔记"}</span>
                 </button>
-
+                {note.sourceSessionId ? (
+                  <button
+                    type="button"
+                    className="notes-editor-menu-item"
+                    onClick={() => {
+                      onOpenSourceChat?.();
+                      setMenuOpen(false);
+                    }}
+                  >
+                    <EditorIconLink />
+                    <span>查看来源聊天</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  className={`notes-editor-menu-item${moreSettingsOpen ? " active" : ""}`}
+                  className="notes-editor-menu-item danger"
                   onClick={() => {
-                    setMoreSettingsOpen((current) => !current);
-                    setFontMenuOpen(false);
+                    onDelete?.();
+                    setMenuOpen(false);
                   }}
                 >
-                  <EditorIconLink />
-                  <span>更多设置</span>
-                  <EditorIconChevronRight />
+                  <EditorIconTrash />
+                  <span>删除笔记</span>
                 </button>
-
-                {fontMenuOpen ? (
-                  <div className="notes-editor-menu-group notes-editor-settings-panel">
-                    <div className="notes-editor-menu-label">字体设置</div>
-                    <div className="notes-editor-choice-grid">
-                      {FONT_FAMILY_OPTIONS.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`notes-editor-choice-chip${settings.fontFamily === option.value ? " active" : ""}`}
-                          onClick={() => updateSettings({ fontFamily: option.value })}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="notes-editor-choice-grid">
-                      {FONT_SIZE_OPTIONS.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`notes-editor-choice-chip${settings.fontSize === option.value ? " active" : ""}`}
-                          onClick={() => updateSettings({ fontSize: option.value })}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {moreSettingsOpen ? (
-                  <div className="notes-editor-menu-group notes-editor-settings-panel">
-                    <div className="notes-editor-menu-label">更多设置</div>
-                    <button
-                      type="button"
-                      className="notes-editor-menu-item inner"
-                      onClick={() =>
-                        onStatusChange?.(isArchived ? "active" : "archived")
-                      }
-                    >
-                      <EditorIconToc />
-                      <span>{isArchived ? "取消归档" : "归档当前笔记"}</span>
-                    </button>
-                    {note.sourceSessionId ? (
-                      <button
-                        type="button"
-                        className="notes-editor-menu-item inner"
-                        onClick={() => {
-                          onOpenSourceChat?.();
-                          setMenuOpen(false);
-                          setMoreSettingsOpen(false);
-                          setFontMenuOpen(false);
-                        }}
-                      >
-                        <EditorIconLink />
-                        <span>查看来源聊天</span>
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="notes-editor-menu-item inner danger"
-                      onClick={() => {
-                        onDelete?.();
-                        setMenuOpen(false);
-                        setMoreSettingsOpen(false);
-                        setFontMenuOpen(false);
-                      }}
-                    >
-                      <EditorIconTrash />
-                      <span>删除笔记</span>
-                    </button>
-                  </div>
-                ) : null}
               </div>
             ) : null}
           </div>

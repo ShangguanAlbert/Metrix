@@ -1,10 +1,9 @@
 import { Buffer } from "node:buffer";
-import crypto from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
 import multer from "multer";
 import { Note, isValidNoteObjectId, normalizeNoteDoc } from "../services/notes/note-model.js";
+import { NoteImage } from "../services/notes/note-image-model.js";
 import { exportNoteMarkdownToWord } from "../services/notes/notes-word-export.js";
 
 const NOTE_STATUS_VALUES = new Set(["draft", "active", "archived"]);
@@ -21,6 +20,14 @@ const NOTE_IMAGE_EXT_BY_MIME = new Map([
   ["image/webp", ".webp"],
   ["image/gif", ".gif"],
 ]);
+const NOTE_IMAGE_MIME_BY_EXT = new Map([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".webp", "image/webp"],
+  [".gif", "image/gif"],
+]);
+const NOTE_LEGACY_UPLOAD_URL_PATTERN = /(?:https?:\/\/[^\s"'<>()[\]]+)?\/uploads\/notes\/[^\s"'<>()[\]]+/gi;
 
 function sanitizeText(value, maxLength = 4000) {
   const text = String(value || "").split("\u0000").join("").trim();
@@ -85,6 +92,99 @@ function resolveNoteImageExtension(file = null) {
   const originalName = String(file?.originalname || "").trim().toLowerCase();
   const ext = path.extname(originalName || "");
   return NOTE_IMAGE_EXT_BY_MIME.get(mimeType) || ext || ".png";
+}
+
+function resolveNoteImageMimeTypeFromPath(filePath = "") {
+  const ext = path.extname(String(filePath || "").trim()).toLowerCase();
+  return NOTE_IMAGE_MIME_BY_EXT.get(ext) || "image/png";
+}
+
+function extractLegacyUploadUrls(contentMarkdown = "") {
+  return Array.from(
+    new Set(String(contentMarkdown || "").match(NOTE_LEGACY_UPLOAD_URL_PATTERN) || []),
+  );
+}
+
+function resolveLegacyUploadFilePath(rawUrl = "") {
+  const text = String(rawUrl || "").trim();
+  if (!text) return "";
+
+  let pathname = text;
+  if (/^https?:\/\//i.test(text)) {
+    try {
+      pathname = new URL(text).pathname || "";
+    } catch {
+      pathname = text;
+    }
+  }
+
+  const safePathname = String(pathname || "").split("?")[0].split("#")[0];
+  if (!safePathname.startsWith("/uploads/notes/")) return "";
+
+  const uploadsRoot = path.resolve(process.cwd(), "uploads", "notes");
+  const targetPath = path.resolve(process.cwd(), `.${safePathname}`);
+  if (targetPath !== uploadsRoot && !targetPath.startsWith(`${uploadsRoot}${path.sep}`)) {
+    return "";
+  }
+  return targetPath;
+}
+
+async function migrateLegacyNoteImageUrls({ userId = "", noteId = "", contentMarkdown = "" } = {}) {
+  const legacyUrls = extractLegacyUploadUrls(contentMarkdown);
+  if (legacyUrls.length === 0) {
+    return {
+      changed: false,
+      contentMarkdown: String(contentMarkdown || ""),
+      migratedCount: 0,
+    };
+  }
+
+  const replacements = new Map();
+
+  for (const legacyUrl of legacyUrls) {
+    const filePath = resolveLegacyUploadFilePath(legacyUrl);
+    if (!filePath) continue;
+
+    try {
+      const fileBuffer = await readFile(filePath);
+      if (!fileBuffer.length) continue;
+
+      const noteImage = await NoteImage.create({
+        userId,
+        noteId,
+        fileName: path.basename(filePath),
+        mimeType: resolveNoteImageMimeTypeFromPath(filePath),
+        size: fileBuffer.length,
+        dataBase64: fileBuffer.toString("base64"),
+      });
+
+      replacements.set(
+        legacyUrl,
+        `/api/notes/images/${encodeURIComponent(String(noteImage._id || "").trim())}`,
+      );
+    } catch {
+      // ignore missing/invalid legacy files
+    }
+  }
+
+  if (replacements.size === 0) {
+    return {
+      changed: false,
+      contentMarkdown: String(contentMarkdown || ""),
+      migratedCount: 0,
+    };
+  }
+
+  let nextMarkdown = String(contentMarkdown || "");
+  replacements.forEach((nextUrl, legacyUrl) => {
+    nextMarkdown = nextMarkdown.split(legacyUrl).join(nextUrl);
+  });
+
+  return {
+    changed: nextMarkdown !== String(contentMarkdown || ""),
+    contentMarkdown: nextMarkdown,
+    migratedCount: replacements.size,
+  };
 }
 
 function escapeRegex(value) {
@@ -211,17 +311,22 @@ export function registerNotesRoutes(app, deps) {
       }
 
       try {
-        const uploadDir = path.resolve(process.cwd(), "uploads", "notes", userId);
-        await mkdir(uploadDir, { recursive: true });
-
         const extension = resolveNoteImageExtension(file);
-        const fileName = `${Date.now()}-${crypto.randomUUID()}${extension}`;
-        const filePath = path.join(uploadDir, fileName);
-        await writeFile(filePath, file.buffer);
+        const noteId = sanitizeId(req.body?.noteId);
+        const noteImage = await NoteImage.create({
+          userId,
+          noteId: isValidNoteObjectId(noteId) ? noteId : "",
+          fileName:
+            String(file.originalname || "").trim()
+            || `图片${extension}`,
+          mimeType,
+          size: Number(file.size || file.buffer.length || 0),
+          dataBase64: file.buffer.toString("base64"),
+        });
 
         res.json({
           ok: true,
-          url: `/uploads/notes/${encodeURIComponent(userId)}/${encodeURIComponent(fileName)}`,
+          url: `/api/notes/images/${encodeURIComponent(String(noteImage._id || "").trim())}`,
           fileName: String(file.originalname || "图片").trim() || "图片",
           mimeType,
           size: Number(file.size || file.buffer.length || 0),
@@ -233,6 +338,35 @@ export function registerNotesRoutes(app, deps) {
       }
     },
   );
+
+  app.get("/api/notes/images/:imageId", async (req, res) => {
+    const imageId = sanitizeId(req.params?.imageId);
+    if (!isValidNoteObjectId(imageId)) {
+      res.status(404).end();
+      return;
+    }
+
+    try {
+      const doc = await NoteImage.findById(imageId).lean();
+      if (!doc?.dataBase64 || !doc?.mimeType) {
+        res.status(404).end();
+        return;
+      }
+
+      const buffer = Buffer.from(String(doc.dataBase64 || ""), "base64");
+      if (!buffer.length) {
+        res.status(404).end();
+        return;
+      }
+
+      res.setHeader("Content-Type", String(doc.mimeType || "application/octet-stream"));
+      res.setHeader("Content-Length", String(buffer.length));
+      res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+      res.end(buffer);
+    } catch {
+      res.status(404).end();
+    }
+  });
 
   app.get("/api/notes", requireChatAuth, async (req, res) => {
     const userId = sanitizeId(req.authUser?._id);
@@ -302,6 +436,55 @@ export function registerNotesRoutes(app, deps) {
     }
   });
 
+  app.post("/api/notes/migrate-images", requireChatAuth, async (req, res) => {
+    const userId = sanitizeId(req.authUser?._id);
+    if (!userId) {
+      res.status(400).json({ error: "无效用户身份。" });
+      return;
+    }
+
+    try {
+      const docs = await Note.find({
+        userId,
+        contentMarkdown: /\/uploads\/notes\//i,
+      })
+        .select({ _id: 1, contentMarkdown: 1 })
+        .lean();
+
+      let migratedNotes = 0;
+      let migratedImages = 0;
+
+      for (const doc of docs) {
+        const noteId = String(doc?._id || "").trim();
+        if (!noteId) continue;
+
+        const migration = await migrateLegacyNoteImageUrls({
+          userId,
+          noteId,
+          contentMarkdown: String(doc?.contentMarkdown || ""),
+        });
+        if (!migration.changed) continue;
+
+        await Note.updateOne(
+          { _id: noteId, userId },
+          { $set: { contentMarkdown: migration.contentMarkdown } },
+        );
+        migratedNotes += 1;
+        migratedImages += migration.migratedCount;
+      }
+
+      res.json({
+        ok: true,
+        migratedNotes,
+        migratedImages,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error?.message || "迁移旧图片失败，请稍后重试。",
+      });
+    }
+  });
+
   app.get("/api/notes/:id", requireChatAuth, async (req, res) => {
     const userId = sanitizeId(req.authUser?._id);
     const noteId = sanitizeId(req.params?.id);
@@ -311,11 +494,25 @@ export function registerNotesRoutes(app, deps) {
     }
 
     try {
-      const doc = await Note.findOne({ _id: noteId, userId }).lean();
+      let doc = await Note.findOne({ _id: noteId, userId }).lean();
       if (!doc) {
         res.status(404).json({ error: "笔记不存在。" });
         return;
       }
+
+      const migration = await migrateLegacyNoteImageUrls({
+        userId,
+        noteId,
+        contentMarkdown: String(doc?.contentMarkdown || ""),
+      });
+      if (migration.changed) {
+        doc = await Note.findOneAndUpdate(
+          { _id: noteId, userId },
+          { $set: { contentMarkdown: migration.contentMarkdown } },
+          { new: true },
+        ).lean();
+      }
+
       res.json({ ok: true, note: normalizeNoteDoc(doc) });
     } catch (error) {
       res.status(500).json({
@@ -370,6 +567,7 @@ export function registerNotesRoutes(app, deps) {
         res.status(404).json({ error: "笔记不存在。" });
         return;
       }
+      await NoteImage.deleteMany({ userId, noteId });
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({

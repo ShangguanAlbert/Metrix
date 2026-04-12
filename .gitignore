@@ -29,3 +29,4 @@ dist-ssr
 .venv
 .venv/
 ref/
+uploads/

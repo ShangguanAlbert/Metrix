@@ -20,6 +20,7 @@ import {
   resolveActiveAuthSlot,
   withAuthSlot,
 } from "../app/authStorage.js";
+import { buildAbsoluteAppUrl } from "../app/returnNavigation.js";
 import { SHANGGUAN_FUZE_TEACHER_SCOPE_KEY } from "../../shared/teacherScopes.js";
 import {
   deleteClassroomHomeworkFile,
@@ -280,8 +281,8 @@ function WorkshopLaunchIcon() {
     >
       <defs>
         <linearGradient id="studentWorkshopGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#3d5fba" />
-          <stop offset="100%" stopColor="#1f3572" />
+          <stop offset="0%" stopColor="#da7756" />
+          <stop offset="100%" stopColor="#c15f3c" />
         </linearGradient>
       </defs>
       <rect x="8" y="8" width="224" height="124" rx="26" fill="url(#studentWorkshopGradient)" />
@@ -483,10 +484,18 @@ export default function ModeSelectionPage() {
     [selectedCourse, sortedLessons],
   );
 
-  const workshopUrl = useMemo(
-    () => withAuthSlot("/chat?returnTo=mode-selection", activeSlot),
+  const modeSelectionReturnUrl = useMemo(
+    () => buildAbsoluteAppUrl("/mode-selection", activeSlot),
     [activeSlot],
   );
+  const workshopUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("returnTo", "mode-selection");
+    if (modeSelectionReturnUrl) {
+      params.set("returnUrl", modeSelectionReturnUrl);
+    }
+    return withAuthSlot(`/chat?${params.toString()}`, activeSlot);
+  }, [activeSlot, modeSelectionReturnUrl]);
 
   function onBackToLogin() {
     clearUserAuthSession(activeSlot);
@@ -499,11 +508,21 @@ export default function ModeSelectionPage() {
   }
 
   function onOpenImageGeneration() {
-    navigate(withAuthSlot("/image-generation?returnTo=mode-selection", activeSlot));
+    const params = new URLSearchParams();
+    params.set("returnTo", "mode-selection");
+    if (modeSelectionReturnUrl) {
+      params.set("returnUrl", modeSelectionReturnUrl);
+    }
+    navigate(withAuthSlot(`/image-generation?${params.toString()}`, activeSlot));
   }
 
   function onOpenParty() {
-    navigate(withAuthSlot("/party?returnTo=mode-selection", activeSlot));
+    const params = new URLSearchParams();
+    params.set("returnTo", "mode-selection");
+    if (modeSelectionReturnUrl) {
+      params.set("returnUrl", modeSelectionReturnUrl);
+    }
+    navigate(withAuthSlot(`/party?${params.toString()}`, activeSlot));
   }
 
   function appendHomeworkDraftFiles(lessonId, fileList) {
@@ -940,11 +959,15 @@ export default function ModeSelectionPage() {
     <div className="teacher-home-page student-home-page">
       <div className="teacher-home-shell student-home-shell">
         <aside className="teacher-home-sidebar student-home-sidebar">
-          <div className="teacher-home-profile">
-            <div className="teacher-home-avatar">{avatarText}</div>
-            <h1>学生主页</h1>
-            <p>{username}</p>
-            <dl className="teacher-home-profile-meta">
+          <div className="teacher-home-profile student-home-brand">
+            <div className="student-home-brand-row">
+              <div className="teacher-home-avatar student-home-brand-mark">{avatarText}</div>
+              <div className="student-home-brand-copy">
+                <h1>学生主页</h1>
+                <p>{username}</p>
+              </div>
+            </div>
+            <dl className="teacher-home-profile-meta student-home-brand-meta">
               <div>
                 <dt>授课教师</dt>
                 <dd>{storedUser?.teacherScopeLabel || "上官福泽"}</dd>
@@ -1007,10 +1030,20 @@ export default function ModeSelectionPage() {
               <header className="teacher-panel-head">
                 <div>
                   <h2>课堂任务</h2>
+                  <p>查看课时任务、课时备注和作业提交入口。</p>
                 </div>
               </header>
 
-              {settingsLoading ? <p className="task-status-tip">正在读取课堂任务…</p> : null}
+              {settingsLoading || homeworkLoading ? (
+                <div
+                  className="student-classroom-loading"
+                  role="status"
+                  aria-live="polite"
+                  aria-label="正在读取课堂任务"
+                >
+                  <span className="student-classroom-loading-spinner" />
+                </div>
+              ) : null}
               {settingsError ? (
                 <p className="task-status-tip error" role="alert">
                   {settingsError}
@@ -1021,7 +1054,6 @@ export default function ModeSelectionPage() {
                   {downloadError}
                 </p>
               ) : null}
-              {homeworkLoading ? <p className="task-status-tip">正在读取作业上传状态…</p> : null}
               {homeworkError ? (
                 <p className="task-status-tip error" role="alert">
                   {homeworkError}

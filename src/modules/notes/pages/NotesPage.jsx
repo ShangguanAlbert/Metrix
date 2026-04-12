@@ -9,6 +9,7 @@ import {
   exportNoteWord,
   getNote,
   listNotes,
+  migrateNoteImages,
   toggleNoteStar,
   updateNote,
 } from "../api/notesApi.js";
@@ -113,6 +114,8 @@ export default function NotesPage() {
   const draftRef = useRef(createDraftSnapshot());
   const lastSavedSnapshotRef = useRef(null);
   const savePromiseRef = useRef(null);
+  const imageMigrationTriggeredRef = useRef(false);
+  const [pageEntered, setPageEntered] = useState(false);
 
   const navigateToNotePath = useCallback(
     (noteId = "") => {
@@ -125,6 +128,16 @@ export default function NotesPage() {
   useEffect(() => {
     selectedNoteRef.current = selectedNote;
   }, [selectedNote]);
+
+  useEffect(() => {
+    let frameId = 0;
+    frameId = window.requestAnimationFrame(() => {
+      setPageEntered(true);
+    });
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+    };
+  }, []);
 
   useEffect(() => {
     activeNoteIdRef.current = activeNoteId;
@@ -271,6 +284,12 @@ export default function NotesPage() {
   useEffect(() => {
     void loadNotes();
   }, [loadNotes]);
+
+  useEffect(() => {
+    if (imageMigrationTriggeredRef.current) return;
+    imageMigrationTriggeredRef.current = true;
+    void migrateNoteImages().catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!selectedNote?.id) {
@@ -486,7 +505,7 @@ export default function NotesPage() {
   }
 
   return (
-    <div className="chat-layout notes-page">
+    <div className={`chat-layout notes-page notes-page-enter${pageEntered ? " is-page-entered" : ""}`}>
       <NotesWorkbenchSidebar
         onBackToChat={() => navigate(withAuthSlot("/c"))}
         onCreate={handleCreate}

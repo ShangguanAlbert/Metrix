@@ -86,6 +86,10 @@ import {
   withAuthSlot,
 } from "../../../app/authStorage.js";
 import {
+  readReturnUrlFromSearch,
+  redirectToReturnUrl,
+} from "../../../app/returnNavigation.js";
+import {
   createNewSessionRecord,
   createWelcomeMessage,
   hasUserTurn,
@@ -1176,6 +1180,10 @@ export default function ChatDesktopPage() {
     () => resolveTeacherHomeExportContext(location.search),
     [location.search],
   );
+  const returnUrl = useMemo(
+    () => readReturnUrlFromSearch(location.search),
+    [location.search],
+  );
   const buildChatSessionHref = useCallback(
     (sessionId = "", search = location.search) => {
       const safeSessionId = sanitizeSmartContextSessionId(sessionId);
@@ -1260,6 +1268,9 @@ export default function ChatDesktopPage() {
   const [dismissedDocumentPreviewKey, setDismissedDocumentPreviewKey] =
     useState("");
   const [documentPreviewClosing, setDocumentPreviewClosing] = useState(false);
+  const [autoHideSessionDocumentPreview, setAutoHideSessionDocumentPreview] =
+    useState(true);
+  const [pageEntered, setPageEntered] = useState(false);
 
   const messageListRef = useRef(null);
   const chatInputWrapRef = useRef(null);
@@ -1296,6 +1307,16 @@ export default function ChatDesktopPage() {
   const pendingRouteSessionIdRef = useRef("");
   const pendingNavigationSessionIdRef = useRef("");
   const lastReportedRoutePathRef = useRef("");
+
+  useEffect(() => {
+    let frameId = 0;
+    frameId = window.requestAnimationFrame(() => {
+      setPageEntered(true);
+    });
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1381,9 +1402,15 @@ export default function ChatDesktopPage() {
       null,
     [activeDocumentKey, documentLibrary],
   );
+  const shouldAutoHideSessionPreview = Boolean(
+    autoHideSessionDocumentPreview &&
+      !activeDocumentKey &&
+      activeDocumentPreview?.source === "session",
+  );
   const isDocumentPreviewVisible = Boolean(
     activeDocumentPreview &&
-      activeDocumentPreview.key !== dismissedDocumentPreviewKey,
+      activeDocumentPreview.key !== dismissedDocumentPreviewKey &&
+      !shouldAutoHideSessionPreview,
   );
   const hasHiddenDocumentPreview = Boolean(
     activeDocumentPreview && !isDocumentPreviewVisible,
@@ -2224,6 +2251,9 @@ export default function ChatDesktopPage() {
     ) {
       params.set("exportDate", teacherHomeExportContext.exportDate);
     }
+    if (nextReturnTarget === "teacher-home" && returnUrl) {
+      params.set("returnUrl", returnUrl);
+    }
     navigate(withAuthSlot(`/image-generation?${params.toString()}`), {
       state: {
         returnContext: context,
@@ -2259,6 +2289,9 @@ export default function ChatDesktopPage() {
       teacherHomeExportContext.exportDate
     ) {
       params.set("exportDate", teacherHomeExportContext.exportDate);
+    }
+    if (nextReturnTarget === "teacher-home" && returnUrl) {
+      params.set("returnUrl", returnUrl);
     }
     navigate(withAuthSlot(`/party?${params.toString()}`));
   }
@@ -4069,10 +4102,16 @@ export default function ChatDesktopPage() {
   function onLogout() {
     if (!confirmStreamingExit("logout")) return;
     if (returnTarget === "mode-selection") {
+      if (redirectToReturnUrl(returnUrl, { replace: true })) {
+        return;
+      }
       navigate(withAuthSlot("/mode-selection"), { replace: true });
       return;
     }
     if (returnTarget === "teacher-home") {
+      if (redirectToReturnUrl(returnUrl, { replace: true })) {
+        return;
+      }
       const params = new URLSearchParams();
       if (teacherHomePanelParam) {
         params.set("teacherPanel", teacherHomePanelParam);
@@ -4726,6 +4765,7 @@ export default function ChatDesktopPage() {
     setActiveDocumentKey("");
     setDismissedDocumentPreviewKey("");
     setDocumentPreviewClosing(false);
+    setAutoHideSessionDocumentPreview(true);
   }, [activeId]);
 
   useEffect(() => {
@@ -4748,7 +4788,9 @@ export default function ChatDesktopPage() {
     ) {
       return;
     }
-    setActiveDocumentKey(documentLibrary[0]?.key || "");
+    if (activeDocumentKey) {
+      setActiveDocumentKey("");
+    }
   }, [activeDocumentKey, documentLibrary]);
 
   useEffect(() => {
@@ -4770,6 +4812,7 @@ export default function ChatDesktopPage() {
         documentPreviewCloseTimerRef.current = null;
       }
       setDocumentPreviewClosing(false);
+      setAutoHideSessionDocumentPreview(false);
       setActiveDocumentKey(nextEntries[nextEntries.length - 1].key);
       setDismissedDocumentPreviewKey("");
     }
@@ -4783,6 +4826,7 @@ export default function ChatDesktopPage() {
       documentPreviewCloseTimerRef.current = null;
     }
     setDocumentPreviewClosing(false);
+    setAutoHideSessionDocumentPreview(false);
     setActiveDocumentKey(nextKey);
     setDismissedDocumentPreviewKey("");
   }, []);
@@ -4796,6 +4840,7 @@ export default function ChatDesktopPage() {
       documentPreviewCloseTimerRef.current = null;
     }
     setDocumentPreviewClosing(false);
+    setAutoHideSessionDocumentPreview(false);
     setSelectedContextDocumentKeys((prev) =>
       prev.includes(nextKey)
         ? prev.filter((key) => key !== nextKey)
@@ -4825,11 +4870,15 @@ export default function ChatDesktopPage() {
       documentPreviewCloseTimerRef.current = null;
     }
     setDocumentPreviewClosing(false);
+    setAutoHideSessionDocumentPreview(false);
+    if (!activeDocumentKey && activeDocumentPreview?.key) {
+      setActiveDocumentKey(activeDocumentPreview.key);
+    }
     setDismissedDocumentPreviewKey("");
-  }, []);
+  }, [activeDocumentKey, activeDocumentPreview]);
 
   return (
-    <div className={`chat-layout${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
+    <div className={`chat-layout chat-page-enter${pageEntered ? " is-page-entered" : ""}${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
       <Sidebar
         sessions={sessions}
         groups={groups}
