@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test:unit": "node --test tests/**/*.test.js",
     "server": "node server/index.js",
     "dev:web": "vite",
     "backfill:image-thumbnails": "node scripts/backfill-generated-image-thumbnails.mjs",

@@ -12,7 +12,7 @@
   height: 100dvh;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 10px;
+  padding: 12px;
 }
 
 .image-mobile-shell .image-workspace {
@@ -32,6 +32,7 @@
   padding: 10px;
   border-right: 0;
   border-bottom: 1px solid var(--line-soft);
+  background: transparent;
 }
 
 .image-mobile-shell .image-ideogram-sidebar-top {
@@ -73,13 +74,23 @@
   padding: 9px;
 }
 
+.image-mobile-shell .image-ideogram-hero {
+  padding: 4px 0 0;
+}
+
+.image-mobile-shell .image-ideogram-hero-copy {
+  width: 100%;
+  padding: 0 4px;
+}
+
 .image-mobile-shell .image-ideogram-hero h2 {
-  font-size: 24px;
+  font-size: 32px;
 }
 
 .image-mobile-shell .image-floating-composer {
-  border-radius: 22px;
-  padding: 12px;
+  width: 100%;
+  border-radius: 24px;
+  padding: 14px;
 }
 
 .image-mobile-shell .image-floating-input {
@@ -105,6 +116,7 @@
 .image-mobile-shell .image-custom-select,
 .image-mobile-shell .image-more-settings {
   width: calc(50% - 3px);
+  max-width: none;
 }
 
 .image-mobile-shell .image-reference-menu {
@@ -144,7 +156,7 @@
 }
 
 .image-mobile-shell .image-library-title {
-  font-size: 18px;
+  font-size: 28px;
 }
 
 .image-mobile-shell .image-gallery-grid {

@@ -95,7 +95,7 @@ import {
   setUserToken,
   withAuthSlot,
 } from "../app/authStorage.js";
-import { buildAbsoluteAppUrl } from "../app/returnNavigation.js";
+import { appendReturnUrlParam, buildAbsoluteAppUrl } from "../app/returnNavigation.js";
 import "../styles/teacher-home.css";
 
 const TARGET_CLASS_NAMES = Object.freeze(["教技231", "810班", "811班"]);
@@ -2191,7 +2191,7 @@ export default function TeacherHomePage() {
         : "/admin/settings";
       const returnUrl = buildAbsoluteAppUrl(returnPath, activeSlot);
       if (returnUrl) {
-        nextParams.set("returnUrl", returnUrl);
+        appendReturnUrlParam(nextParams, returnUrl);
       }
       navigate(
         withAuthSlot(

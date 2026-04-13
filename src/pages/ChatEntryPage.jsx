@@ -1,34 +1,29 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { clearUserAuthSession, withAuthSlot } from "../app/authStorage.js";
-import { fetchChatBootstrap } from "./chat/stateApi.js";
+import { compactReturnUrlSearch } from "../app/returnNavigation.js";
+import { sanitizeChatSessionId } from "../../shared/contracts/chat.js";
+import { fetchChatBootstrap } from "../features/chat/api/chatApi.js";
+import { resolveBootstrapTargetSessionId } from "../features/chat/services/ChatConversationService.js";
 import {
   loadImageReturnContext,
   normalizeImageReturnContext,
 } from "./image/returnContext.js";
 
-function sanitizeChatRouteSessionId(value) {
-  const text = String(value || "")
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/[.$]/g, "");
-  if (!text) return "";
-  return text.slice(0, 80);
-}
-
 function buildCanonicalChatHref(sessionId = "", search = "") {
-  const safeSessionId = sanitizeChatRouteSessionId(sessionId);
+  const safeSessionId = sanitizeChatSessionId(sessionId);
   const basePath = safeSessionId
     ? `/c/${encodeURIComponent(safeSessionId)}`
     : "/c";
-  return withAuthSlot(`${basePath}${String(search || "")}`);
+  const compactSearch = compactReturnUrlSearch(search);
+  return withAuthSlot(`${basePath}${compactSearch}`);
 }
 
 export default function ChatEntryPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const params = useParams();
-  const legacySessionId = sanitizeChatRouteSessionId(params.sessionId);
+  const legacySessionId = sanitizeChatSessionId(params.sessionId);
   const [entryError, setEntryError] = useState("");
 
   useEffect(() => {
@@ -50,24 +45,14 @@ export default function ChatEntryPage() {
             )
           : null;
 
-        const restoreSessionId = sanitizeChatRouteSessionId(
+        const restoreSessionId = sanitizeChatSessionId(
           restoreContext?.sessionId,
         );
-        const targetSessionId =
-          (restoreSessionId &&
-            sessions.some(
-              (session) =>
-                sanitizeChatRouteSessionId(session?.id) === restoreSessionId,
-            ) &&
-            restoreSessionId) ||
-          (sessions.find(
-            (session) =>
-              sanitizeChatRouteSessionId(session?.id) ===
-              sanitizeChatRouteSessionId(state.activeId),
-          )?.id
-            ? sanitizeChatRouteSessionId(state.activeId)
-            : "") ||
-          sanitizeChatRouteSessionId(sessions[0]?.id);
+        const targetSessionId = resolveBootstrapTargetSessionId({
+          sessions,
+          activeId: state.activeId,
+          restoreSessionId,
+        });
 
         navigate(buildCanonicalChatHref(targetSessionId, location.search), {
           replace: true,

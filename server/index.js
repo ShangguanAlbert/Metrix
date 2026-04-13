@@ -7,9 +7,12 @@ import process from "node:process";
 import { createAppContext } from "./app/createAppContext.js";
 import { createStartupTasks } from "./app/startup-tasks.js";
 import { resolveConfiguredBasePath, stripBasePath } from "./config/base-path.js";
+import { createChatDeps } from "./modules/chat/createChatDeps.js";
+import { registerChatRoutes } from "./modules/chat/routes.js";
+import { createImageDeps } from "./modules/images/createImageDeps.js";
+import { registerImageRoutes } from "./modules/images/routes.js";
 import { registerAuthUserClassroomRoutes } from "./routes/auth-user-classroom.js";
 import { registerAdminRoutes } from "./routes/admin.js";
-import { registerChatAndImageRoutes } from "./routes/chat-and-images.js";
 import { registerGroupChatRoutes } from "./routes/group-chat.js";
 import { registerNotesRoutes } from "./routes/notes.js";
 import { createGroupChatRealtimeHub } from "./runtime/group-chat-realtime-hub.js";
@@ -33,7 +36,8 @@ if (APP_BASE_PATH !== "/") {
 
 registerAuthUserClassroomRoutes(app, deps);
 registerAdminRoutes(app, deps);
-registerChatAndImageRoutes(app, deps);
+registerChatRoutes(app, createChatDeps(deps));
+registerImageRoutes(app, createImageDeps(deps));
 registerNotesRoutes(app, deps);
 registerGroupChatRoutes(app, deps);
 

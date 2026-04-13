@@ -29,10 +29,7 @@ import {
 } from "../constants.js";
 import {
   DEFAULT_AGENT_RUNTIME_CONFIG,
-  PACKYCODE_DEFAULT_MODEL,
-  PACKYCODE_PROVIDER,
   createDefaultAgentRuntimeConfigMap,
-  resolveProviderDefaultModel,
   sanitizeRuntimeConfigMap,
 } from "../agentRuntimeConfig.js";
 import {
@@ -42,8 +39,6 @@ import {
   normalizeReasoningEffort,
   normalizeTemperature,
   normalizeTopP,
-  readErrorMessage,
-  readSseStream,
 } from "../chatHelpers.js";
 import {
   buildExportMeta,
@@ -57,43 +52,37 @@ import {
   validateUserInfo,
 } from "../userInfo.js";
 import {
-  clearManyStreamDrafts,
-  clearStreamDraft,
-  getStreamDraft,
-  primeAllStreamDrafts,
-  replaceAllStreamDrafts,
-  startStreamDraft,
-  updateStreamDraft,
-} from "../streamDraftStore.js";
-import {
   clearChatSmartContext,
   downloadChatAttachment,
   fetchChatBootstrap,
-  getAuthTokenHeader,
-  prepareChatAttachments,
-  stageChatPreviewAttachments,
   reportChatClientDebug,
   saveChatSessionMessages,
   saveChatState,
   saveChatStateMeta,
   saveUserProfile,
-  suggestChatSessionTitle,
-  uploadVolcengineChatFiles,
-} from "../stateApi.js";
+} from "../../../features/chat/api/chatApi.js";
+import { ChatApiService } from "../../../features/chat/services/ChatApiService.js";
+import {
+  isUntitledSessionTitle,
+  mergeAttachmentsWithUploadedLinks,
+} from "../../../features/chat/services/ChatConversationService.js";
+import { chatDataService } from "../../../features/chat/services/ChatDataService.js";
+import {
+  buildHistoryForApi,
+  prepareComposerFiles,
+  suggestSessionTitleForExchange,
+} from "../../../features/chat/services/ChatSessionService.js";
 import { captureNoteFromChat } from "../../../modules/notes/api/notesApi.js";
 import {
   clearUserAuthSession,
   withAuthSlot,
 } from "../../../app/authStorage.js";
 import {
+  appendReturnUrlParam,
+  compactReturnUrlSearch,
   readReturnUrlFromSearch,
   redirectToReturnUrl,
 } from "../../../app/returnNavigation.js";
-import {
-  createNewSessionRecord,
-  createWelcomeMessage,
-  hasUserTurn,
-} from "../sessionFactory.js";
 import {
   loadImageReturnContext,
   normalizeImageReturnContext,
@@ -107,9 +96,8 @@ const DEFAULT_SESSIONS = [
   { id: "s1", title: "新对话 1", groupId: null, pinned: false },
 ];
 const DEFAULT_SESSION_MESSAGES = {
-  s1: [createWelcomeMessage()],
+  s1: [chatDataService.createWelcomeMessage()],
 };
-const CONTEXT_USER_ROUNDS = 10;
 const VIDEO_EXTENSIONS = new Set(["mp4", "avi", "mov"]);
 const WORD_PREVIEW_EXTENSIONS = new Set(["doc", "docx"]);
 const HTML_PREVIEW_EXTENSIONS = new Set(["html", "htm"]);
@@ -459,72 +447,12 @@ async function buildImageThumbnailDataUrl(file) {
   }
 }
 
-function isUntitledSessionTitle(value) {
-  return /^新对话(?:\s*\d+)?$/.test(String(value || "").trim());
-}
-
-function stripMarkdownForSessionTitle(value) {
-  return String(value || "")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
-    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-    .replace(/^>\s*/gm, "")
-    .replace(/[#*_~>-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function clipSessionTitleText(value, maxLength = 22) {
   const text = String(value || "").trim();
   if (!text) return "";
   return text.length > maxLength
     ? `${text.slice(0, maxLength).trim()}...`
     : text;
-}
-
-function buildSessionRenameQuestion(message) {
-  const text = clipSessionTitleText(
-    stripMarkdownForSessionTitle(message?.content || ""),
-    120,
-  );
-  const attachments = Array.isArray(message?.attachments)
-    ? message.attachments
-    : [];
-  const attachmentNames = attachments
-    .map((item) => String(item?.name || "").trim())
-    .filter(Boolean)
-    .slice(0, 3);
-  const attachmentText =
-    attachmentNames.length > 0 ? `附件：${attachmentNames.join("、")}` : "";
-  return [text, attachmentText].filter(Boolean).join("\n");
-}
-
-function buildSessionRenameAnswer(message) {
-  return clipSessionTitleText(
-    stripMarkdownForSessionTitle(message?.content || ""),
-    240,
-  );
-}
-
-function fallbackSessionTitleFromQuestion(question) {
-  const normalized = clipSessionTitleText(
-    stripMarkdownForSessionTitle(question)
-      .replace(/^附件：/u, "")
-      .trim(),
-    18,
-  );
-  return normalized || "新对话";
-}
-
-function normalizeSuggestedSessionTitle(value, fallback = "新对话") {
-  const text = clipSessionTitleText(
-    stripMarkdownForSessionTitle(value)
-      .replace(/^[”"“'‘’【[]+|[”"“'‘’】\]]+$/g, "")
-      .trim(),
-    22,
-  );
-  return text || fallback;
 }
 
 function sanitizeProvider(value, fallback = "openrouter") {
@@ -681,29 +609,6 @@ function resolveRuntimeConfigForAgent(agentId, runtimeConfigs) {
   };
 }
 
-function resolveRuntimeModelForProvider(
-  agentId,
-  runtimeConfig,
-  providerDefaults,
-) {
-  const provider = resolveAgentProvider(agentId, runtimeConfig, providerDefaults);
-  const explicitModel = String(runtimeConfig?.model || "").trim();
-  if (explicitModel) return explicitModel;
-  return resolveProviderDefaultModel(provider, agentId);
-}
-
-function isPackyTokenBudgetRuntime(agentId, runtimeConfig, providerDefaults) {
-  const provider = resolveAgentProvider(agentId, runtimeConfig, providerDefaults);
-  if (provider !== PACKYCODE_PROVIDER) return false;
-  const model = String(
-    resolveRuntimeModelForProvider(agentId, runtimeConfig, providerDefaults) ||
-      "",
-  )
-    .trim()
-    .toLowerCase();
-  return !model || model === PACKYCODE_DEFAULT_MODEL;
-}
-
 function normalizeUsageValue(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
@@ -750,127 +655,6 @@ function sanitizeContextSummaryMessage(raw) {
     internalType: "context_summary",
     summaryUpToMessageId: String(raw.summaryUpToMessageId || "").trim(),
     compressionMeta: sanitizeContextCompressionMeta(raw.compressionMeta),
-  };
-}
-
-function findLatestPackyContextSummaryMessage(list) {
-  const safeList = Array.isArray(list) ? list : [];
-  for (let index = safeList.length - 1; index >= 0; index -= 1) {
-    const message = safeList[index];
-    if (
-      message?.hidden &&
-      message?.role === "system" &&
-      String(message?.internalType || "").trim().toLowerCase() ===
-        "context_summary" &&
-      String(message?.content || "").trim()
-    ) {
-      return message;
-    }
-  }
-  return null;
-}
-
-function buildApiSourceMessages(list, { usePackyContextSummary = false } = {}) {
-  const safeList = Array.isArray(list) ? list.filter(Boolean) : [];
-  if (!usePackyContextSummary) {
-    return safeList.filter((message) => !message?.hidden);
-  }
-
-  const summaryMessage = findLatestPackyContextSummaryMessage(safeList);
-  if (!summaryMessage) {
-    return safeList.filter((message) => !message?.hidden);
-  }
-
-  const cutoffId = String(summaryMessage.summaryUpToMessageId || "").trim();
-  let skipping = !!cutoffId;
-  let foundCutoff = !cutoffId;
-  const next = [summaryMessage];
-
-  safeList.forEach((message) => {
-    if (message?.id === summaryMessage.id) return;
-    if (message?.hidden) return;
-    if (!skipping) {
-      next.push(message);
-      return;
-    }
-    if (String(message?.id || "").trim() === cutoffId) {
-      foundCutoff = true;
-      skipping = false;
-    }
-  });
-
-  if (foundCutoff) return next;
-  return [summaryMessage, ...safeList.filter((message) => !message?.hidden)];
-}
-
-function sanitizeUploadedAttachmentLinks(raw) {
-  const source = Array.isArray(raw) ? raw : [];
-  return source
-    .map((item) => ({
-      name: String(item?.fileName || item?.name || "")
-        .trim()
-        .slice(0, 240),
-      type: String(item?.mimeType || item?.type || "")
-        .trim()
-        .toLowerCase(),
-      size: Number(item?.size || 0),
-      url: String(item?.url || "").trim(),
-      ossKey: String(item?.ossKey || "").trim(),
-    }))
-    .filter((item) => !!item.url);
-}
-
-function mergeAttachmentsWithUploadedLinks(attachments, rawLinks) {
-  const list = Array.isArray(attachments) ? attachments : [];
-  const links = sanitizeUploadedAttachmentLinks(rawLinks);
-  if (list.length === 0 || links.length === 0) return list;
-
-  const nextLinks = [...links];
-  return list.map((attachment) => {
-    const existingUrl = String(attachment?.url || attachment?.fileUrl || "").trim();
-    const existingOssKey = String(attachment?.ossKey || "").trim();
-    if (existingUrl || existingOssKey) {
-      return attachment;
-    }
-    const normalizedName = String(attachment?.name || "").trim();
-    const normalizedType = String(attachment?.type || "")
-      .trim()
-      .toLowerCase();
-    const normalizedSize = Number(attachment?.size || 0);
-    const exactIndex = nextLinks.findIndex((item) => {
-      const sameName =
-        item.name && normalizedName && item.name === normalizedName;
-      const sameType =
-        item.type && normalizedType && item.type === normalizedType;
-      const sameSize =
-        item.size > 0 && normalizedSize > 0 && item.size === normalizedSize;
-      return sameName || (sameType && sameSize);
-    });
-    const fallbackIndex = exactIndex >= 0 ? exactIndex : 0;
-    const matched = nextLinks[fallbackIndex] || null;
-    if (!matched) return attachment;
-    nextLinks.splice(fallbackIndex, 1);
-    return {
-      ...attachment,
-      url: matched.url,
-      ossKey: matched.ossKey || attachment?.ossKey || "",
-    };
-  });
-}
-
-function buildStagedPreviewItem(file, ref = {}) {
-  return {
-    kind: "staged_ref",
-    file,
-    name: String(file?.name || ref?.fileName || ""),
-    size: Number(ref?.size || file?.size || 0),
-    type: String(ref?.mimeType || file?.type || ""),
-    mimeType: String(ref?.mimeType || file?.type || ""),
-    url: String(ref?.url || "").trim(),
-    ossKey: String(ref?.ossKey || "").trim(),
-    stagedToken: String(ref?.token || "").trim(),
-    thumbnailUrl: "",
-    previewStage: "ready",
   };
 }
 
@@ -1165,7 +949,7 @@ export default function ChatDesktopPage() {
   const initialViewStateRef = useRef(null);
   if (initialViewStateRef.current === null) {
     initialViewStateRef.current = createDefaultChatViewState();
-    primeAllStreamDrafts({});
+    chatDataService.primeDrafts({});
   }
   const initialViewState = initialViewStateRef.current;
   const returnTarget = useMemo(
@@ -1190,7 +974,8 @@ export default function ChatDesktopPage() {
       const basePath = safeSessionId
         ? `/c/${encodeURIComponent(safeSessionId)}`
         : "/c";
-      return withAuthSlot(`${basePath}${String(search || "")}`);
+      const compactSearch = compactReturnUrlSearch(search);
+      return withAuthSlot(`${basePath}${compactSearch}`);
     },
     [location.search],
   );
@@ -1307,6 +1092,8 @@ export default function ChatDesktopPage() {
   const pendingRouteSessionIdRef = useRef("");
   const pendingNavigationSessionIdRef = useRef("");
   const lastReportedRoutePathRef = useRef("");
+  const buildFreshAutoSessionBundleRef = useRef(null);
+  const persistSessionStateImmediatelyRef = useRef(null);
 
   useEffect(() => {
     let frameId = 0;
@@ -1331,45 +1118,6 @@ export default function ChatDesktopPage() {
       return;
     }
   }, [sidebarCollapsed]);
-
-  function buildFreshAutoSessionBundle({
-    agentBySession: sourceAgentBySession,
-    smartContextEnabledBySessionAgent: sourceSmartContextMap,
-    preferredAgentId = "",
-  } = {}) {
-    const sessionRecord = createNewSessionRecord();
-    const nextAgentId =
-      teacherLockedAgentId ||
-      sanitizeSmartContextAgentId(preferredAgentId) ||
-      sanitizeSmartContextAgentId(agent) ||
-      "A";
-    const nextAgentBySession = patchAgentBySession(
-      sourceAgentBySession,
-      sessionRecord.session.id,
-      nextAgentId,
-    );
-    let nextSmartContextEnabledBySessionAgent = sanitizeSmartContextEnabledMap(
-      sourceSmartContextMap,
-    );
-    if (teacherScopedAgentLocked) {
-      nextSmartContextEnabledBySessionAgent = patchSmartContextEnabledBySessionAgent(
-        nextSmartContextEnabledBySessionAgent,
-        sessionRecord.session.id,
-        nextAgentId,
-        true,
-      );
-    }
-    return {
-      sessionRecord,
-      sessions: [sessionRecord.session],
-      sessionMessages: {
-        [sessionRecord.session.id]: sessionRecord.messages,
-      },
-      activeId: sessionRecord.session.id,
-      agentBySession: nextAgentBySession,
-      smartContextEnabledBySessionAgent: nextSmartContextEnabledBySessionAgent,
-    };
-  }
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeId) || null,
@@ -1451,7 +1199,7 @@ export default function ChatDesktopPage() {
     [messages],
   );
   const hasStartedConversation = useMemo(
-    () => hasUserTurn(messages),
+    () => chatDataService.hasUserTurn(messages),
     [messages],
   );
   const displayedMessages = useMemo(
@@ -1504,6 +1252,47 @@ export default function ChatDesktopPage() {
     : smartContextSupported
       ? "开启后将锁定当前智能体进行对话，不得切换智能体"
       : "仅火山引擎智能体支持智能上下文管理，当前智能体已默认关闭";
+  const buildFreshAutoSessionBundle = useCallback(({
+    agentBySession: sourceAgentBySession,
+    smartContextEnabledBySessionAgent: sourceSmartContextMap,
+    preferredAgentId = "",
+  } = {}) => {
+    const sessionRecord = chatDataService.createSessionRecord();
+    const nextAgentId =
+      teacherLockedAgentId ||
+      sanitizeSmartContextAgentId(preferredAgentId) ||
+      sanitizeSmartContextAgentId(agent) ||
+      "A";
+    const nextAgentBySession = patchAgentBySession(
+      sourceAgentBySession,
+      sessionRecord.session.id,
+      nextAgentId,
+    );
+    let nextSmartContextEnabledBySessionAgent = sanitizeSmartContextEnabledMap(
+      sourceSmartContextMap,
+    );
+    if (teacherScopedAgentLocked) {
+      nextSmartContextEnabledBySessionAgent = patchSmartContextEnabledBySessionAgent(
+        nextSmartContextEnabledBySessionAgent,
+        sessionRecord.session.id,
+        nextAgentId,
+        true,
+      );
+    }
+    return {
+      sessionRecord,
+      sessions: [sessionRecord.session],
+      sessionMessages: {
+        [sessionRecord.session.id]: sessionRecord.messages,
+      },
+      activeId: sessionRecord.session.id,
+      agentBySession: nextAgentBySession,
+      smartContextEnabledBySessionAgent: nextSmartContextEnabledBySessionAgent,
+    };
+  }, [agent, teacherLockedAgentId, teacherScopedAgentLocked]);
+  useLayoutEffect(() => {
+    buildFreshAutoSessionBundleRef.current = buildFreshAutoSessionBundle;
+  }, [buildFreshAutoSessionBundle]);
   const agentSwitchLocked =
     teacherScopedAgentLocked || effectiveSmartContextEnabled;
   const agentSelectDisabledTitle = teacherScopedAgentLocked
@@ -1787,7 +1576,7 @@ export default function ChatDesktopPage() {
       return;
     }
 
-    updateStreamDraft(sessionId, (draft) => {
+    chatDataService.updateDraft(sessionId, (draft) => {
       if (!draft || draft.id !== assistantId) return draft;
       return {
         ...draft,
@@ -1811,7 +1600,7 @@ export default function ChatDesktopPage() {
       return;
     }
 
-    updateStreamDraft(sessionId, (draft) => {
+    chatDataService.updateDraft(sessionId, (draft) => {
       if (!draft || draft.id !== assistantId) return draft;
       return {
         ...draft,
@@ -1969,23 +1758,16 @@ export default function ChatDesktopPage() {
       sessionsRef.current.find((item) => item?.id === sid) || null;
     if (!isUntitledSessionTitle(currentSession?.title)) return;
 
-    const question = buildSessionRenameQuestion(userMessage);
-    const answer = buildSessionRenameAnswer(assistantMessage);
-    if (!question || !answer) return;
-
     autoSessionTitleRequestRef.current.add(sid);
     let nextTitle = "";
     try {
-      const result = await suggestChatSessionTitle({
-        question,
-        answer,
+      nextTitle = await suggestSessionTitleForExchange({
+        userMessage,
+        assistantMessage,
+        suggestTitle: ChatApiService.suggestChatSessionTitle,
       });
-      nextTitle = normalizeSuggestedSessionTitle(
-        result?.title,
-        fallbackSessionTitleFromQuestion(question),
-      );
     } catch {
-      nextTitle = fallbackSessionTitleFromQuestion(question);
+      nextTitle = "";
     } finally {
       autoSessionTitleRequestRef.current.delete(sid);
     }
@@ -2045,14 +1827,14 @@ export default function ChatDesktopPage() {
     setPendingExportKind("");
   }
 
-  async function persistSessionStateImmediately({
+  const persistSessionStateImmediately = useCallback(async ({
     nextGroups,
     nextSessions,
     nextSessionMessages,
     nextActiveId,
     nextAgentBySession,
     nextSmartContextEnabledBySessionAgent,
-  }) {
+  }) => {
     const safeGroups = Array.isArray(nextGroups)
       ? nextGroups
       : Array.isArray(groupsRef.current)
@@ -2131,11 +1913,21 @@ export default function ChatDesktopPage() {
     } finally {
       setSessionMutationPending(false);
     }
-  }
+  }, [
+    agent,
+    agentProviderDefaults,
+    agentRuntimeConfigs,
+    lastAppliedReasoning,
+    teacherLockedAgentId,
+    teacherScopedAgentLocked,
+  ]);
+  useLayoutEffect(() => {
+    persistSessionStateImmediatelyRef.current = persistSessionStateImmediately;
+  }, [persistSessionStateImmediately]);
 
   async function onNewChat() {
     if (sessionActionsLocked) return;
-    const next = createNewSessionRecord();
+    const next = chatDataService.createSessionRecord();
     const currentSessions = Array.isArray(sessionsRef.current)
       ? sessionsRef.current
       : [];
@@ -2252,7 +2044,7 @@ export default function ChatDesktopPage() {
       params.set("exportDate", teacherHomeExportContext.exportDate);
     }
     if (nextReturnTarget === "teacher-home" && returnUrl) {
-      params.set("returnUrl", returnUrl);
+      appendReturnUrlParam(params, returnUrl);
     }
     navigate(withAuthSlot(`/image-generation?${params.toString()}`), {
       state: {
@@ -2291,7 +2083,7 @@ export default function ChatDesktopPage() {
       params.set("exportDate", teacherHomeExportContext.exportDate);
     }
     if (nextReturnTarget === "teacher-home" && returnUrl) {
-      params.set("returnUrl", returnUrl);
+      appendReturnUrlParam(params, returnUrl);
     }
     navigate(withAuthSlot(`/party?${params.toString()}`));
   }
@@ -2472,7 +2264,7 @@ export default function ChatDesktopPage() {
       delete next[sessionId];
       return next;
     });
-    clearStreamDraft(sessionId);
+    chatDataService.clearDraft(sessionId);
     clearSessionMessageQueue(sessionId);
 
     if (sessionId === activeId) {
@@ -2598,7 +2390,7 @@ export default function ChatDesktopPage() {
       });
       return changed ? next : prev;
     });
-    clearManyStreamDrafts(sessionIds);
+    chatDataService.clearDrafts(sessionIds);
     sessionIds.forEach((id) => clearSessionMessageQueue(id));
   }
 
@@ -2866,7 +2658,7 @@ export default function ChatDesktopPage() {
         }),
       );
     } else {
-      updateStreamDraft(target.sessionId, (draft) => {
+      chatDataService.updateDraft(target.sessionId, (draft) => {
         if (!draft || draft.id !== target.assistantId) return draft;
         return {
           ...draft,
@@ -2888,340 +2680,25 @@ export default function ChatDesktopPage() {
     }, 33);
   }
 
-  function pickRecentRounds(list, maxRounds = CONTEXT_USER_ROUNDS) {
-    if (!Array.isArray(list) || list.length === 0) return [];
-    if (maxRounds <= 0) return [];
-
-    let seenUser = 0;
-    let startIdx = 0;
-    for (let i = list.length - 1; i >= 0; i -= 1) {
-      if (list[i]?.role === "user") {
-        seenUser += 1;
-        if (seenUser > maxRounds) {
-          startIdx = i + 1;
-          break;
-        }
-      }
-    }
-    return list.slice(startIdx);
-  }
-
-  function toApiMessages(
-    list,
-    { useVolcengineResponsesFileRefs = false, usePackyContextSummary = false } = {},
-  ) {
-    return buildApiSourceMessages(list, { usePackyContextSummary })
-      .map((m) => {
-        const content = buildApiMessageContentFromMessage(
-          m,
-          useVolcengineResponsesFileRefs,
-        );
-        const nextMessage = {
-          id: String(m?.id || ""),
-          role: m.role,
-          content,
-        };
-        if (m?.hidden) {
-          nextMessage.hidden = true;
-        }
-        if (m?.internalType) {
-          nextMessage.internalType = String(m.internalType);
-        }
-        if (m?.summaryUpToMessageId) {
-          nextMessage.summaryUpToMessageId = String(m.summaryUpToMessageId);
-        }
-        if (m?.compressionMeta && typeof m.compressionMeta === "object") {
-          nextMessage.compressionMeta = { ...m.compressionMeta };
-        }
-        return nextMessage;
-      })
-      .filter((m) => {
-        if (m.role === "user") return true;
-        if (typeof m.content === "string") return m.content.trim().length > 0;
-        return Array.isArray(m.content) && m.content.length > 0;
-      });
-  }
-
-  function buildApiMessageContentFromMessage(
-    message,
-    useVolcengineResponsesFileRefs,
-  ) {
-    const text = String(message?.content || "");
-    if (!useVolcengineResponsesFileRefs || message?.role !== "user") {
-      return text;
-    }
-
-    const refs = Array.isArray(message?.attachments)
-      ? message.attachments
-          .map((attachment) => {
-            const fileId = String(attachment?.fileId || "").trim();
-            const inputType = String(attachment?.inputType || "")
-              .trim()
-              .toLowerCase();
-            if (!fileId) return null;
-            if (
-              inputType !== "input_file" &&
-              inputType !== "input_image" &&
-              inputType !== "input_video"
-            ) {
-              return null;
-            }
-            return { type: inputType, file_id: fileId };
-          })
-          .filter(Boolean)
-      : [];
-    if (refs.length === 0) return text;
-
-    const parts = [];
-    if (text.trim()) {
-      parts.push({ type: "text", text });
-    }
-    parts.push(...refs);
-    return parts;
-  }
-
-  function shouldUseVolcengineFilesApi(runtimeConfig) {
-    const provider = resolveAgentProvider(
-      agent,
-      runtimeConfig,
-      agentProviderDefaults,
-    );
-    const protocol = String(runtimeConfig?.protocol || "")
-      .trim()
-      .toLowerCase();
-    return provider === "volcengine" && protocol === "responses";
-  }
-
-  function classifyVolcengineFilesApiType(file) {
-    const mime = String(file?.type || "")
-      .trim()
-      .toLowerCase();
-    const name = String(file?.name || "")
-      .trim()
-      .toLowerCase();
-    const ext = name.includes(".") ? name.split(".").pop() : "";
-
-    if (mime.includes("pdf") || ext === "pdf") return "input_file";
-    if (mime.startsWith("image/")) return "input_image";
-    if (mime.startsWith("video/") || VIDEO_EXTENSIONS.has(ext))
-      return "input_video";
-    return "";
-  }
-
-  function isPdfUploadFile(file) {
-    const mime = String(file?.type || "")
-      .trim()
-      .toLowerCase();
-    const name = String(file?.name || "")
-      .trim()
-      .toLowerCase();
-    const ext = name.includes(".") ? name.split(".").pop() : "";
-    return mime.includes("pdf") || ext === "pdf";
-  }
-
-  function isPreviewableUploadFile(file) {
-    return !!classifyUploadPreviewKind(file);
-  }
-
-  async function buildPreviewAwareLocalItems(indexedItems) {
-    const safeIndexedItems = Array.isArray(indexedItems)
-      ? indexedItems.filter(Boolean)
-      : [];
-    const previewableCandidates = safeIndexedItems.filter((item) =>
-      isPreviewableUploadFile(item.file),
-    );
-    const plainLocalCandidates = safeIndexedItems.filter(
-      (item) => !isPreviewableUploadFile(item.file),
-    );
-    const localItems = await Promise.all(
-      plainLocalCandidates.map(async (item) => ({
-        index: item.index,
-        kind: "local",
-        file: item.file,
-        name: String(item.file?.name || ""),
-        size: Number(item.file?.size || 0),
-        type: String(item.file?.type || ""),
-        thumbnailUrl: await buildImageThumbnailDataUrl(item.file),
-      })),
-    );
-    const stagedPreviewItems = [];
-    if (previewableCandidates.length > 0) {
-      const stagedResult = await stageChatPreviewAttachments({
-        files: previewableCandidates.map((item) => item.file),
-        sessionId: activeId,
-      });
-      const stagedRefs = Array.isArray(stagedResult?.files)
-        ? stagedResult.files
-        : [];
-      if (stagedRefs.length !== previewableCandidates.length) {
-        throw new Error("文档预览暂存结果异常，请重新上传。");
-      }
-      stagedRefs.forEach((ref, idx) => {
-        stagedPreviewItems.push({
-          index: previewableCandidates[idx].index,
-          ...buildStagedPreviewItem(previewableCandidates[idx].file, ref),
-        });
-      });
-    }
-    return [...localItems, ...stagedPreviewItems];
-  }
-
-  function shouldUseAliyunPdfPreprocess(runtimeConfig, currentAgent) {
-    const provider = resolveAgentProvider(
-      currentAgent,
-      runtimeConfig,
-      agentProviderDefaults,
-    );
-    const safeAgent = String(currentAgent || "")
-      .trim()
-      .toUpperCase();
-    return provider === "aliyun" && safeAgent === "D";
-  }
-
   async function onPrepareFiles(pickedFiles) {
-    const safePicked = Array.isArray(pickedFiles)
-      ? pickedFiles.filter(Boolean)
-      : [];
-    if (safePicked.length === 0) return [];
-
     const runtimeConfig = resolveRuntimeConfigForAgent(
       agent,
       agentRuntimeConfigs,
     );
-    if (shouldUseAliyunPdfPreprocess(runtimeConfig, agent)) {
-      const indexedPicked = safePicked.map((file, index) => ({
-        index,
-        file,
-        isPdf: isPdfUploadFile(file),
-      }));
-      const pdfCandidates = indexedPicked.filter((item) => item.isPdf);
-      const localItems = await buildPreviewAwareLocalItems(
-        indexedPicked.filter((item) => !item.isPdf),
-      );
-
-      if (pdfCandidates.length > 0) {
-        const prepareResult = await prepareChatAttachments({
-          agentId: agent,
-          sessionId: activeId,
-          files: pdfCandidates.map((item) => item.file),
-        });
-        const preparedRefs = Array.isArray(prepareResult?.files)
-          ? prepareResult.files
-          : [];
-        if (preparedRefs.length !== pdfCandidates.length) {
-          throw new Error("PDF 预处理结果异常，请重新上传。");
-        }
-
-        const preparedItems = preparedRefs.map((ref, idx) => {
-          const file = pdfCandidates[idx].file;
-          const preparedToken = String(ref?.token || "").trim();
-          if (!preparedToken) {
-            throw new Error("PDF 预处理缺少 token，请重新上传。");
-          }
-          return {
-            index: pdfCandidates[idx].index,
-            kind: "prepared_ref",
-            // Keep the original File for local preview in composer.
-            file,
-            name: String(file?.name || ref?.fileName || ""),
-            size: Number(ref?.size || file?.size || 0),
-            type: String(ref?.mimeType || file?.type || ""),
-            mimeType: String(ref?.mimeType || file?.type || ""),
-            url: String(ref?.url || "").trim(),
-            ossKey: String(ref?.ossKey || "").trim(),
-            preparedToken,
-          };
-        });
-
-        return [...localItems, ...preparedItems]
-          .sort((a, b) => a.index - b.index)
-          .map((item) => {
-            const nextItem = { ...item };
-            delete nextItem.index;
-            return nextItem;
-          });
-      }
-
-      return localItems
-        .sort((a, b) => a.index - b.index)
-        .map((item) => {
-          const nextItem = { ...item };
-          delete nextItem.index;
-          return nextItem;
-        });
-    }
-
-    if (!shouldUseVolcengineFilesApi(runtimeConfig)) {
-      const indexedPicked = safePicked.map((file, index) => ({
-        index,
-        file,
-      }));
-      const localItems = await buildPreviewAwareLocalItems(indexedPicked);
-
-      return localItems
-        .sort((a, b) => a.index - b.index)
-        .map((item) => {
-          const nextItem = { ...item };
-          delete nextItem.index;
-          return nextItem;
-        });
-    }
-
-    const indexedPicked = safePicked.map((file, index) => ({
-      index,
-      file,
-      inputType: classifyVolcengineFilesApiType(file),
-    }));
-    const remoteCandidates = indexedPicked.filter((item) => !!item.inputType);
-    const localCandidates = indexedPicked.filter((item) => !item.inputType);
-    const localItems = await buildPreviewAwareLocalItems(localCandidates);
-
-    if (remoteCandidates.length === 0) {
-      return localItems.sort((a, b) => a.index - b.index);
-    }
-
-    const uploadResult = await uploadVolcengineChatFiles({
+    return prepareComposerFiles({
+      pickedFiles,
       agentId: agent,
-      files: remoteCandidates.map((item) => item.file),
+      sessionId: activeId,
+      runtimeConfig,
+      providerDefaults: agentProviderDefaults,
+      deps: {
+        buildImageThumbnailDataUrl,
+        classifyUploadPreviewKind,
+        prepareChatAttachments: ChatApiService.prepareChatAttachments,
+        stageChatPreviewAttachments: ChatApiService.stageChatPreviewAttachments,
+        uploadVolcengineChatFiles: ChatApiService.uploadVolcengineChatFiles,
+      },
     });
-    const remoteRefs = Array.isArray(uploadResult?.files)
-      ? uploadResult.files
-      : [];
-    if (remoteRefs.length !== remoteCandidates.length) {
-      throw new Error("文件上传结果异常，请重试。");
-    }
-
-    const remoteItems = await Promise.all(
-      remoteRefs.map(async (ref, idx) => ({
-        index: remoteCandidates[idx].index,
-        kind: "volc_ref",
-        // Keep the original File for local preview in composer.
-        file: remoteCandidates[idx].file,
-        name: String(remoteCandidates[idx].file?.name || ref?.name || ""),
-        size: Number(ref?.size || remoteCandidates[idx].file?.size || 0),
-        type: String(ref?.mimeType || remoteCandidates[idx].file?.type || ""),
-        mimeType: String(
-          ref?.mimeType || remoteCandidates[idx].file?.type || "",
-        ),
-        inputType: String(
-          ref?.inputType || remoteCandidates[idx].inputType || "",
-        ),
-        fileId: String(ref?.fileId || ""),
-        url: String(ref?.url || "").trim(),
-        ossKey: String(ref?.ossKey || "").trim(),
-        thumbnailUrl: await buildImageThumbnailDataUrl(
-          remoteCandidates[idx].file,
-        ),
-      })),
-    );
-
-    return [...localItems, ...remoteItems]
-      .sort((a, b) => a.index - b.index)
-      .map((item) => {
-        const nextItem = { ...item };
-        delete nextItem.index;
-        return nextItem;
-      });
   }
 
   async function onSend(text, files) {
@@ -3382,76 +2859,31 @@ export default function ChatDesktopPage() {
       setStreamError(error?.message || "聊天记录保存失败");
       return;
     }
-    startStreamDraft(currentSessionId, assistantMsg);
+    chatDataService.startDraft(currentSessionId, assistantMsg);
 
-    const historyForApi = toApiMessages(
-      isPackyTokenBudgetRuntime(agent, runtimeConfig, agentProviderDefaults)
-        ? currentHistory
-        : pickRecentRounds(
-            currentHistory,
-            runtimeConfig.contextRounds || CONTEXT_USER_ROUNDS,
-          ),
-      {
-        useVolcengineResponsesFileRefs:
-          shouldUseVolcengineFilesApi(runtimeConfig),
-        usePackyContextSummary: isPackyTokenBudgetRuntime(
-          agent,
-          runtimeConfig,
-          agentProviderDefaults,
-        ),
+    const historyForApi = buildHistoryForApi({
+      history: currentHistory,
+      agentId: agent,
+      runtimeConfig,
+      providerDefaults: agentProviderDefaults,
+    });
+
+    const formData = ChatApiService.createChatStreamFormData({
+      agentId: agent,
+      runtimeConfig: {
+        temperature: normalizeTemperature(runtimeConfig.temperature),
+        topP: normalizeTopP(runtimeConfig.topP),
       },
-    );
-
-    const formData = new FormData();
-    const streamEndpoint =
-      agent === "E" ? "/api/chat/stream-e" : "/api/chat/stream";
-    formData.append("agentId", agent);
-    formData.append(
-      "temperature",
-      String(normalizeTemperature(runtimeConfig.temperature)),
-    );
-    formData.append("topP", String(normalizeTopP(runtimeConfig.topP)));
-    formData.append("sessionId", currentSessionId);
-    formData.append(
-      "smartContextEnabled",
-      String(effectiveSmartContextEnabled),
-    );
-    formData.append("contextMode", "append");
-    formData.append("messages", JSON.stringify(historyForApi));
-
-    localFiles.forEach((f) => formData.append("files", f));
-    if (volcengineFileRefs.length > 0) {
-      formData.append("volcengineFileRefs", JSON.stringify(volcengineFileRefs));
-    }
-    if (preparedAttachmentRefs.length > 0) {
-      formData.append(
-        "preparedAttachmentRefs",
-        JSON.stringify(preparedAttachmentRefs),
-      );
-    }
-    if (stagedAttachmentRefs.length > 0) {
-      formData.append(
-        "stagedAttachmentRefs",
-        JSON.stringify(stagedAttachmentRefs),
-      );
-    }
-    if (selectedContextDocuments.length > 0) {
-      formData.append(
-        "selectedContextFiles",
-        JSON.stringify(
-          selectedContextDocuments.map((item) => ({
-            key: item.key,
-            messageId: item.messageId,
-            attachmentIndex: item.attachmentIndex,
-            name: item.name,
-            type: item.mimeType,
-            fileId: item.fileId,
-            inputType: item.inputType,
-            kind: item.kind,
-          })),
-        ),
-      );
-    }
+      sessionId: currentSessionId,
+      smartContextEnabled: effectiveSmartContextEnabled,
+      contextMode: "append",
+      messages: historyForApi,
+      localFiles,
+      volcengineFileRefs,
+      preparedAttachmentRefs,
+      stagedAttachmentRefs,
+      selectedContextDocuments,
+    });
 
     setFocusUserMessageId("");
     setIsAtLatest(true);
@@ -3472,21 +2904,11 @@ export default function ChatDesktopPage() {
     streamAbortReasonRef.current = "";
 
     try {
-      const resp = await fetch(streamEndpoint, {
-        method: "POST",
-        headers: {
-          ...getAuthTokenHeader(),
-        },
-        body: formData,
+      await ChatApiService.streamChatCompletion({
+        agentId: agent,
+        formData,
         signal: requestController.signal,
-      });
-
-      if (!resp.ok || !resp.body) {
-        const errText = await readErrorMessage(resp);
-        throw new Error(errText || `HTTP ${resp.status}`);
-      }
-
-      await readSseStream(resp, {
+        handlers: {
         onMeta: (meta) => {
           applyContextSummaryMessage(currentSessionId, meta?.contextSummaryMessage);
           const uploadedLinks = Array.isArray(meta?.uploadedAttachmentLinks)
@@ -3587,7 +3009,7 @@ export default function ChatDesktopPage() {
           clearFloatingStatus();
           throw new Error(msg || "stream error");
         },
-      });
+      }});
     } catch (error) {
       const aborted =
         error?.name === "AbortError" || !!streamAbortReasonRef.current;
@@ -3596,7 +3018,7 @@ export default function ChatDesktopPage() {
         const msg = error?.message || "请求失败";
         setStreamError(msg);
         flushStreamBuffer();
-        updateStreamDraft(currentSessionId, (draft) => {
+        chatDataService.updateDraft(currentSessionId, (draft) => {
           if (!draft || draft.id !== assistantId) return draft;
           return {
             ...draft,
@@ -3613,8 +3035,8 @@ export default function ChatDesktopPage() {
         streamFlushTimerRef.current = null;
       }
       flushStreamBuffer();
-      const completed = getStreamDraft(currentSessionId);
-      clearStreamDraft(currentSessionId);
+      const completed = chatDataService.getDraft(currentSessionId);
+      chatDataService.clearDraft(currentSessionId);
       const hasRenderableDraft =
         completed &&
         completed.id === assistantId &&
@@ -3721,23 +3143,12 @@ export default function ChatDesktopPage() {
 
     const promptMsg = list[promptIndex];
     const previousAssistant = list[assistantIndex];
-    const historyForApi = toApiMessages(
-      isPackyTokenBudgetRuntime(agent, runtimeConfig, agentProviderDefaults)
-        ? list.slice(0, promptIndex + 1)
-        : pickRecentRounds(
-            list.slice(0, promptIndex + 1),
-            runtimeConfig.contextRounds || CONTEXT_USER_ROUNDS,
-          ),
-      {
-        useVolcengineResponsesFileRefs:
-          shouldUseVolcengineFilesApi(runtimeConfig),
-        usePackyContextSummary: isPackyTokenBudgetRuntime(
-          agent,
-          runtimeConfig,
-          agentProviderDefaults,
-        ),
-      },
-    );
+    const historyForApi = buildHistoryForApi({
+      history: list.slice(0, promptIndex + 1),
+      agentId: agent,
+      runtimeConfig,
+      providerDefaults: agentProviderDefaults,
+    });
 
     const regeneratingAssistant = {
       ...previousAssistant,
@@ -3759,22 +3170,17 @@ export default function ChatDesktopPage() {
       () => regeneratingAssistant,
     );
 
-    const formData = new FormData();
-    const streamEndpoint =
-      agent === "E" ? "/api/chat/stream-e" : "/api/chat/stream";
-    formData.append("agentId", agent);
-    formData.append(
-      "temperature",
-      String(normalizeTemperature(runtimeConfig.temperature)),
-    );
-    formData.append("topP", String(normalizeTopP(runtimeConfig.topP)));
-    formData.append("sessionId", currentSessionId);
-    formData.append(
-      "smartContextEnabled",
-      String(effectiveSmartContextEnabled),
-    );
-    formData.append("contextMode", "regenerate");
-    formData.append("messages", JSON.stringify(historyForApi));
+    const formData = ChatApiService.createChatStreamFormData({
+      agentId: agent,
+      runtimeConfig: {
+        temperature: normalizeTemperature(runtimeConfig.temperature),
+        topP: normalizeTopP(runtimeConfig.topP),
+      },
+      sessionId: currentSessionId,
+      smartContextEnabled: effectiveSmartContextEnabled,
+      contextMode: "regenerate",
+      messages: historyForApi,
+    });
 
     setFocusUserMessageId(promptMessageId);
     setIsStreaming(true);
@@ -3791,21 +3197,11 @@ export default function ChatDesktopPage() {
     streamAbortReasonRef.current = "";
 
     try {
-      const resp = await fetch(streamEndpoint, {
-        method: "POST",
-        headers: {
-          ...getAuthTokenHeader(),
-        },
-        body: formData,
+      await ChatApiService.streamChatCompletion({
+        agentId: agent,
+        formData,
         signal: requestController.signal,
-      });
-
-      if (!resp.ok || !resp.body) {
-        const errText = await readErrorMessage(resp);
-        throw new Error(errText || `HTTP ${resp.status}`);
-      }
-
-      await readSseStream(resp, {
+        handlers: {
         onMeta: (meta) => {
           applyContextSummaryMessage(currentSessionId, meta?.contextSummaryMessage);
           const enabled = !!meta?.reasoningEnabled;
@@ -3877,7 +3273,7 @@ export default function ChatDesktopPage() {
           clearFloatingStatus();
           throw new Error(msg || "stream error");
         },
-      });
+      }});
     } catch (error) {
       const aborted =
         error?.name === "AbortError" || !!streamAbortReasonRef.current;
@@ -4054,7 +3450,7 @@ export default function ChatDesktopPage() {
   }
 
   function runExport(kind, userInfo) {
-    const liveDraft = getStreamDraft(activeId);
+    const liveDraft = chatDataService.getDraft(activeId);
     const exportMessages =
       liveDraft && liveDraft.id && !messages.some((m) => m.id === liveDraft.id)
         ? [...messages, liveDraft]
@@ -4131,7 +3527,7 @@ export default function ChatDesktopPage() {
       navigate(withAuthSlot(query), { replace: true });
       return;
     }
-    replaceAllStreamDrafts({});
+    chatDataService.replaceDrafts({});
     clearUserAuthSession();
     navigate(withAuthSlot("/login"), { replace: true });
   }
@@ -4263,7 +3659,7 @@ export default function ChatDesktopPage() {
             ? state.settings
             : {};
         if (hasStoredSessions && nextSessions.length === 0) {
-          bootstrapAutoSessionBundle = buildFreshAutoSessionBundle({
+          bootstrapAutoSessionBundle = buildFreshAutoSessionBundleRef.current?.({
             agentBySession: stateSettings.agentBySession,
             smartContextEnabledBySessionAgent:
               stateSettings.smartContextEnabledBySessionAgent,
@@ -4448,7 +3844,7 @@ export default function ChatDesktopPage() {
           agentBySession: nextAgentBySession,
           smartContextEnabledBySessionAgent: nextSmartContextEnabledMap,
         });
-        replaceAllStreamDrafts({});
+        chatDataService.replaceDrafts({});
 
         let profile = sanitizeUserInfo(data?.profile);
         if (returnTarget === "teacher-home" && !isUserInfoComplete(profile)) {
@@ -4469,7 +3865,7 @@ export default function ChatDesktopPage() {
         }
 
         if (bootstrapAutoSessionBundle && !cancelled) {
-          const persistResult = await persistSessionStateImmediately({
+          const persistResult = await persistSessionStateImmediatelyRef.current?.({
             nextGroups,
             nextSessions: resolvedSessions,
             nextSessionMessages: resolvedMessages,
@@ -4477,7 +3873,7 @@ export default function ChatDesktopPage() {
             nextAgentBySession,
             nextSmartContextEnabledBySessionAgent: nextSmartContextEnabledMap,
           });
-          if (persistResult.ok) {
+          if (persistResult?.ok) {
             await persistMessageUpsertsImmediately(
               bootstrapAutoSessionBundle.sessionRecord.messages.map((message) => ({
                 sessionId: bootstrapAutoSessionBundle.sessionRecord.session.id,
@@ -4498,7 +3894,7 @@ export default function ChatDesktopPage() {
           msg.includes("重新登录") ||
           msg.includes("账号不存在")
         ) {
-          replaceAllStreamDrafts({});
+          chatDataService.replaceDrafts({});
           clearUserAuthSession();
           navigate(withAuthSlot("/login"), { replace: true });
           return;

@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'ref']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -24,6 +24,47 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+    },
+  },
+  {
+    files: ['server/**/*.js', 'tests/**/*.js', 'vite.config.js', 'scripts/**/*.{js,mjs}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
+    files: ['src/App.jsx'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: ['./pages/*'],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/app/routes/**/*.{js,jsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: ['../../pages/*'],
+        },
+      ],
+    },
+  },
+  {
+    files: ['server/index.js'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: ['./routes/chat-and-images.js'],
+        },
+      ],
     },
   },
 ])

@@ -35,6 +35,7 @@ const MARKDOWN_REMARK_PLUGINS = [[remarkGfm, { singleTilde: false }]];
 const REASONING_TOGGLE_ANIMATION_MS = 280;
 const SESSION_SWITCH_SETTLE_MAX_MS = 1200;
 const SESSION_SWITCH_SETTLE_QUIET_MS = 180;
+const MANUAL_SCROLL_PAUSE_MS = 900;
 const ASK_POPOVER_EDGE_MARGIN = 56;
 const CJK_PUNCTUATION_PATTERN = /([，。！？；：、“”‘’（）《》〈〉「」『』【】〔〕…—·]+)/g;
 const TYPOGRAPHY_SKIP_TAGS = new Set(["code", "pre", "kbd", "samp"]);
@@ -248,6 +249,7 @@ const MessageList = forwardRef(function MessageList({
   const reasoningToggleTimerRef = useRef(0);
   const settleScrollTimerRef = useRef(0);
   const resizeSettleFrameRef = useRef(0);
+  const manualScrollPauseUntilRef = useRef(0);
   const displayedMessages = useMemo(() => {
     const visibleMessages = (Array.isArray(messages) ? messages : []).filter(
       (message) => !message?.hidden,
@@ -367,6 +369,18 @@ const MessageList = forwardRef(function MessageList({
     });
   }, [displayedMessages.length, checkIsAtLatest]);
 
+  const pauseAutoStickToLatest = useCallback(
+    (duration = MANUAL_SCROLL_PAUSE_MS) => {
+      manualScrollPauseUntilRef.current = Date.now() + Math.max(0, duration);
+      setLatestState(false, true);
+    },
+    [setLatestState],
+  );
+
+  const canAutoStickToLatest = useCallback(() => {
+    return Date.now() >= manualScrollPauseUntilRef.current;
+  }, []);
+
   const scrollMessageToAnchor = useCallback(
     (messageId, duration = 620) => {
       const root = rootRef.current;
@@ -407,13 +421,10 @@ const MessageList = forwardRef(function MessageList({
 
     requestAnimationFrame(() => {
       jumpToLatest();
-      requestAnimationFrame(() => {
+      settleScrollTimerRef.current = window.setTimeout(() => {
+        settleScrollTimerRef.current = 0;
         jumpToLatest();
-        settleScrollTimerRef.current = window.setTimeout(() => {
-          settleScrollTimerRef.current = 0;
-          jumpToLatest();
-        }, 140);
-      });
+      }, 96);
     });
   }, [jumpToLatest]);
 
@@ -575,13 +586,21 @@ const MessageList = forwardRef(function MessageList({
     const root = rootRef.current;
     if (!root) return;
     const settling = Date.now() < sessionSwitchSettlingUntilRef.current;
+    if (!canAutoStickToLatest()) return;
     if (!settling && !isAtLatestRef.current) return;
     setLatestState(true, true);
     root.scrollTop = root.scrollHeight;
     if (settling) {
       scheduleSessionSwitchRelease();
     }
-  }, [activeSessionId, displayedMessages, bottomInset, scheduleSessionSwitchRelease, setLatestState]);
+  }, [
+    activeSessionId,
+    bottomInset,
+    canAutoStickToLatest,
+    displayedMessages,
+    scheduleSessionSwitchRelease,
+    setLatestState,
+  ]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -600,7 +619,7 @@ const MessageList = forwardRef(function MessageList({
         if (!currentRoot) return;
 
         const settling = Date.now() < sessionSwitchSettlingUntilRef.current;
-        if (settling || isAtLatestRef.current) {
+        if (canAutoStickToLatest() && (settling || isAtLatestRef.current)) {
           setLatestState(true, true);
           currentRoot.scrollTop = currentRoot.scrollHeight;
           if (settling) {
@@ -624,10 +643,14 @@ const MessageList = forwardRef(function MessageList({
         resizeSettleFrameRef.current = 0;
       }
     };
-  }, [checkIsAtLatest, scheduleSessionSwitchRelease, setLatestState]);
+  }, [canAutoStickToLatest, checkIsAtLatest, scheduleSessionSwitchRelease, setLatestState]);
 
   useEffect(() => {
     if (!displayedMessages.length) {
+      checkIsAtLatest();
+      return;
+    }
+    if (!canAutoStickToLatest()) {
       checkIsAtLatest();
       return;
     }
@@ -640,16 +663,17 @@ const MessageList = forwardRef(function MessageList({
       return;
     }
     settleToLatest();
-  }, [displayedMessages, settleToLatest, checkIsAtLatest]);
+  }, [canAutoStickToLatest, displayedMessages, settleToLatest, checkIsAtLatest, jumpToLatest]);
 
   useEffect(() => {
+    if (!canAutoStickToLatest()) return;
     if (!isAtLatestRef.current) return;
     if (Date.now() < sessionSwitchSettlingUntilRef.current) {
       jumpToLatest();
       return;
     }
     settleToLatest();
-  }, [bottomInset, jumpToLatest, settleToLatest]);
+  }, [bottomInset, canAutoStickToLatest, jumpToLatest, settleToLatest]);
 
   const closeAskPopover = useCallback(() => {
     setAskPopover((prev) => {
@@ -785,6 +809,11 @@ const MessageList = forwardRef(function MessageList({
         ref={setScrollerRef}
         style={virtuosoStyle}
         onScroll={checkIsAtLatest}
+        onWheel={(event) => {
+          if (event.deltaY < 0) {
+            pauseAutoStickToLatest();
+          }
+        }}
         onCopy={handleMessageAreaCopy}
         onMouseUp={onMessageAreaMouseUp}
         onKeyUp={onMessageAreaMouseUp}

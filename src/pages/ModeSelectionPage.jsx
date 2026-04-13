@@ -20,7 +20,7 @@ import {
   resolveActiveAuthSlot,
   withAuthSlot,
 } from "../app/authStorage.js";
-import { buildAbsoluteAppUrl } from "../app/returnNavigation.js";
+import { appendReturnUrlParam, buildAbsoluteAppUrl } from "../app/returnNavigation.js";
 import { SHANGGUAN_FUZE_TEACHER_SCOPE_KEY } from "../../shared/teacherScopes.js";
 import {
   deleteClassroomHomeworkFile,
@@ -492,7 +492,7 @@ export default function ModeSelectionPage() {
     const params = new URLSearchParams();
     params.set("returnTo", "mode-selection");
     if (modeSelectionReturnUrl) {
-      params.set("returnUrl", modeSelectionReturnUrl);
+      appendReturnUrlParam(params, modeSelectionReturnUrl);
     }
     return withAuthSlot(`/chat?${params.toString()}`, activeSlot);
   }, [activeSlot, modeSelectionReturnUrl]);
@@ -511,7 +511,7 @@ export default function ModeSelectionPage() {
     const params = new URLSearchParams();
     params.set("returnTo", "mode-selection");
     if (modeSelectionReturnUrl) {
-      params.set("returnUrl", modeSelectionReturnUrl);
+      appendReturnUrlParam(params, modeSelectionReturnUrl);
     }
     navigate(withAuthSlot(`/image-generation?${params.toString()}`, activeSlot));
   }
@@ -520,7 +520,7 @@ export default function ModeSelectionPage() {
     const params = new URLSearchParams();
     params.set("returnTo", "mode-selection");
     if (modeSelectionReturnUrl) {
-      params.set("returnUrl", modeSelectionReturnUrl);
+      appendReturnUrlParam(params, modeSelectionReturnUrl);
     }
     navigate(withAuthSlot(`/party?${params.toString()}`, activeSlot));
   }

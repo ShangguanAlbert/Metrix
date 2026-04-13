@@ -1,8 +1,56 @@
 import { withAuthSlot } from "./authStorage.js";
 import { withAppBasePath } from "./basePath.js";
 
+const RETURN_URL_PARAM = "returnUrl";
+const RETURN_URL_KEY_PARAM = "returnKey";
+const RETURN_URL_STORAGE_PREFIX = "educhat.return-url:";
+
 function canUseWindow() {
   return typeof window !== "undefined";
+}
+
+function canUseSessionStorage() {
+  if (!canUseWindow()) return false;
+  try {
+    return !!window.sessionStorage;
+  } catch {
+    return false;
+  }
+}
+
+function buildReturnUrlStorageKey(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  let hash = 5381;
+  for (let index = 0; index < raw.length; index += 1) {
+    hash = ((hash << 5) + hash) ^ raw.charCodeAt(index);
+  }
+  return `ru_${(hash >>> 0).toString(36)}`;
+}
+
+function writeStoredReturnUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw || !canUseSessionStorage()) return "";
+  const key = buildReturnUrlStorageKey(raw);
+  if (!key) return "";
+  try {
+    window.sessionStorage.setItem(`${RETURN_URL_STORAGE_PREFIX}${key}`, raw);
+    return key;
+  } catch {
+    return "";
+  }
+}
+
+function readStoredReturnUrl(key = "") {
+  const safeKey = String(key || "").trim();
+  if (!safeKey || !canUseSessionStorage()) return "";
+  try {
+    return String(
+      window.sessionStorage.getItem(`${RETURN_URL_STORAGE_PREFIX}${safeKey}`) || "",
+    ).trim();
+  } catch {
+    return "";
+  }
 }
 
 function normalizeHostname(value = "") {
@@ -38,9 +86,45 @@ export function buildAbsoluteAppUrl(path = "", slot = "") {
 export function readReturnUrlFromSearch(search = "") {
   try {
     const params = new URLSearchParams(String(search || ""));
-    return String(params.get("returnUrl") || "").trim();
+    const inlineValue = String(params.get(RETURN_URL_PARAM) || "").trim();
+    if (inlineValue) {
+      writeStoredReturnUrl(inlineValue);
+      return inlineValue;
+    }
+    return readStoredReturnUrl(params.get(RETURN_URL_KEY_PARAM));
   } catch {
     return "";
+  }
+}
+
+export function appendReturnUrlParam(params, value = "") {
+  if (!(params instanceof URLSearchParams)) {
+    return params;
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return params;
+
+  const key = writeStoredReturnUrl(raw);
+  params.delete(RETURN_URL_PARAM);
+  if (key) {
+    params.set(RETURN_URL_KEY_PARAM, key);
+  } else {
+    params.set(RETURN_URL_PARAM, raw);
+  }
+  return params;
+}
+
+export function compactReturnUrlSearch(search = "") {
+  try {
+    const params = new URLSearchParams(String(search || ""));
+    const raw = String(params.get(RETURN_URL_PARAM) || "").trim();
+    if (!raw) {
+      return params.toString() ? `?${params.toString()}` : "";
+    }
+    appendReturnUrlParam(params, raw);
+    return params.toString() ? `?${params.toString()}` : "";
+  } catch {
+    return String(search || "");
   }
 }
 

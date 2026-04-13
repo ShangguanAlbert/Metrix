@@ -1,3 +1,5 @@
+import { normalizeChatBootstrapResponse } from "../../shared/contracts/chat.js";
+
 export function registerAuthUserClassroomRoutes(app, deps) {
   function readSignedUrlExpiryText(url) {
     const safeUrl = String(url || "").trim();
@@ -1087,7 +1089,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       );
     }
 
-    res.json({
+    res.json(normalizeChatBootstrapResponse({
       ok: true,
       user: toPublicUser(user),
       teacherScopeKey,
@@ -1097,7 +1099,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       state,
       agentRuntimeConfigs: resolveAgentRuntimeConfigs(adminConfig.runtimeConfigs),
       agentProviderDefaults: buildAgentProviderDefaults(),
-    });
+    }));
   });
 
   app.post("/api/chat/debug-log", requireChatAuth, async (req, res) => {

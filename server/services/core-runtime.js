@@ -164,6 +164,7 @@ const PACKYCODE_GPT54_COMPRESSION_TRIGGER_TOKENS = 800000;
 const PACKYCODE_GPT54_COMPRESSION_TARGET_TOKENS = 700000;
 const PACKYCODE_GPT54_DEFAULT_KEEP_USER_ROUNDS = 6;
 const PACKYCODE_GPT54_MIN_KEEP_USER_ROUNDS = 2;
+const PACKYCODE_GPT54_HIDDEN_USER_PROMPT = "不要使用无序列表输出。";
 const SESSION_NOTES_MAX_ESTIMATED_TOKENS = 4000;
 const SESSION_NOTES_MAX_LIST_ITEMS = 24;
 const SESSION_NOTES_MAX_FILE_SUMMARIES = 12;
@@ -3893,6 +3894,55 @@ function resolveLatestUserMessage(messages) {
   return null;
 }
 
+function appendHiddenPromptToLatestUserMessage(messages, hiddenPrompt = "") {
+  const suffix = String(hiddenPrompt || "").trim();
+  if (!Array.isArray(messages) || !suffix) return messages;
+
+  const latestUserMessage = resolveLatestUserMessage(messages);
+  if (!latestUserMessage) return messages;
+
+  if (typeof latestUserMessage.content === "string") {
+    const current = String(latestUserMessage.content || "");
+    if (current.includes(suffix)) return messages;
+    latestUserMessage.content = current.trim()
+      ? `${current}\n\n${suffix}`
+      : suffix;
+    return messages;
+  }
+
+  if (!Array.isArray(latestUserMessage.content)) {
+    return messages;
+  }
+
+  const parts = latestUserMessage.content
+    .filter((part) => part && typeof part === "object")
+    .map((part) => ({ ...part }));
+  const hasPrompt = parts.some((part) =>
+    String(part?.text || "").includes(suffix),
+  );
+  if (hasPrompt) return messages;
+
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    const type = String(part?.type || "")
+      .trim()
+      .toLowerCase();
+    if (type === "text" || type === "input_text" || type === "output_text") {
+      const current = String(part.text || "");
+      parts[index] = {
+        ...part,
+        text: current.trim() ? `${current}\n\n${suffix}` : suffix,
+      };
+      latestUserMessage.content = parts;
+      return messages;
+    }
+  }
+
+  parts.push({ type: "text", text: suffix });
+  latestUserMessage.content = parts;
+  return messages;
+}
+
 function buildInitialAttachmentParts(content) {
   if (typeof content !== "string") return [];
   const text = content.trim();
@@ -5555,6 +5605,13 @@ async function streamAgentResponse({
   }
   if (sessionNotesCompressionMeta) {
     packyContextCompressionMeta = sessionNotesCompressionMeta;
+  }
+
+  if (provider === "packycode" && isPackyGpt54Model(model)) {
+    appendHiddenPromptToLatestUserMessage(
+      requestMessages,
+      PACKYCODE_GPT54_HIDDEN_USER_PROMPT,
+    );
   }
 
   let requestRuntimeConfig = config;

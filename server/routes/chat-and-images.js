@@ -1,4 +1,10 @@
 import { pathToFileURL } from "node:url";
+import {
+  normalizeImageHistoryClearResponse,
+  normalizeImageHistoryDeleteResponse,
+  normalizeImageHistoryLimit,
+  normalizeImageHistoryListResponse,
+} from "../../shared/contracts/images.js";
 
 export function registerChatAndImageRoutes(app, deps) {
   const {
@@ -2199,7 +2205,7 @@ export function registerChatAndImageRoutes(app, deps) {
       return;
     }
 
-    const limit = sanitizeRuntimeInteger(req.query?.limit, 80, 1, 200);
+    const limit = normalizeImageHistoryLimit(req.query?.limit, 80);
     let docs = [];
     try {
       docs = await GeneratedImageHistory.find(
@@ -2231,10 +2237,10 @@ export function registerChatAndImageRoutes(app, deps) {
       return;
     }
 
-    res.json({
+    res.json(normalizeImageHistoryListResponse({
       ok: true,
       items: Array.isArray(docs) ? docs.map(toGeneratedImageHistoryItem) : [],
-    });
+    }));
   });
 
   app.get("/api/images/history/:imageId/content", async (req, res) => {
@@ -2332,14 +2338,14 @@ export function registerChatAndImageRoutes(app, deps) {
       ).lean();
       const deleteOssSummary = await deleteGeneratedImageHistoryOssObjects(historyDocs);
       const result = await GeneratedImageHistory.deleteMany({ userId });
-      res.json({
+      res.json(normalizeImageHistoryClearResponse({
         ok: true,
         deletedCount: Number(result?.deletedCount || 0),
         deletedOssObjectCount: Number(deleteOssSummary?.deletedCount || 0),
         failedOssKeys: Array.isArray(deleteOssSummary?.failedKeys)
           ? deleteOssSummary.failedKeys
           : [],
-      });
+      }));
     } catch (error) {
       res.status(500).json({
         error: error?.message || "批量清空图片历史失败，请稍后重试。",
@@ -2368,14 +2374,14 @@ export function registerChatAndImageRoutes(app, deps) {
       const deleteOssSummary = await deleteGeneratedImageHistoryOssObjects(
         deleted ? [deleted] : [],
       );
-      res.json({
+      res.json(normalizeImageHistoryDeleteResponse({
         ok: true,
         deleted: !!deleted,
         deletedOssObjectCount: Number(deleteOssSummary?.deletedCount || 0),
         failedOssKeys: Array.isArray(deleteOssSummary?.failedKeys)
           ? deleteOssSummary.failedKeys
           : [],
-      });
+      }));
     } catch (error) {
       if (String(error?.name || "") === "CastError") {
         res.status(400).json({ error: "无效图片 ID。" });

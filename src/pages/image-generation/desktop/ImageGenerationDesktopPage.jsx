@@ -14,9 +14,7 @@ import {
   Loader2,
   Pencil,
   Plus,
-  Search,
   SendHorizonal,
-  Sparkles,
   Star,
   Trash2,
   Upload,
@@ -43,13 +41,13 @@ import imageGenerationTermsMarkdown from "../../../content/image-generation-term
 import "../../../styles/image-generation.css";
 
 const SIZE_OPTIONS = [
-  { value: "2K", label: "2K（自适应）" },
-  { value: "4K", label: "4K（自适应）" },
+  { value: "2K", label: "2K (Adaptive)" },
+  { value: "4K", label: "4K (Adaptive)" },
   { value: "2048x2048", label: "2048 x 2048" },
-  { value: "2560x1440", label: "2560 x 1440（16:9）" },
-  { value: "1440x2560", label: "1440 x 2560（9:16）" },
-  { value: "2304x1728", label: "2304 x 1728（4:3）" },
-  { value: "1728x2304", label: "1728 x 2304（3:4）" },
+  { value: "2560x1440", label: "2560 x 1440 (16:9)" },
+  { value: "1440x2560", label: "1440 x 2560 (9:16)" },
+  { value: "2304x1728", label: "2304 x 1728 (4:3)" },
+  { value: "1728x2304", label: "1728 x 2304 (3:4)" },
 ];
 const RESPONSE_FORMAT_OPTIONS = [
   { value: "url", label: "URL" },
@@ -60,8 +58,8 @@ const SEEDREAM_MODEL_OPTIONS = [
   { value: "doubao-seedream-5-0-260128", label: "Seedream 5.0" },
 ];
 const GENERATION_MODE_OPTIONS = [
-  { value: "disabled", label: "单图" },
-  { value: "auto", label: "组图（auto）" },
+  { value: "disabled", label: "Single" },
+  { value: "auto", label: "Batch (auto)" },
 ];
 
 const HISTORY_LIMIT = 120;
@@ -74,13 +72,13 @@ const IMAGE_COLLECTIONS_STORAGE_KEY = "educhat:image-generation:collections";
 const IMAGE_TERMS_CONTENT = String(imageGenerationTermsMarkdown || "").trim();
 const IMAGE_TERMS_HASH = computeStringHash(IMAGE_TERMS_CONTENT);
 const EXPLORE_FILTERS = [
-  { key: "explore", label: "探索" },
-  { key: "top", label: "热门" },
-  { key: "people", label: "人像" },
-  { key: "product", label: "产品" },
-  { key: "nature", label: "自然" },
-  { key: "poster", label: "海报" },
-  { key: "logo", label: "标志" },
+  { key: "explore", label: "Explore" },
+  { key: "top", label: "Trending" },
+  { key: "people", label: "People" },
+  { key: "product", label: "Product" },
+  { key: "nature", label: "Nature" },
+  { key: "poster", label: "Poster" },
+  { key: "logo", label: "Logo" },
 ];
 const EXPLORE_CATEGORY_KEYWORDS = {
   people: [
@@ -179,10 +177,10 @@ const EXPLORE_CATEGORY_KEYWORDS = {
 };
 
 const LIBRARY_VIEWS = [
-  { key: "explore", label: "探索", icon: Compass },
-  { key: "my-images", label: "我的图片", icon: Images },
-  { key: "collections", label: "收藏夹", icon: FolderOpen },
-  { key: "likes", label: "我的喜欢", icon: Heart },
+  { key: "explore", label: "Explore", icon: Compass },
+  { key: "my-images", label: "My Images", icon: Images },
+  { key: "collections", label: "Collections", icon: FolderOpen },
+  { key: "likes", label: "Likes", icon: Heart },
 ];
 const LIBRARY_VIEW_KEY_SET = new Set(LIBRARY_VIEWS.map((item) => item.key));
 const IMAGE_LQIP_CACHE = new Map();
@@ -243,8 +241,8 @@ function formatHistoryTime(value) {
   if (!date || Number.isNaN(date.getTime())) {
     return "";
   }
-  return date.toLocaleString("zh-CN", {
-    month: "2-digit",
+  return date.toLocaleString("en-US", {
+    month: "short",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
@@ -347,23 +345,24 @@ function normalizeGroupImageCount(value, fallback = GROUP_IMAGE_MAX) {
   return Math.max(1, Math.min(GROUP_IMAGE_MAX, parsed));
 }
 
-function InlineGlyph({ name, size = 14 }) {
+function InlineGlyph({ name, size = 14, color = "white" }) {
   const iconSize = Number(size) > 0 ? Number(size) : 14;
+  const stroke = encodeURIComponent(String(color || "white"));
   const iconMap = {
     check:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E",
+      `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${stroke}' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E`,
     heart:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.84 5.61a5.5 5.5 0 0 0-7.78 0L12 6.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 22l8.84-8.61a5.5 5.5 0 0 0 0-7.78z'/%3E%3C/svg%3E",
+      `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${stroke}' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.84 5.61a5.5 5.5 0 0 0-7.78 0L12 6.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 22l8.84-8.61a5.5 5.5 0 0 0 0-7.78z'/%3E%3C/svg%3E`,
     folder:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z'/%3E%3C/svg%3E",
+      `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${stroke}' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z'/%3E%3C/svg%3E`,
     star:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z'/%3E%3C/svg%3E",
+      `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${stroke}' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z'/%3E%3C/svg%3E`,
     close:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6l-12 12'/%3E%3C/svg%3E",
+      `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${stroke}' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6l-12 12'/%3E%3C/svg%3E`,
     trash:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M8 6V4.8A1.8 1.8 0 0 1 9.8 3h4.4A1.8 1.8 0 0 1 16 4.8V6M18.2 6 17.2 19a2 2 0 0 1-2 1.8H8.8a2 2 0 0 1-2-1.8L5.8 6M10 11v6M14 11v6'/%3E%3C/svg%3E",
+      `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${stroke}' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M8 6V4.8A1.8 1.8 0 0 1 9.8 3h4.4A1.8 1.8 0 0 1 16 4.8V6M18.2 6 17.2 19a2 2 0 0 1-2 1.8H8.8a2 2 0 0 1-2-1.8L5.8 6M10 11v6M14 11v6'/%3E%3C/svg%3E`,
     refresh:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.4-3.4L23 10M20.5 15a9 9 0 0 1-14.4 3.4L1 14'/%3E%3C/svg%3E",
+      `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${stroke}' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.4-3.4L23 10M20.5 15a9 9 0 0 1-14.4 3.4L1 14'/%3E%3C/svg%3E`,
   };
   const icon = iconMap[name];
   if (!icon) return null;
@@ -640,7 +639,7 @@ function MoreSettingsMenu({
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span>更多</span>
+        <span>More</span>
         <ChevronDown
           size={14}
           className={`image-custom-select-arrow${open ? " is-open" : ""}`}
@@ -648,9 +647,9 @@ function MoreSettingsMenu({
         />
       </button>
       {open ? (
-        <div className="image-more-settings-menu" role="menu" aria-label="更多设置">
+        <div className="image-more-settings-menu" role="menu" aria-label="More settings">
           <label className="image-more-settings-row">
-            <span>返回格式</span>
+            <span>Output format</span>
             <select
               value={responseFormat}
               onChange={(event) => onResponseFormatChange?.(event.target.value)}
@@ -669,7 +668,7 @@ function MoreSettingsMenu({
               sequentialMode !== "auto" ? " is-disabled" : ""
             }`}
           >
-            <span>组图数量</span>
+            <span>Batch count</span>
             <input
               type="text"
               inputMode="numeric"
@@ -682,7 +681,7 @@ function MoreSettingsMenu({
           </label>
 
           <label className="image-more-settings-row image-more-settings-switch">
-            <span>添加水印</span>
+            <span>Add watermark</span>
             <input
               type="checkbox"
               checked={watermark}
@@ -791,18 +790,18 @@ export default function ImageGenerationDesktopPage({
     () => readReturnUrlFromSearch(location.search),
     [location.search],
   );
-  const backButtonLabel = returnTarget === "teacher-home" ? "返回教师主页" : "返回";
+  const backButtonLabel = returnTarget === "teacher-home" ? "Back to Teacher Home" : "Back";
   const backButtonStatusLabel = useMemo(() => {
-    if (returnTarget === "teacher-home") return "教师端";
-    if (returnTarget === "mode-selection") return "课时页";
-    return "对话";
+    if (returnTarget === "teacher-home") return "Teacher";
+    if (returnTarget === "mode-selection") return "Lesson";
+    return "Chat";
   }, [returnTarget]);
   const termsContent = IMAGE_TERMS_CONTENT;
   const termsHash = IMAGE_TERMS_HASH;
   const termsLocked = !termsAgreed;
   const termsLockTipText = isMobileSettingsDrawer
-    ? "请先同意《图片生成功能服务条款》，再使用图片生成能力。"
-    : "请先在右下角弹窗中同意《图片生成功能服务条款》，再使用图片生成能力。";
+    ? "Please accept the Image Generation Terms before using image generation."
+    : "Please accept the Image Generation Terms in the lower-right prompt before using image generation.";
   const pathParts = String(location.pathname || "")
     .split("/")
     .filter(Boolean);
@@ -958,7 +957,7 @@ export default function ImageGenerationDesktopPage({
       setHistoryItems(nextItems);
       return nextItems;
     } catch (error) {
-      setHistoryError(error?.message || "读取历史生成图片失败，请稍后再试。");
+      setHistoryError(error?.message || "Failed to load image history. Please try again later.");
       return null;
     } finally {
       if (!silent) {
@@ -1174,13 +1173,13 @@ export default function ImageGenerationDesktopPage({
   async function handleGenerate(event) {
     event?.preventDefault?.();
     if (termsLocked) {
-      setErrorText("请先勾选并同意《图片生成功能服务条款》。");
+      setErrorText("Please accept the Image Generation Terms first.");
       return;
     }
     if (isGenerating) return;
     const promptSnapshot = prompt.trim();
     if (!promptSnapshot) {
-      setErrorText("请输入用于图片生成的提示词。");
+      setErrorText("Please enter a prompt for image generation.");
       return;
     }
 
@@ -1258,7 +1257,7 @@ export default function ImageGenerationDesktopPage({
               imageIndex,
               status: "failed",
               errorCode: String(payload?.errorCode || ""),
-              errorMessage: String(payload?.errorMessage || "图片生成失败。"),
+              errorMessage: String(payload?.errorMessage || "Image generation failed."),
               prompt: promptSnapshot,
               responseFormat,
               size: "",
@@ -1266,7 +1265,7 @@ export default function ImageGenerationDesktopPage({
             });
           },
           onError: (message) => {
-            streamError = String(message || "图片生成失败。");
+            streamError = String(message || "Image generation failed.");
           },
           onDone: () => {
             sawDoneEvent = true;
@@ -1279,7 +1278,7 @@ export default function ImageGenerationDesktopPage({
         throw new Error(streamError);
       }
     } catch (error) {
-      setErrorText(error?.message || "图片生成失败，请稍后再试。");
+      setErrorText(error?.message || "Image generation failed. Please try again later.");
     } finally {
       setIsGenerating(false);
       if (shouldRefreshHistory || sawDoneEvent) {
@@ -1303,7 +1302,7 @@ export default function ImageGenerationDesktopPage({
         prev === `history-${safeId}` ? "" : prev,
       );
     } catch (error) {
-      setHistoryError(error?.message || "删除历史图片失败，请稍后再试。");
+      setHistoryError(error?.message || "Failed to delete the image. Please try again later.");
     } finally {
       setHistoryDeletingId("");
     }
@@ -1312,7 +1311,7 @@ export default function ImageGenerationDesktopPage({
   async function handleClearHistory() {
     if (termsLocked) return;
     if (historyClearing || historyPreviewItems.length === 0) return;
-    if (!window.confirm("确认要清空全部历史生成图片吗？")) {
+    if (!window.confirm("Are you sure you want to clear all generated image history?")) {
       return;
     }
 
@@ -1323,7 +1322,7 @@ export default function ImageGenerationDesktopPage({
       setHistoryItems([]);
       setSelectedPreviewKey((prev) => (prev.startsWith("history-") ? "" : prev));
     } catch (error) {
-      setHistoryError(error?.message || "批量清空历史失败，请稍后再试。");
+      setHistoryError(error?.message || "Failed to clear history. Please try again later.");
     } finally {
       setHistoryClearing(false);
     }
@@ -1357,7 +1356,7 @@ export default function ImageGenerationDesktopPage({
         next = [
           {
             id: createdId,
-            name: "默认收藏夹",
+            name: "Default Collection",
             coverKey: safeKey,
             itemKeys: [],
           },
@@ -1382,7 +1381,7 @@ export default function ImageGenerationDesktopPage({
 
   function openCreateCollectionDialog() {
     setCollectionDialogMode("create");
-    setCollectionDialogDraft("新收藏夹");
+    setCollectionDialogDraft("New Collection");
     setCollectionMenuOpen(false);
   }
 
@@ -1527,7 +1526,7 @@ export default function ImageGenerationDesktopPage({
   }
 
   function renderGallery(itemsList, options = {}) {
-    const emptyText = options.emptyText || "暂无图片";
+    const emptyText = options.emptyText || "No images yet";
     const allowHistoryDelete = !!options.allowHistoryDelete;
     const allowRemoveFromCollection = !!options.allowRemoveFromCollection;
     const enableSelectMode = !!options.enableSelectMode;
@@ -1538,16 +1537,20 @@ export default function ImageGenerationDesktopPage({
     if (historyLoading && itemsList === historyPreviewItems) {
       return (
         <div className="image-gallery-empty">
-          <Loader2 size={18} className="spin" />
-          <span>历史加载中...</span>
+          <div className="image-gallery-empty-copy">
+            <strong>Loading history</strong>
+            <span>We’re organizing your recent generations. Please wait a moment.</span>
+          </div>
         </div>
       );
     }
     if (!Array.isArray(itemsList) || itemsList.length === 0) {
       return (
         <div className="image-gallery-empty">
-          <ImagePlus size={18} />
-          <span>{emptyText}</span>
+          <div className="image-gallery-empty-copy">
+            <strong>It’s quiet here</strong>
+            <span>{emptyText}</span>
+          </div>
         </div>
       );
     }
@@ -1575,12 +1578,12 @@ export default function ImageGenerationDesktopPage({
                   type="button"
                   className="image-gallery-media"
                   onClick={() => setPreviewDialogKey(item.key)}
-                  title={item.prompt || "查看大图"}
+                  title={item.prompt || "View full image"}
                 >
                   <ProgressiveCachedImage
                     key={safeUrl}
                     src={safeUrl}
-                    alt={item.prompt || "生成图片"}
+                    alt={item.prompt || "Generated image"}
                     loading="lazy"
                     containerClassName="image-gallery-media-progressive"
                     imageClassName="image-gallery-media-image"
@@ -1591,22 +1594,22 @@ export default function ImageGenerationDesktopPage({
                   <div className="image-gallery-loading">
                     {failed ? (
                       <span className="image-gallery-loading-text is-error">
-                        {item.errorMessage || "图片生成失败"}
+                        {item.errorMessage || "Image generation failed"}
                       </span>
                     ) : (
                       <>
                         <Loader2 size={18} className="spin" />
-                        <span className="image-gallery-loading-text">正在生成图片...</span>
+                        <span className="image-gallery-loading-text">Generating image...</span>
                       </>
                     )}
                   </div>
                 </div>
               )}
               <div className="image-gallery-foot">
-                <p>{item.prompt || (pending ? "正在生成..." : "未提供提示词")}</p>
+                <p>{item.prompt || (pending ? "Generating..." : "No prompt provided")}</p>
                 <div className="image-gallery-foot-row">
                   <span>
-                    {pending ? "处理中..." : failed ? "生成失败" : formatHistoryTime(item.createdAt)}
+                    {pending ? "Processing..." : failed ? "Failed" : formatHistoryTime(item.createdAt)}
                   </span>
                   <span>{item.responseFormat === "b64_json" ? "Base64" : "URL"}</span>
                 </div>
@@ -1620,9 +1623,9 @@ export default function ImageGenerationDesktopPage({
                       selectedKeySet.has(item.key) ? " is-active" : ""
                     }`}
                     onClick={() => onToggleSelect?.(item.key)}
-                    title="选择图片"
-                    aria-label="选择图片"
-                    data-tip={selectedKeySet.has(item.key) ? "取消选择" : "选择图片"}
+                    title="Select image"
+                    aria-label="Select image"
+                    data-tip={selectedKeySet.has(item.key) ? "Deselect" : "Select"}
                   >
                     <InlineGlyph name="check" size={13} />
                   </button>
@@ -1631,9 +1634,9 @@ export default function ImageGenerationDesktopPage({
                   type="button"
                   className={`image-gallery-action${liked ? " is-active" : ""}`}
                   onClick={() => toggleLikeItem(item.key)}
-                  title={liked ? "取消喜欢" : "加入喜欢"}
-                  aria-label={liked ? "取消喜欢" : "加入喜欢"}
-                  data-tip={liked ? "取消喜欢" : "加入喜欢"}
+                  title={liked ? "Remove like" : "Like"}
+                  aria-label={liked ? "Remove like" : "Like"}
+                  data-tip={liked ? "Remove like" : "Like"}
                 >
                   <InlineGlyph name="heart" size={13} />
                 </button>
@@ -1641,9 +1644,9 @@ export default function ImageGenerationDesktopPage({
                   type="button"
                   className="image-gallery-action"
                   onClick={() => addItemToCollection(item.key)}
-                  title="加入收藏夹"
-                  aria-label="加入收藏夹"
-                  data-tip="加入收藏夹"
+                  title="Add to collection"
+                  aria-label="Add to collection"
+                  data-tip="Add to collection"
                 >
                   <InlineGlyph name="folder" size={13} />
                 </button>
@@ -1652,9 +1655,9 @@ export default function ImageGenerationDesktopPage({
                     type="button"
                     className={`image-gallery-action${coverKey === item.key ? " is-active" : ""}`}
                     onClick={() => onSetCover(item.key)}
-                    title="设为封面"
-                    aria-label="设为封面"
-                    data-tip={coverKey === item.key ? "已设为封面" : "设为封面"}
+                    title="Set as cover"
+                    aria-label="Set as cover"
+                    data-tip={coverKey === item.key ? "Cover set" : "Set as cover"}
                   >
                     <InlineGlyph name="star" size={13} />
                   </button>
@@ -1664,9 +1667,9 @@ export default function ImageGenerationDesktopPage({
                     type="button"
                     className="image-gallery-action"
                     onClick={() => handleRemoveFromCollection(item.key)}
-                    title="从收藏夹移除"
-                    aria-label="从收藏夹移除"
-                    data-tip="移出收藏夹"
+                    title="Remove from collection"
+                    aria-label="Remove from collection"
+                    data-tip="Remove"
                   >
                     <InlineGlyph name="close" size={13} />
                   </button>
@@ -1677,16 +1680,16 @@ export default function ImageGenerationDesktopPage({
                     className="image-gallery-action is-danger"
                     onClick={(event) => handleDeleteHistory(item.id, event)}
                     disabled={termsLocked || deleting || historyClearing}
-                    title="删除此图片"
-                    aria-label="删除此图片"
-                    data-tip="删除图片"
+                    title="Delete image"
+                    aria-label="Delete image"
+                    data-tip="Delete"
                   >
                     {deleting ? <Loader2 size={13} className="spin" /> : <InlineGlyph name="trash" size={13} />}
                   </button>
                 ) : null}
               </div>
               ) : null}
-              {coverKey === item.key ? <span className="image-gallery-cover-badge">封面</span> : null}
+              {coverKey === item.key ? <span className="image-gallery-cover-badge">Cover</span> : null}
             </article>
           );
         })}
@@ -1705,18 +1708,18 @@ export default function ImageGenerationDesktopPage({
           <div className="image-ideogram-sidebar-top">
             <div className="image-ideogram-brand-row">
               <div className="image-ideogram-brand-mark" aria-hidden="true">
-                <Sparkles size={18} />
+                <ImagePlus size={18} />
               </div>
               <div className="image-ideogram-brand-copy">
-                <strong className="image-ideogram-brand-title">图片生成</strong>
+                <strong className="image-ideogram-brand-title">Image Studio</strong>
               </div>
             </div>
           </div>
 
           <div className="image-ideogram-sidebar-list">
             <div className="image-ideogram-workbench">
-              <div className="image-ideogram-section-label">工作台</div>
-              <nav className="image-ideogram-nav" aria-label="图片生成功能导航">
+              <div className="image-ideogram-section-label">Workspace</div>
+              <nav className="image-ideogram-nav" aria-label="Image generation navigation">
                 {LIBRARY_VIEWS.map((view) => {
                   const Icon = view.icon;
                   const active = libraryView === view.key;
@@ -1759,8 +1762,8 @@ export default function ImageGenerationDesktopPage({
                 type="button"
                 className="image-error-close"
                 onClick={() => setErrorText("")}
-                aria-label="关闭报错"
-                title="关闭报错"
+                aria-label="Close error"
+                title="Close error"
               >
                 <span className="image-close-mini" aria-hidden="true">
                   ×
@@ -1770,7 +1773,11 @@ export default function ImageGenerationDesktopPage({
           ) : null}
 
           <section className="image-ideogram-hero">
-            <h2>你想要生成什么？</h2>
+            <div className="image-ideogram-hero-copy">
+              <div className="image-ideogram-overline">Image Studio</div>
+              <h2>Turn an idea into an image</h2>
+              <p>Use a calm, focused workspace to shape prompts, references, and settings into richer visual results.</p>
+            </div>
             <div
               id="image-settings-panel"
               className={`image-floating-composer${
@@ -1779,14 +1786,14 @@ export default function ImageGenerationDesktopPage({
               aria-hidden={isMobileSettingsDrawer ? !isSettingsDrawerOpen : undefined}
             >
               {inputFilePreviewItems.length > 0 ? (
-                <div className="image-reference-files" role="list" aria-label="参考图列表">
+                <div className="image-reference-files" role="list" aria-label="Reference images">
                   {inputFilePreviewItems.map((item, index) => (
                     <div key={item.key} className="image-reference-file">
-                      <img src={item.previewUrl} alt="参考图缩略图" />
+                      <img src={item.previewUrl} alt="Reference thumbnail" />
                       <button
                         type="button"
-                        aria-label="移除参考图"
-                        title="移除参考图"
+                        aria-label="Remove reference image"
+                        title="Remove reference image"
                         disabled={termsLocked}
                         onClick={() => {
                           setInputFiles((prev) => prev.filter((_, i) => i !== index));
@@ -1806,7 +1813,7 @@ export default function ImageGenerationDesktopPage({
                 onChange={(event) => setPrompt(event.target.value)}
                 className="image-floating-input"
                 rows={1}
-                placeholder="描述你想生成的画面..."
+                placeholder="Describe the image you want to generate..."
                 disabled={termsLocked}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" || event.shiftKey) return;
@@ -1820,12 +1827,12 @@ export default function ImageGenerationDesktopPage({
                   <button
                     type="button"
                     className="image-upload-trigger"
-                    title="上传参考图"
-                    aria-label="上传参考图"
+                    title="Upload reference image"
+                    aria-label="Upload reference image"
                     onClick={() => setReferenceMenuOpen((prev) => !prev)}
                   >
                     <Upload size={16} />
-                    <span>参考图</span>
+                    <span>Reference</span>
                     <ChevronDown
                       size={14}
                       className={`image-custom-select-arrow${referenceMenuOpen ? " is-open" : ""}`}
@@ -1857,7 +1864,7 @@ export default function ImageGenerationDesktopPage({
                           referenceFileInputRef.current?.click();
                         }}
                       >
-                        本地图片
+                        Local image
                       </button>
                       <button
                         type="button"
@@ -1866,7 +1873,7 @@ export default function ImageGenerationDesktopPage({
                         }`}
                         onClick={() => setReferenceMenuMode("url")}
                       >
-                        URL 链接
+                        URL link
                       </button>
                       {referenceMenuMode === "url" ? (
                         <div className="image-reference-url-editor">
@@ -1886,7 +1893,7 @@ export default function ImageGenerationDesktopPage({
                             onClick={handleAddReferenceUrl}
                             disabled={!referenceUrlDraft.trim()}
                           >
-                            添加
+                            Add
                           </button>
                         </div>
                       ) : null}
@@ -1898,7 +1905,7 @@ export default function ImageGenerationDesktopPage({
                               <button
                                 type="button"
                                 onClick={() => handleRemoveReferenceUrl(url)}
-                                aria-label="移除参考链接"
+                                aria-label="Remove reference link"
                               >
                                 <span className="image-close-mini" aria-hidden="true">
                                   ×
@@ -1909,28 +1916,28 @@ export default function ImageGenerationDesktopPage({
                         </div>
                       ) : null}
                       <div className="image-reference-menu-meta">
-                        <p>{`支持上传最多 ${MAX_REFERENCE_IMAGES} 张参考图`}</p>
-                        <p>{`当前参考图 ${inputFiles.length} 张，URL ${imageUrls.length} 条`}</p>
+                        <p>{`Upload up to ${MAX_REFERENCE_IMAGES} reference images`}</p>
+                        <p>{`Current references: ${inputFiles.length} image(s), ${imageUrls.length} URL(s)`}</p>
                       </div>
                     </div>
                   ) : null}
                 </div>
                 <CustomSelect
-                  label="模型"
+                  label="Model"
                   value={model}
                   options={SEEDREAM_MODEL_OPTIONS}
                   onChange={setModel}
                   disabled={termsLocked || isGenerating}
                 />
                 <CustomSelect
-                  label="尺寸"
+                  label="Size"
                   value={size}
                   options={SIZE_OPTIONS}
                   onChange={setSize}
                   disabled={termsLocked}
                 />
                 <CustomSelect
-                  label="模式"
+                  label="Mode"
                   value={sequentialMode}
                   options={GENERATION_MODE_OPTIONS}
                   onChange={setSequentialMode}
@@ -1960,8 +1967,8 @@ export default function ImageGenerationDesktopPage({
                   type="submit"
                   className="image-send-btn image-floating-send"
                   disabled={termsLocked || isGenerating}
-                  aria-label="生成图片"
-                  title="生成图片"
+                  aria-label="Generate image"
+                  title="Generate image"
                 >
                   {isGenerating ? <Loader2 size={16} className="spin" /> : <SendHorizonal size={16} />}
                 </button>
@@ -1969,11 +1976,10 @@ export default function ImageGenerationDesktopPage({
             </div>
           </section>
 
-          <div className="image-ideogram-feed-head">
+          <div className="image-ideogram-feed-head" data-library-view={libraryView}>
             {libraryView === "explore" ? (
               <>
-                <div className="image-explore-tabs" role="tablist" aria-label="探索分类">
-                  <Search size={15} />
+                <div className="image-explore-tabs" role="tablist" aria-label="Explore categories">
                   {EXPLORE_FILTERS.map((item) => (
                     <button
                       key={item.key}
@@ -1998,11 +2004,11 @@ export default function ImageGenerationDesktopPage({
                       className="image-library-icon-btn"
                       onClick={() => loadHistory()}
                       disabled={termsLocked || historyLoading || historyClearing}
-                      title={historyLoading ? "刷新中..." : "刷新"}
-                      aria-label={historyLoading ? "刷新中..." : "刷新"}
+                      title={historyLoading ? "Refreshing..." : "Refresh"}
+                      aria-label={historyLoading ? "Refreshing..." : "Refresh"}
                     >
                       <span className={historyLoading ? "spin" : ""}>
-                        <InlineGlyph name="refresh" size={15} />
+                        <InlineGlyph name="refresh" size={15} color="#141413" />
                       </span>
                     </button>
                     <button
@@ -2016,10 +2022,10 @@ export default function ImageGenerationDesktopPage({
                         historyDeletingId.length > 0 ||
                         historyPreviewItems.length === 0
                       }
-                      title={historyClearing ? "清空中..." : "清空"}
-                      aria-label={historyClearing ? "清空中..." : "清空"}
+                      title={historyClearing ? "Clearing..." : "Clear"}
+                      aria-label={historyClearing ? "Clearing..." : "Clear"}
                     >
-                      {historyClearing ? <Loader2 size={15} className="spin" /> : <InlineGlyph name="trash" size={15} />}
+                      {historyClearing ? <Loader2 size={15} className="spin" /> : <InlineGlyph name="trash" size={15} color="#141413" />}
                     </button>
                   </div>
                 ) : null}
@@ -2031,7 +2037,7 @@ export default function ImageGenerationDesktopPage({
                       onClick={openCreateCollectionDialog}
                     >
                       <Plus size={14} />
-                      新建收藏夹
+                      New Collection
                     </button>
                     <div className="image-collection-more" ref={collectionMenuRef}>
                       <button
@@ -2040,13 +2046,13 @@ export default function ImageGenerationDesktopPage({
                         onClick={() => setCollectionMenuOpen((prev) => !prev)}
                         aria-haspopup="menu"
                         aria-expanded={collectionMenuOpen}
-                        title="更多管理"
-                        aria-label="更多管理"
+                        title="More actions"
+                        aria-label="More actions"
                       >
                         <span className="image-more-dots" aria-hidden="true">⋯</span>
                       </button>
                       {collectionMenuOpen ? (
-                        <div className="image-collection-more-menu" role="menu" aria-label="收藏夹管理">
+                        <div className="image-collection-more-menu" role="menu" aria-label="Collection management">
                           <button
                             type="button"
                             className="image-collection-more-item"
@@ -2054,7 +2060,7 @@ export default function ImageGenerationDesktopPage({
                             disabled={!activeCollection}
                           >
                             <Pencil size={14} />
-                            重命名
+                            Rename
                           </button>
                           <button
                             type="button"
@@ -2066,7 +2072,7 @@ export default function ImageGenerationDesktopPage({
                             disabled={!activeCollection}
                           >
                             <Trash2 size={14} />
-                            删除收藏夹
+                            Delete collection
                           </button>
                           <button
                             type="button"
@@ -2078,7 +2084,7 @@ export default function ImageGenerationDesktopPage({
                             disabled={!activeCollection}
                           >
                             <Grid3x3 size={14} />
-                            {collectionBatchMode ? "关闭批量管理" : "批量管理"}
+                            {collectionBatchMode ? "Exit batch mode" : "Batch mode"}
                           </button>
                           {collectionBatchMode ? (
                             <button
@@ -2091,7 +2097,7 @@ export default function ImageGenerationDesktopPage({
                               disabled={collectionSelectedKeys.length === 0}
                             >
                               <Trash2 size={14} />
-                              批量移除所选
+                              Remove selected
                             </button>
                           ) : null}
                         </div>
@@ -2103,23 +2109,23 @@ export default function ImageGenerationDesktopPage({
             )}
           </div>
 
-          <section className="image-ideogram-board">
-            <div key={libraryView} className="image-library-view-motion">
+          <section className="image-ideogram-board" data-library-view={libraryView}>
+            <div key={libraryView} className="image-library-view-motion" data-library-view={libraryView}>
               {libraryView === "explore"
-                ? renderGallery(exploreItems, { emptyText: "还没有可展示的图片" })
+                ? renderGallery(exploreItems, { emptyText: "No images to explore yet" })
                 : null}
               {libraryView === "my-images" ? (
-                <div className="image-library-panel">
+                <div className="image-library-panel image-library-panel--history">
                   {historyError ? <div className="image-history-error">{historyError}</div> : null}
                   {renderGallery(galleryItems, {
-                    emptyText: "你还没有历史生成图片",
+                    emptyText: "You have no generated image history yet",
                     allowHistoryDelete: true,
                   })}
                 </div>
               ) : null}
-              {libraryView === "likes" ? renderGallery(likedItems, { emptyText: "还没有点赞图片" }) : null}
+              {libraryView === "likes" ? renderGallery(likedItems, { emptyText: "You haven’t liked any images yet" }) : null}
               {libraryView === "collections" ? (
-                <div className="image-collection-panel">
+                <div className="image-collection-panel image-collection-panel--library">
                   <div className="image-collection-list">
                     {collections.map((item) => (
                       <button
@@ -2146,8 +2152,8 @@ export default function ImageGenerationDesktopPage({
                   </div>
                   {renderGallery(collectionItems, {
                     emptyText: activeCollection
-                      ? "当前收藏夹暂无图片，请在图片卡片点击收藏按钮。"
-                      : "请先创建收藏夹。",
+                      ? ""
+                      : "Create a collection first.",
                     allowRemoveFromCollection: true,
                     enableSelectMode: collectionBatchMode,
                     selectedKeySet: new Set(collectionSelectedKeys),
@@ -2165,8 +2171,8 @@ export default function ImageGenerationDesktopPage({
       {!isMobileSettingsDrawer && !termsAgreed ? (
         <div className="image-privacy-popup" role="dialog" aria-live="polite">
           <p>
-            我们会基于隐私政策处理图片生成相关数据。继续使用前，请先阅读并同意
-            《图片生成功能服务条款》。
+            We process image-generation data according to the privacy policy. Please read and accept the
+            Image Generation Terms before continuing.
           </p>
           <div className="image-privacy-popup-actions">
             <button
@@ -2174,14 +2180,14 @@ export default function ImageGenerationDesktopPage({
               className="image-privacy-link"
               onClick={() => setShowTermsModal(true)}
             >
-              查看条款
+              View terms
             </button>
             <button
               type="button"
               className="image-privacy-accept"
               onClick={() => handleTermsAgreedChange(true)}
             >
-              Accept
+              Agree and continue
             </button>
           </div>
         </div>
@@ -2209,18 +2215,31 @@ export default function ImageGenerationDesktopPage({
               type="button"
               className="image-preview-close"
               onClick={() => setPreviewDialogKey("")}
-              aria-label="关闭预览"
+              aria-label="Close preview"
             >
               <span className="image-close-mark" aria-hidden="true">×</span>
             </button>
             <ProgressiveCachedImage
               key={selectedPreviewUrl}
               src={selectedPreviewUrl}
-              alt="预览图片"
+              alt="Preview image"
               loading="eager"
               containerClassName="image-preview-dialog-image-wrap"
               imageClassName="image-preview-dialog-image"
             />
+            <div className="image-preview-dialog-copy">
+              <div className="image-preview-dialog-overline">Preview</div>
+              <h3>{selectedPreview.prompt || "Generated image preview"}</h3>
+              <p>
+                {[
+                  formatHistoryTime(selectedPreview.createdAt),
+                  String(selectedPreview.model || "").trim(),
+                  String(selectedPreview.size || "").trim(),
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "Review the full details of the current generated result."}
+              </p>
+            </div>
             <div className="image-preview-dialog-actions">
               <button
                 type="button"
@@ -2228,7 +2247,7 @@ export default function ImageGenerationDesktopPage({
                 onClick={() => toggleLikeItem(selectedPreview.key)}
               >
                 <InlineGlyph name="heart" size={14} />
-                {likedKeySet.has(selectedPreview.key) ? "已喜欢" : "喜欢"}
+                {likedKeySet.has(selectedPreview.key) ? "Liked" : "Like"}
               </button>
               <button
                 type="button"
@@ -2236,7 +2255,7 @@ export default function ImageGenerationDesktopPage({
                 onClick={() => addItemToCollection(selectedPreview.key)}
               >
                 <InlineGlyph name="folder" size={14} />
-                收藏
+                Save
               </button>
               <a
                 href={selectedPreviewUrl}
@@ -2248,7 +2267,7 @@ export default function ImageGenerationDesktopPage({
                 }}
               >
                 <Download size={14} />
-                下载
+                Download
               </a>
               <a
                 href={selectedPreviewUrl}
@@ -2261,7 +2280,7 @@ export default function ImageGenerationDesktopPage({
                 }}
               >
                 <ImagePlus size={14} />
-                新标签打开
+                Open in new tab
               </a>
             </div>
           </div>
@@ -2281,11 +2300,11 @@ export default function ImageGenerationDesktopPage({
             className="image-collection-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label={collectionDialogMode === "create" ? "新建收藏夹" : "重命名收藏夹"}
+            aria-label={collectionDialogMode === "create" ? "Create collection" : "Rename collection"}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="image-collection-dialog-head">
-              <h3>{collectionDialogMode === "create" ? "新建收藏夹" : "重命名收藏夹"}</h3>
+              <h3>{collectionDialogMode === "create" ? "Create Collection" : "Rename Collection"}</h3>
               <button
                 type="button"
                 className="image-terms-modal-close"
@@ -2293,8 +2312,8 @@ export default function ImageGenerationDesktopPage({
                   setCollectionDialogMode("");
                   setCollectionDialogDraft("");
                 }}
-                aria-label="关闭"
-                title="关闭"
+                aria-label="Close"
+                title="Close"
               >
                 <span className="image-close-mark" aria-hidden="true">×</span>
               </button>
@@ -2303,7 +2322,7 @@ export default function ImageGenerationDesktopPage({
               <input
                 value={collectionDialogDraft}
                 onChange={(event) => setCollectionDialogDraft(event.target.value)}
-                placeholder="请输入收藏夹名称"
+                placeholder="Enter a collection name"
                 autoFocus
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
@@ -2321,7 +2340,7 @@ export default function ImageGenerationDesktopPage({
                   setCollectionDialogDraft("");
                 }}
               >
-                取消
+                Cancel
               </button>
               <button
                 type="button"
@@ -2329,7 +2348,7 @@ export default function ImageGenerationDesktopPage({
                 onClick={submitCollectionDialog}
                 disabled={!collectionDialogDraft.trim()}
               >
-                确定
+                Confirm
               </button>
             </div>
           </div>
@@ -2346,20 +2365,26 @@ export default function ImageGenerationDesktopPage({
             className="image-terms-modal-card"
             role="dialog"
             aria-modal="true"
-            aria-label="图片生成功能服务条款"
+            aria-label="Image Generation Terms"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="image-terms-modal-header">
-              <h3>图片生成功能服务条款</h3>
+              <div className="image-modal-title-group">
+                <div className="image-modal-overline">Terms</div>
+                <h3>Image Generation Terms</h3>
+              </div>
               <button
                 type="button"
                 className="image-terms-modal-close"
                 onClick={() => setShowTermsModal(false)}
-                aria-label="关闭条款"
-                title="关闭条款"
+                aria-label="Close terms"
+                title="Close terms"
               >
                 <span className="image-close-mark" aria-hidden="true">×</span>
               </button>
+            </div>
+            <div className="image-terms-modal-intro">
+              Before generating images, please review the data usage and content rules to avoid access being locked later.
             </div>
             <pre className="image-terms-modal-content">{termsContent}</pre>
             <div className="image-terms-modal-footer">
@@ -2372,7 +2397,7 @@ export default function ImageGenerationDesktopPage({
                     setShowTermsModal(false);
                   }}
                 >
-                  我已阅读并同意
+                  I have read and agree
                 </button>
               )}
               <button
@@ -2380,7 +2405,7 @@ export default function ImageGenerationDesktopPage({
                 className="image-terms-secondary-btn"
                 onClick={() => setShowTermsModal(false)}
               >
-                关闭
+                Close
               </button>
             </div>
           </div>
