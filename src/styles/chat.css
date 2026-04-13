@@ -3405,7 +3405,7 @@ select.group-modal-input {
 }
 
 .md-body {
-  line-height: 1.78;
+  line-height: 1.5;
   color: var(--text);
   white-space: normal;
   overflow-wrap: anywhere;
@@ -3451,7 +3451,21 @@ select.group-modal-input {
 }
 
 .md-body p {
-  margin: 0.4em 0;
+  margin: 1.3em 0;
+  line-height: 1.5;
+}
+
+.md-body p:last-child {
+  margin-bottom: 5px;
+}
+
+.md-body p:first-child {
+  margin-top: 0;
+}
+
+.md-body p:has(+ ul),
+.md-body p:has(+ ol) {
+  margin-bottom: 0;
 }
 
 .cjk-punctuation {
@@ -3472,11 +3486,38 @@ select.group-modal-input {
 
 .md-body ul,
 .md-body ol {
-  margin: 0.45em 0 0.45em 1.3em;
+  margin: 0.6em 0;
+  padding-left: 1.5em;
+}
+
+.md-body ul {
+  list-style: initial;
+}
+
+.md-body ol {
+  list-style: decimal;
 }
 
 .md-body li {
-  margin: 0.2em 0;
+  margin-bottom: 0.5em;
+}
+
+.md-body li > p {
+  margin: 0;
+  line-height: inherit;
+}
+
+.md-body li > p + p {
+  margin-top: 0.45em;
+}
+
+.md-body li::marker {
+  color: var(--muted);
+}
+
+.md-body li > ul,
+.md-body li > ol {
+  margin: 0.35em 0;
 }
 
 .md-body blockquote {
@@ -3488,6 +3529,15 @@ select.group-modal-input {
   border-radius: 0 8px 8px 0;
 }
 
+.md-body blockquote p {
+  margin: 0;
+  line-height: inherit;
+}
+
+.md-body blockquote p + p {
+  margin-top: 0.45em;
+}
+
 .md-body code {
   background: var(--surface-soft);
   color: var(--text);
@@ -3495,14 +3545,15 @@ select.group-modal-input {
   padding: 0.12em 0.35em;
   font-size: 0.9em;
   font-family:
-    "SFMono-Regular", "SFMono", "Cascadia Code", "JetBrains Mono", "Fira Code",
+    "Cascadia Code", "SFMono-Regular", "SFMono", "JetBrains Mono", "Fira Code",
     Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 .md-body pre {
   margin: 0.7em 0;
-  background: #2f2a24;
-  color: #e2e8f0;
+  background: var(--surface-soft);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
   overflow: auto;

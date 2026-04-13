@@ -780,20 +780,24 @@ const MessageList = forwardRef(function MessageList({
           <div className="messages-bottom-spacer" aria-hidden="true" />
         </div>
       </div>
-      {askPopover.open && typeof onAskSelection === "function" && (
-        <button
-          type="button"
-          className="selection-ask-btn"
-          style={{
-            left: `${askPopover.x}px`,
-            top: `${askPopover.y}px`,
-          }}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onAskClick}
-        >
-          询问
-        </button>
-      )}
+      {askPopover.open &&
+        typeof onAskSelection === "function" &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <button
+            type="button"
+            className="selection-ask-btn"
+            style={{
+              left: `${askPopover.x}px`,
+              top: `${askPopover.y}px`,
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onAskClick}
+          >
+            询问
+          </button>,
+          document.body,
+        )}
     </>
   );
 });
@@ -1522,11 +1526,22 @@ function getElementFromNode(node) {
 }
 
 function getAskPopoverAnchorRect(range) {
-  const lineRects = Array.from(range.getClientRects())
-    .filter((rect) => rect.width > 0 && rect.height > 0)
-    .sort((a, b) => (a.top === b.top ? a.left - b.left : a.top - b.top));
+  const rects = getVisualSelectionRects(range);
+  if (rects.length === 0) {
+    return range.getBoundingClientRect();
+  }
 
-  return lineRects[0] || range.getBoundingClientRect();
+  const rows = groupRectsByVisualLine(rects);
+  if (rows.length === 0) {
+    return range.getBoundingClientRect();
+  }
+
+  rows.sort((a, b) => (a.top === b.top ? a.left - b.left : a.top - b.top));
+  return mergeSelectionRects(rows[0].rects);
+}
+
+function isVisibleRect(rect) {
+  return !!rect && rect.width > 0 && rect.height > 0;
 }
 
 function clampToViewport(value, margin) {
@@ -1534,6 +1549,95 @@ function clampToViewport(value, margin) {
     typeof window === "undefined" ? 0 : Number(window.innerWidth) || 0;
   if (viewportWidth <= margin * 2) return value;
   return Math.min(viewportWidth - margin, Math.max(margin, value));
+}
+
+function mergeSelectionRects(rects) {
+  if (!Array.isArray(rects) || rects.length === 0) {
+    return { left: 0, top: 0, width: 0, height: 0 };
+  }
+
+  const left = Math.min(...rects.map((rect) => rect.left));
+  const right = Math.max(...rects.map((rect) => rect.right));
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const bottom = Math.max(...rects.map((rect) => rect.bottom));
+
+  return {
+    left,
+    top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+    right,
+    bottom,
+  };
+}
+
+function getVisualSelectionRects(range) {
+  if (!range) return [];
+
+  const rawRects = Array.from(range.getClientRects())
+    .filter(isVisibleRect)
+    .sort((a, b) => (a.top === b.top ? a.left - b.left : a.top - b.top));
+
+  if (rawRects.length <= 1) {
+    return rawRects;
+  }
+
+  const medianHeight = median(rawRects.map((rect) => rect.height));
+  const medianArea = median(rawRects.map((rect) => rect.width * rect.height));
+  if (medianHeight <= 0 || medianArea <= 0) {
+    return rawRects;
+  }
+
+  const filteredRects = rawRects.filter((rect) => {
+    const area = rect.width * rect.height;
+    if (rect.height > medianHeight * 1.8) return false;
+    if (area > medianArea * 8 && rect.height > medianHeight * 1.25) return false;
+    return true;
+  });
+
+  return filteredRects.length > 0 ? filteredRects : rawRects;
+}
+
+function groupRectsByVisualLine(rects) {
+  if (!Array.isArray(rects) || rects.length === 0) return [];
+
+  return rects.reduce((rows, rect) => {
+    const row = rows.find((candidate) => rectsAreSameLine(candidate, rect));
+    if (!row) {
+      rows.push({
+        ...mergeSelectionRects([rect]),
+        rects: [rect],
+        referenceHeight: rect.height,
+      });
+      return rows;
+    }
+
+    row.rects.push(rect);
+    Object.assign(row, mergeSelectionRects(row.rects), {
+      rects: row.rects,
+      referenceHeight: row.referenceHeight,
+    });
+    return rows;
+  }, []);
+}
+
+function rectsAreSameLine(row, rect) {
+  if (!row || !rect) return false;
+  const overlap = Math.min(row.bottom, rect.bottom) - Math.max(row.top, rect.top);
+  const minHeight = Math.min(row.referenceHeight || row.height || 0, rect.height || 0);
+  return overlap >= minHeight * 0.45;
+}
+
+function median(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const sorted = values
+    .map((value) => Number(value) || 0)
+    .sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) {
+    return sorted[middle];
+  }
+  return (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function readAttachmentUrl(attachment) {
