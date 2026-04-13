@@ -67,7 +67,7 @@
   color: #1f2937;
   font-size: 13px;
   line-height: 1.6;
-  font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+  font-family: var(--app-code-font-family);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: calc(100vh - 220px);

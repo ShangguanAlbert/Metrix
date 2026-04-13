@@ -658,6 +658,31 @@ const MessageList = forwardRef(function MessageList({
     });
   }, []);
 
+  const handleMessageAreaCopy = useCallback((event) => {
+    const clipboard = event?.clipboardData;
+    if (!clipboard || typeof window === "undefined") return;
+
+    const root = rootRef.current;
+    const selection = window.getSelection();
+    if (!root || !selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+
+    const anchorEl = getElementFromNode(selection.anchorNode);
+    const focusEl = getElementFromNode(selection.focusNode);
+    if (!anchorEl || !focusEl) return;
+    if (!root.contains(anchorEl) || !root.contains(focusEl)) return;
+
+    const anchorText = anchorEl.closest(".msg-text");
+    const focusText = focusEl.closest(".msg-text");
+    if (!anchorText || !focusText) return;
+
+    const text = selection.toString();
+    if (!text) return;
+
+    event.preventDefault();
+    clipboard.clearData();
+    clipboard.setData("text/plain", text);
+  }, []);
+
   const updateAskPopoverFromSelection = useCallback(() => {
     if (typeof onAskSelection !== "function") {
       closeAskPopover();
@@ -760,6 +785,7 @@ const MessageList = forwardRef(function MessageList({
         ref={setScrollerRef}
         style={virtuosoStyle}
         onScroll={checkIsAtLatest}
+        onCopy={handleMessageAreaCopy}
         onMouseUp={onMessageAreaMouseUp}
         onKeyUp={onMessageAreaMouseUp}
       >

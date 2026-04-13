@@ -1712,9 +1712,7 @@
   resize: none;
   outline: none;
   overflow: auto;
-  font-family:
-    "SFMono-Regular", "JetBrains Mono", "Fira Code", "Menlo", "Monaco",
-    "Consolas", monospace;
+  font-family: var(--app-code-font-family);
   font-size: calc(var(--notes-editor-font-size) * 0.94);
   line-height: 1.72;
   color: var(--notes-editor-text);

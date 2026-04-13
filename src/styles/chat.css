@@ -2744,7 +2744,7 @@ select.group-modal-input {
   color: #e5eefc;
   font-size: 13px;
   line-height: 1.65;
-  font-family: "SFMono-Regular", "SF Mono", "JetBrains Mono", "Fira Code", "Menlo", "Consolas", monospace;
+  font-family: var(--app-code-font-family);
   white-space: pre;
   word-break: normal;
   scrollbar-width: none;
@@ -2782,7 +2782,7 @@ select.group-modal-input {
   text-align: right;
   font-size: 12px;
   line-height: 1.65;
-  font-family: "SFMono-Regular", "SF Mono", "JetBrains Mono", "Fira Code", "Menlo", "Consolas", monospace;
+  font-family: var(--app-code-font-family);
   user-select: none;
 }
 
@@ -3544,9 +3544,7 @@ select.group-modal-input {
   border-radius: 6px;
   padding: 0.12em 0.35em;
   font-size: 0.9em;
-  font-family:
-    "Cascadia Code", "SFMono-Regular", "SFMono", "JetBrains Mono", "Fira Code",
-    Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--app-code-font-family);
 }
 
 .md-body pre {
