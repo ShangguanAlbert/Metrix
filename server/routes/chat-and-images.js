@@ -1988,19 +1988,12 @@ export function registerChatAndImageRoutes(app, deps) {
     upload.array("files", MAX_FILES),
     async (req, res) => {
       if ((await assertPartyAgentPanelRoomAccess(req, res)) === false) return;
-      const requestedAgentId = sanitizeAgent(req.body?.agentId || "A");
-      const teacherScopedLockedAgentId = resolveTeacherScopedLockedAgentId(
-        req.authTeacherScopeKey,
-      );
-      const agentId = teacherScopedLockedAgentId || requestedAgentId;
+      const agentId = sanitizeAgent(req.body?.agentId || "A");
       const sessionId = sanitizeId(req.body?.sessionId, "");
-      const requestedSmartContextEnabled = sanitizeRuntimeBoolean(
+      const smartContextEnabled = sanitizeRuntimeBoolean(
         req.body?.smartContextEnabled,
         false,
       );
-      const smartContextEnabled = teacherScopedLockedAgentId
-        ? true
-        : requestedSmartContextEnabled;
       const contextMode = sanitizeSmartContextMode(req.body?.contextMode);
       const volcengineFileRefs = readRequestVolcengineFileRefs(
         req.body?.volcengineFileRefs,

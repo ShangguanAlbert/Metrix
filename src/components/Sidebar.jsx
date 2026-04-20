@@ -1,4 +1,5 @@
 import {
+  Music,
   CheckSquare,
   ChevronDown,
   ChevronRight,
@@ -16,7 +17,7 @@ import {
   Settings,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const SIDEBAR_ROW_ENTER_MS = 560;
@@ -31,10 +32,11 @@ export default function Sidebar({
   onNewChat,
   onPrimaryAction,
   primaryActionLabel = "新聊天",
-  PrimaryActionIcon = MessageSquarePlus,
+  primaryActionIcon = MessageSquarePlus,
   activeWorkbench = "",
   onOpenNotes,
   onOpenImageGeneration,
+  onOpenMusicGeneration,
   onOpenGroupChat,
   onDeleteSession,
   onBatchDeleteSessions,
@@ -84,6 +86,7 @@ export default function Sidebar({
   const exitTimersRef = useRef(new Map());
   const batchDeleteTimerRef = useRef(0);
   const menuCloseTimerRef = useRef(0);
+  const PrimaryActionIconComponent = primaryActionIcon;
 
   const grouped = useMemo(() => {
     const map = new Map();
@@ -225,13 +228,13 @@ export default function Sidebar({
     resetCreateGroupForm();
   }
 
-  function clearMenuCloseTimer() {
+  const clearMenuCloseTimer = useCallback(() => {
     if (!menuCloseTimerRef.current) return;
     window.clearTimeout(menuCloseTimerRef.current);
     menuCloseTimerRef.current = 0;
-  }
+  }, []);
 
-  function closeChatMenu() {
+  const closeChatMenu = useCallback(() => {
     if (menuSessionId && menuAnchor) {
       setClosingMenuState({
         sessionId: menuSessionId,
@@ -247,11 +250,11 @@ export default function Sidebar({
     setMenuSessionId("");
     setMoveMenuSessionId("");
     setMenuAnchor(null);
-  }
+  }, [clearMenuCloseTimer, menuAnchor, menuSessionId, moveMenuSessionId]);
 
-  function closeProjectMenu() {
+  const closeProjectMenu = useCallback(() => {
     setProjectMenuGroupId("");
-  }
+  }, []);
 
   function markSessionsExiting(sessionIds) {
     const valid = new Set(sessions.map((item) => item.id));
@@ -452,32 +455,24 @@ export default function Sidebar({
       window.removeEventListener("resize", onWindowChanged);
       window.removeEventListener("scroll", onWindowChanged, true);
     };
-  }, [menuSessionId, projectMenuGroupId]);
+  }, [closeChatMenu, closeProjectMenu, menuSessionId, projectMenuGroupId]);
 
-  useEffect(() => {
-    setCollapsedProjectIds((prev) => {
-      const next = {};
-      let changed = false;
-
-      groups.forEach((group) => {
-        const groupId = String(group?.id || "").trim();
-        if (!groupId) return;
-        const shouldExpand = groupId === activeGroupId;
-        const previousValue = Object.prototype.hasOwnProperty.call(prev, groupId)
-          ? !!prev[groupId]
-          : !shouldExpand;
-        const nextValue = shouldExpand ? false : previousValue;
-        next[groupId] = nextValue;
-        if (previousValue !== nextValue) changed = true;
-      });
-
-      if (Object.keys(prev).length !== Object.keys(next).length) {
-        changed = true;
-      }
-
-      return changed ? next : prev;
+  const effectiveCollapsedProjectIds = useMemo(() => {
+    const next = {};
+    groups.forEach((group) => {
+      const groupId = String(group?.id || "").trim();
+      if (!groupId) return;
+      const shouldExpand = groupId === activeGroupId;
+      const previousValue = Object.prototype.hasOwnProperty.call(
+        collapsedProjectIds,
+        groupId,
+      )
+        ? !!collapsedProjectIds[groupId]
+        : !shouldExpand;
+      next[groupId] = shouldExpand ? false : previousValue;
     });
-  }, [activeGroupId, groups]);
+    return next;
+  }, [activeGroupId, collapsedProjectIds, groups]);
 
   useEffect(() => {
     const previousIds = previousSessionIdsRef.current;
@@ -520,7 +515,7 @@ export default function Sidebar({
       }
       clearMenuCloseTimer();
     },
-    [],
+    [clearMenuCloseTimer],
   );
 
   function renderSessionRow(session) {
@@ -772,7 +767,7 @@ export default function Sidebar({
               onClick={handleNewChatClick}
               disabled={sessionActionsDisabled}
             >
-              <PrimaryActionIcon size={17} />
+              <PrimaryActionIconComponent size={17} />
               <span>{primaryActionLabel}</span>
             </button>
           </div>
@@ -794,6 +789,14 @@ export default function Sidebar({
               >
                 <ImagePlus size={17} />
                 <span>图片生成</span>
+              </button>
+              <button
+                className={`sidebar-music-entry${activeWorkbench === "music" ? " active" : ""}`}
+                onClick={() => onOpenMusicGeneration?.()}
+                type="button"
+              >
+                <Music size={17} />
+                <span>音乐生成</span>
               </button>
               <button
                 className={`sidebar-party-entry${activeWorkbench === "party" ? " active" : ""}`}
@@ -898,7 +901,7 @@ export default function Sidebar({
 
             {!projectsSectionCollapsed &&
               grouped.groups.map((g) => {
-                const isCollapsed = !!collapsedProjectIds[g.id];
+                const isCollapsed = !!effectiveCollapsedProjectIds[g.id];
                 const isProjectActive = g.sessions.some(
                   (session) => session.id === activeId,
                 );

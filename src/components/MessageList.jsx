@@ -27,6 +27,7 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import { resolveReasoningTaggedText } from "../../shared/reasoningTags.js";
 import StreamingMarkdown from "./streaming/StreamingMarkdown.jsx";
 import { useSessionStreamDraft } from "../pages/chat/streamDraftStore.js";
 import { normalizeRuntimeSnapshot } from "../pages/chat/chatHelpers.js";
@@ -959,13 +960,26 @@ const MessageItem = memo(function MessageItem({
   const [previewImage, setPreviewImage] = useState(null);
   const [previewDownloadPending, setPreviewDownloadPending] = useState(false);
   const rawReasoning = String(m.reasoning || "");
-  const rawContent = String(m.content || "");
+  const resolvedMessageText = useMemo(
+    () => resolveReasoningTaggedText(m.content || ""),
+    [m.content],
+  );
+  const embeddedReasoning = resolvedMessageText.reasoning;
+  const mergedReasoning =
+    rawReasoning && embeddedReasoning
+      ? rawReasoning.includes(embeddedReasoning)
+        ? rawReasoning
+        : embeddedReasoning.includes(rawReasoning)
+          ? embeddedReasoning
+          : `${rawReasoning}\n\n${embeddedReasoning}`
+      : rawReasoning || embeddedReasoning;
+  const rawContent = resolvedMessageText.content;
   const reasoningMarkdown = m.streaming
     ? ""
-    : normalizeRenderedMarkdown(rawReasoning);
+    : normalizeRenderedMarkdown(mergedReasoning);
   const contentMarkdown = m.streaming ? "" : normalizeRenderedMarkdown(rawContent);
   const hasReasoningContent = m.streaming
-    ? rawReasoning.length > 0
+    ? mergedReasoning.length > 0
     : !!reasoningMarkdown.trim();
   const hasContent = m.streaming ? rawContent.length > 0 : !!contentMarkdown.trim();
   const runtime = normalizeRuntimeSnapshot(m.runtime);
@@ -1235,7 +1249,7 @@ const MessageItem = memo(function MessageItem({
         <div className={`msg-bubble ${m.role}`}>
         {hasReasoningContent && (
           <ReasoningDisclosure
-            reasoningContent={rawReasoning}
+            reasoningContent={mergedReasoning}
             isStreaming={!!m.streaming}
             normalizeContent={normalizeRenderedMarkdown}
             onReasoningToggle={onReasoningToggle}

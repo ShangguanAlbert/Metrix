@@ -43,6 +43,11 @@ import {
   shouldUseAliyunDashScopeMultimodalEndpoint,
 } from "../providers/aliyun/index.js";
 import {
+  buildMiniMaxChatPayload,
+  buildMiniMaxProviderConfig,
+  formatMiniMaxUpstreamError,
+} from "../providers/minimax/index.js";
+import {
   ALIYUN_SEARCH_CITATION_FORMATS,
   ALIYUN_SEARCH_FRESHNESS_OPTIONS,
   ALIYUN_SEARCH_STRATEGIES,
@@ -61,6 +66,10 @@ import {
   FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
   parseFixedStudentAccounts,
 } from "../../shared/fixedStudentAccounts.js";
+import {
+  createReasoningTagStreamResolver,
+  resolveReasoningTaggedText,
+} from "../../shared/reasoningTags.js";
 
 dotenv.config();
 
@@ -98,9 +107,7 @@ const USER_BROWSER_HEARTBEAT_INTERVAL_MS = 20 * 1000;
 const USER_BROWSER_HEARTBEAT_STALE_MS = 70 * 1000;
 const AGENT_IDS = ["A", "B", "C", "D"];
 const ADMIN_CONFIG_KEY = "global";
-const TEACHER_SCOPE_LOCKED_AGENT_MAP = Object.freeze({
-  "yang-junfeng": "C",
-});
+const TEACHER_SCOPE_LOCKED_AGENT_MAP = Object.freeze({});
 const CLASS_NAME_JIAOJI_231 = "教技231";
 const CLASS_NAME_810 = "810班";
 const CLASS_NAME_811 = "811班";
@@ -270,6 +277,9 @@ if (!groupChatOssClient) {
 const AGENT_D_FIXED_PROVIDER = "aliyun";
 const AGENT_D_FIXED_MODEL = "qwen3.5-plus";
 const AGENT_D_FIXED_MAX_OUTPUT_TOKENS = 65536;
+const AGENT_B_FIXED_PROVIDER = "minimax";
+const AGENT_B_FIXED_MODEL = "MiniMax-M2.7";
+const AGENT_B_FIXED_PROTOCOL = "chat";
 const AGENT_A_FIXED_PROVIDER = "packycode";
 const AGENT_A_FIXED_MODEL = "gpt-5.4";
 const AGENT_A_FIXED_PROTOCOL = "chat";
@@ -382,8 +392,11 @@ const AGENT_RUNTIME_DEFAULT_OVERRIDES = Object.freeze({
     enableWebSearch: false,
   }),
   B: Object.freeze({
-    contextWindowTokens: 200000,
-    maxInputTokens: 200000,
+    provider: AGENT_B_FIXED_PROVIDER,
+    model: AGENT_B_FIXED_MODEL,
+    protocol: AGENT_B_FIXED_PROTOCOL,
+    contextWindowTokens: 204800,
+    maxInputTokens: 204800,
     maxOutputTokens: 128000,
     maxReasoningTokens: 128000,
   }),
@@ -1230,6 +1243,42 @@ generatedImageHistorySchema.index(
 const GeneratedImageHistory =
   mongoose.models.GeneratedImageHistory ||
   mongoose.model("GeneratedImageHistory", generatedImageHistorySchema);
+
+const generatedMusicHistorySchema = new mongoose.Schema(
+  {
+    userId: { type: String, required: true, index: true },
+    title: { type: String, default: "" },
+    prompt: { type: String, default: "" },
+    lyrics: { type: String, default: "" },
+    isInstrumental: { type: Boolean, default: false },
+    lyricsOptimizer: { type: Boolean, default: false },
+    model: { type: String, default: "" },
+    format: { type: String, default: "mp3" },
+    sampleRate: { type: Number, default: 0 },
+    bitrate: { type: Number, default: 0 },
+    durationMs: { type: Number, default: 0 },
+    audioStorageType: { type: String, default: "mongo" },
+    audioUrl: { type: String, default: "" },
+    ossKey: { type: String, default: "" },
+    ossBucket: { type: String, default: "" },
+    ossRegion: { type: String, default: "" },
+    audioMimeType: { type: String, default: "audio/mpeg" },
+    audioSize: { type: Number, default: 0 },
+    audioData: { type: Buffer, default: Buffer.alloc(0) },
+  },
+  {
+    timestamps: true,
+    collection: "generated_music_histories",
+  },
+);
+generatedMusicHistorySchema.index(
+  { userId: 1, createdAt: -1 },
+  { name: "ix_generated_music_histories_user_created_at_desc" },
+);
+
+const GeneratedMusicHistory =
+  mongoose.models.GeneratedMusicHistory ||
+  mongoose.model("GeneratedMusicHistory", generatedMusicHistorySchema);
 
 const groupChatRoomReadStateSchema = new mongoose.Schema(
   {
@@ -6858,6 +6907,76 @@ function buildAdminGeneratedImageHistoryThumbnailPath(imageId) {
   );
 }
 
+function buildGeneratedMusicHistoryContentPath(musicId) {
+  const safeMusicId = sanitizeId(musicId, "");
+  if (!safeMusicId) return "";
+  return withBasePath(
+    `/api/music/history/${encodeURIComponent(safeMusicId)}/content`,
+    APP_BASE_PATH,
+  );
+}
+
+function normalizeGeneratedMusicFormat(value) {
+  const key = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (key === "wav" || key === "pcm") return key;
+  return "mp3";
+}
+
+function normalizeGeneratedMusicMimeType(value, format = "mp3") {
+  const text = sanitizeGroupChatFileMimeType(value);
+  if (text.startsWith("audio/")) return text;
+  const safeFormat = normalizeGeneratedMusicFormat(format);
+  if (safeFormat === "wav") return "audio/wav";
+  if (safeFormat === "pcm") return "audio/pcm";
+  return "audio/mpeg";
+}
+
+function toGeneratedMusicHistoryItem(doc) {
+  const safeId = sanitizeId(doc?._id, "");
+  const format = normalizeGeneratedMusicFormat(doc?.format);
+  const ossKey = sanitizeGroupChatOssObjectKey(doc?.ossKey);
+  return {
+    _id: safeId,
+    title: sanitizeText(doc?.title, "", 80),
+    model: sanitizeText(doc?.model, "", 120),
+    prompt: sanitizeText(doc?.prompt, "", 2000),
+    lyrics: sanitizeText(doc?.lyrics, "", 3500),
+    isInstrumental: !!doc?.isInstrumental,
+    lyricsOptimizer: !!doc?.lyricsOptimizer,
+    format,
+    sampleRate: sanitizeRuntimeInteger(doc?.sampleRate, 0, 0, 192000),
+    bitrate: sanitizeRuntimeInteger(doc?.bitrate, 0, 0, 1000000),
+    durationMs: sanitizeRuntimeInteger(doc?.durationMs, 0, 0, 24 * 60 * 60 * 1000),
+    audioSize: sanitizeRuntimeInteger(doc?.audioSize, 0, 0, Number.MAX_SAFE_INTEGER),
+    hasOssBackup:
+      sanitizeGroupChatFileStorageType(doc?.audioStorageType) === "oss" ||
+      !!ossKey,
+    createdAt: sanitizeIsoDate(doc?.createdAt),
+    contentPath: buildGeneratedMusicHistoryContentPath(safeId),
+  };
+}
+
+async function deleteGeneratedMusicHistoryOssObjects(historyItems) {
+  const docs = Array.isArray(historyItems) ? historyItems : [];
+  const failedKeys = [];
+  let deletedCount = 0;
+
+  for (const doc of docs) {
+    const ossKey = sanitizeGroupChatOssObjectKey(doc?.ossKey);
+    if (!ossKey) continue;
+    try {
+      const deleted = await deleteGroupChatOssObject(ossKey);
+      if (deleted) deletedCount += 1;
+    } catch {
+      failedKeys.push(ossKey);
+    }
+  }
+
+  return { deletedCount, failedKeys };
+}
+
 function parseTeacherScopedStorageUserId(storageUserId) {
   const raw = sanitizeId(storageUserId, "");
   if (!raw) {
@@ -7304,6 +7423,16 @@ function buildChatRequestPayload({
   config,
   reasoning,
 }) {
+  if (provider === "minimax") {
+    return buildMiniMaxChatPayload({
+      model,
+      messages,
+      systemPrompt,
+      config,
+      reasoningEnabled: !!reasoning?.enabled,
+    });
+  }
+
   const fixedSampling = isVolcengineFixedSamplingModel(model);
   const finalMessages = [];
   if (systemPrompt) {
@@ -8079,6 +8208,10 @@ function resolveRequestProtocol(requestedProtocol, provider, model = "") {
     return { supported: true, value: "chat", forced: protocol !== "chat" };
   }
 
+  if (provider === "minimax") {
+    return { supported: true, value: "chat", forced: protocol !== "chat" };
+  }
+
   return { supported: true, value: "chat", forced: protocol !== "chat" };
 }
 
@@ -8790,6 +8923,7 @@ async function pipeOpenRouterSse(upstream, res, reasoningEnabled) {
   let sawReasoning = false;
   let latestUsage = null;
   let sawDone = false;
+  const taggedReasoningResolver = createReasoningTagStreamResolver();
 
   const processSseBlock = (block) => {
     const data = extractSseDataPayload(block);
@@ -8831,21 +8965,28 @@ async function pipeOpenRouterSse(upstream, res, reasoningEnabled) {
     const reasoningDeltaText =
       extractDeltaText(delta.reasoning) ||
       extractDeltaText(delta.reasoning_content) ||
-      extractDeltaText(delta.thinking);
+      extractDeltaText(delta.thinking) ||
+      extractReasoningDetailsText(delta.reasoning_details);
     const reasoningFallbackText = sawReasoning
       ? ""
       : extractDeltaText(choice?.message?.reasoning) ||
-        extractDeltaText(choice?.message?.reasoning_content);
+        extractDeltaText(choice?.message?.reasoning_content) ||
+        extractReasoningDetailsText(choice?.message?.reasoning_details);
     const reasoningText = reasoningDeltaText || reasoningFallbackText;
+    const taggedText = reasoningEnabled
+      ? taggedReasoningResolver.push(contentText)
+      : { content: contentText, reasoning: "" };
+    const finalContentText = taggedText.content;
+    const finalReasoningText = reasoningText || taggedText.reasoning;
 
-    if (contentText) {
+    if (finalContentText) {
       sawContent = true;
-      writeEvent(res, "token", { text: contentText });
+      writeEvent(res, "token", { text: finalContentText });
     }
 
-    if (reasoningEnabled && reasoningText) {
+    if (reasoningEnabled && finalReasoningText) {
       sawReasoning = true;
-      writeEvent(res, "reasoning_token", { text: reasoningText });
+      writeEvent(res, "reasoning_token", { text: finalReasoningText });
     }
     return false;
   };
@@ -8871,6 +9012,18 @@ async function pipeOpenRouterSse(upstream, res, reasoningEnabled) {
     processSseBlock(tail);
   }
 
+  if (reasoningEnabled) {
+    const finalTaggedText = taggedReasoningResolver.flush();
+    if (finalTaggedText.content) {
+      sawContent = true;
+      writeEvent(res, "token", { text: finalTaggedText.content });
+    }
+    if (finalTaggedText.reasoning) {
+      sawReasoning = true;
+      writeEvent(res, "reasoning_token", { text: finalTaggedText.reasoning });
+    }
+  }
+
   if (latestUsage) {
     writeEvent(res, "usage", {
       usage: latestUsage,
@@ -8883,6 +9036,18 @@ async function pipeOpenRouterSse(upstream, res, reasoningEnabled) {
   if (!sawContent) {
     throw new Error("上游未返回有效回答内容。");
   }
+}
+
+function extractReasoningDetailsText(value) {
+  const list = Array.isArray(value) ? value : [];
+  return list
+    .map((item) =>
+      extractDeltaText(item?.text) ||
+      extractDeltaText(item?.reasoning) ||
+      extractDeltaText(item?.content),
+    )
+    .filter(Boolean)
+    .join("");
 }
 
 async function pipeResponsesSse(
@@ -9486,6 +9651,9 @@ function getModelByAgent(agentId, runtimeConfig = null) {
   if (targetAgent === "A") {
     return AGENT_A_FIXED_MODEL;
   }
+  if (targetAgent === "B") {
+    return AGENT_B_FIXED_MODEL;
+  }
   if (targetAgent === "C") {
     return AGENT_C_FIXED_MODEL;
   }
@@ -9495,14 +9663,14 @@ function getModelByAgent(agentId, runtimeConfig = null) {
 
   const defaults = {
     A: "doubao-seed-1-6-251015",
-    B: "glm-4-7-251222",
+    B: AGENT_B_FIXED_MODEL,
     C: "deepseek-v3-2-251201",
     D: AGENT_D_FIXED_MODEL,
   };
 
   const envMap = {
     A: process.env.AGENT_MODEL_A,
-    B: process.env.AGENT_MODEL_B,
+    B: "",
     C: process.env.AGENT_MODEL_C,
     D: "",
   };
@@ -10212,6 +10380,8 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
   const provider =
     normalizedAgentId === "C"
       ? AGENT_C_FIXED_PROVIDER
+      : normalizedAgentId === "B"
+        ? AGENT_B_FIXED_PROVIDER
       : sanitizeRuntimeProvider(source.provider);
   const protocol =
     provider === "packycode" ? "chat" : sanitizeRuntimeProtocol(source.protocol);
@@ -10529,6 +10699,16 @@ function sanitizeSingleAgentRuntimeConfig(raw, agentId = "A") {
     }
   }
 
+  if (normalizedAgentId === "B") {
+    next.provider = AGENT_B_FIXED_PROVIDER;
+    next.model = AGENT_B_FIXED_MODEL;
+    next.protocol = AGENT_B_FIXED_PROTOCOL;
+    next.contextWindowTokens = 204800;
+    next.maxInputTokens = 204800;
+    next.maxOutputTokens = 128000;
+    next.maxReasoningTokens = RUNTIME_MAX_REASONING_TOKENS;
+  }
+
   if (normalizedAgentId === "D") {
     const sourceProvider = sanitizeRuntimeProvider(source.provider);
     const sourceModel = sanitizeRuntimeModel(source.model).toLowerCase();
@@ -10682,6 +10862,7 @@ function sanitizeRuntimeProtocol(value) {
     .toLowerCase();
   if (key === "responses" || key === "response") return "responses";
   if (key === "dashscope" || key === "native") return "dashscope";
+  if (key === "minimax" || key === "minimax-native") return "chat";
   return "chat";
 }
 
@@ -10695,6 +10876,7 @@ function sanitizeRuntimeProvider(value) {
   if (key === "openrouter") return "openrouter";
   if (key === "packycode" || key === "packy" || key === "packyapi")
     return "packycode";
+  if (key === "minimax" || key === "minimaxi") return "minimax";
   if (key === "aliyun" || key === "alibaba" || key === "dashscope")
     return "aliyun";
   if (key === "volcengine" || key === "volc" || key === "ark")
@@ -11246,13 +11428,19 @@ function extractChatCompletionOutputText(responseJson) {
     ? choice.message
     : {};
   const content = message?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => extractDeltaText(part?.text || part?.content || part))
-      .join("");
+  if (typeof content === "string") {
+    return resolveReasoningTaggedText(content).content;
   }
-  return extractDeltaText(choice?.text || responseJson?.output_text || "");
+  if (Array.isArray(content)) {
+    return resolveReasoningTaggedText(
+      content
+        .map((part) => extractDeltaText(part?.text || part?.content || part))
+        .join(""),
+    ).content;
+  }
+  return resolveReasoningTaggedText(
+    extractDeltaText(choice?.text || responseJson?.output_text || ""),
+  ).content;
 }
 
 async function summarizePackyContextBlock({
@@ -11789,6 +11977,9 @@ function getProviderByAgent(agentId, runtimeConfig = null) {
   if (targetAgent === "A") {
     return AGENT_A_FIXED_PROVIDER;
   }
+  if (targetAgent === "B") {
+    return AGENT_B_FIXED_PROVIDER;
+  }
   if (targetAgent === "C") {
     return AGENT_C_FIXED_PROVIDER;
   }
@@ -11799,13 +11990,13 @@ function getProviderByAgent(agentId, runtimeConfig = null) {
 
   const defaults = {
     A: "volcengine",
-    B: "volcengine",
+    B: AGENT_B_FIXED_PROVIDER,
     C: "volcengine",
     D: AGENT_D_FIXED_PROVIDER,
   };
   const map = {
     A: process.env.AGENT_PROVIDER_A || defaults.A,
-    B: process.env.AGENT_PROVIDER_B || defaults.B,
+    B: defaults.B,
     C: process.env.AGENT_PROVIDER_C || defaults.C,
     D: defaults.D,
   };
@@ -11868,6 +12059,7 @@ function normalizeProvider(value) {
   if (key === "openrouter") return "openrouter";
   if (key === "packycode" || key === "packy" || key === "packyapi")
     return "packycode";
+  if (key === "minimax" || key === "minimaxi") return "minimax";
   if (key === "aliyun" || key === "alibaba" || key === "dashscope")
     return "aliyun";
   if (key === "volcengine" || key === "volc" || key === "ark")
@@ -11886,6 +12078,13 @@ function getProviderConfig(provider) {
       missingKeyMessage:
         "未检测到 PackyCode API Key。请在 .env 中配置 PACKYCODE_API_KEY。",
     };
+  }
+
+  if (provider === "minimax") {
+    return buildMiniMaxProviderConfig({
+      env: process.env,
+      apiKey: readEnvApiKey("MINIMAX_API_KEY"),
+    });
   }
 
   if (provider === "aliyun") {
@@ -12186,6 +12385,15 @@ function formatProviderUpstreamError(provider, protocol, status, detail) {
 
   if (provider === "packycode" && status === 403) {
     return "PackyCode 拒绝了当前请求：请检查账号权限、模型可用性或上游策略限制。";
+  }
+
+  if (provider === "minimax") {
+    return formatMiniMaxUpstreamError({
+      status,
+      code: errorCode,
+      message: errorMessage,
+      raw,
+    });
   }
 
   if (provider === "volcengine") {
@@ -12546,19 +12754,10 @@ function readRequestStagedAttachmentRefs(raw) {
 
 function defaultChatState() {
   return {
-    activeId: "s1",
+    activeId: "",
     groups: [],
-    sessions: [{ id: "s1", title: "新对话 1", groupId: null, pinned: false }],
-    sessionMessages: {
-      s1: [
-        {
-          id: "m1",
-          role: "assistant",
-          content: "你好，今天做点啥？",
-          firstTextAt: new Date().toISOString(),
-        },
-      ],
-    },
+    sessions: [],
+    sessionMessages: {},
     settings: {
       agent: "A",
       agentBySession: {},
@@ -14895,11 +15094,18 @@ async function buildGroupChatFileSignedDownloadUrl({
   ossKey,
   fileName,
   disposition = "attachment",
+  expiresInSeconds,
 } = {}) {
   if (!groupChatOssClient || !groupChatOssConfig) return "";
   const safeKey = sanitizeGroupChatOssObjectKey(ossKey);
   if (!safeKey) return "";
   const safeFileName = sanitizeGroupChatFileName(fileName);
+  const expires = sanitizeRuntimeInteger(
+    expiresInSeconds,
+    groupChatOssConfig.signedUrlTtlSeconds,
+    60,
+    GROUP_CHAT_OSS_SIGNED_URL_TTL_SECONDS_MAX,
+  );
 
   try {
     const responseHeaders = {};
@@ -14909,7 +15115,7 @@ async function buildGroupChatFileSignedDownloadUrl({
     }
     const signedUrl = await groupChatOssClient.asyncSignatureUrl(safeKey, {
       method: "GET",
-      expires: groupChatOssConfig.signedUrlTtlSeconds,
+      expires,
       ...(Object.keys(responseHeaders).length > 0
         ? { response: responseHeaders }
         : {}),
@@ -17612,6 +17818,8 @@ export {
   UploadedFileContext,
   generatedImageHistorySchema,
   GeneratedImageHistory,
+  generatedMusicHistorySchema,
+  GeneratedMusicHistory,
   groupChatRoomReadStateSchema,
   groupChatRoomSchema,
   GroupChatRoom,
@@ -17712,6 +17920,10 @@ export {
   buildGeneratedImageHistoryContentPath,
   buildAdminGeneratedImageHistoryContentPath,
   buildAdminGeneratedImageHistoryThumbnailPath,
+  buildGeneratedMusicHistoryContentPath,
+  normalizeGeneratedMusicFormat,
+  normalizeGeneratedMusicMimeType,
+  toGeneratedMusicHistoryItem,
   parseTeacherScopedStorageUserId,
   resolveGeneratedImageOutputUrl,
   fetchGeneratedImageBinaryFromUrl,
@@ -18015,6 +18227,7 @@ export {
   runGroupChatOssStartupHealthCheck,
   deleteGroupChatStoredFileObjects,
   deleteGeneratedImageHistoryOssObjects,
+  deleteGeneratedMusicHistoryOssObjects,
   isGroupChatOssNotFoundError,
   findGroupChatStoredFileByRoomAndId,
   cleanupExpiredGroupChatStoredFiles,

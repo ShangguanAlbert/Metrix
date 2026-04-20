@@ -6,6 +6,9 @@ const AGENT_A_FIXED_PROVIDER = "packycode";
 const AGENT_A_FIXED_MODEL = "gpt-5.4";
 const AGENT_A_FIXED_PROTOCOL = "chat";
 const AGENT_A_FIXED_THINKING_EFFORT = "medium";
+const AGENT_B_FIXED_PROVIDER = "minimax";
+const AGENT_B_FIXED_MODEL = "MiniMax-M2.7";
+const AGENT_B_FIXED_PROTOCOL = "chat";
 const AGENT_D_FIXED_PROVIDER = "aliyun";
 const AGENT_D_FIXED_MODEL = "qwen3.5-plus";
 const AGENT_D_FIXED_MAX_OUTPUT_TOKENS = 65536;
@@ -42,7 +45,7 @@ export const ALIYUN_MINIMAX_FIXED_TEMPERATURE = 1;
 export const ALIYUN_MINIMAX_FIXED_TOP_P = 0.95;
 const DEFAULT_AGENT_MODEL_BY_AGENT = Object.freeze({
   A: AGENT_A_FIXED_MODEL,
-  B: "glm-4-7-251222",
+  B: AGENT_B_FIXED_MODEL,
   C: AGENT_C_FIXED_MODEL,
   D: AGENT_D_FIXED_MODEL,
 });
@@ -425,8 +428,11 @@ const AGENT_RUNTIME_DEFAULT_OVERRIDES = Object.freeze({
     enableWebSearch: false,
   }),
   B: Object.freeze({
-    contextWindowTokens: 200000,
-    maxInputTokens: 200000,
+    provider: AGENT_B_FIXED_PROVIDER,
+    model: AGENT_B_FIXED_MODEL,
+    protocol: AGENT_B_FIXED_PROTOCOL,
+    contextWindowTokens: 204800,
+    maxInputTokens: 204800,
     maxOutputTokens: 128000,
     maxReasoningTokens: 128000,
   }),
@@ -482,9 +488,13 @@ function getDefaultModelByAgent(agentId = "A") {
 }
 
 export function resolveProviderDefaultModel(provider, agentId = "A") {
-  if ((AGENT_IDS.includes(agentId) ? agentId : "A") === "A") {
+  const safeAgentId = AGENT_IDS.includes(agentId) ? agentId : "A";
+  if (safeAgentId === "A") {
     return AGENT_A_FIXED_MODEL;
   }
+  if (safeAgentId === "B") return AGENT_B_FIXED_MODEL;
+  if (safeAgentId === "C") return AGENT_C_FIXED_MODEL;
+  if (safeAgentId === "D") return AGENT_D_FIXED_MODEL;
   const normalizedProvider = sanitizeProvider(provider);
   if (normalizedProvider === PACKYCODE_PROVIDER) {
     return PACKYCODE_DEFAULT_MODEL;
@@ -925,6 +935,16 @@ export function sanitizeSingleRuntimeConfig(raw, agentId = "A") {
     }
   }
 
+  if (normalizedAgentId === "B") {
+    next.provider = AGENT_B_FIXED_PROVIDER;
+    next.model = AGENT_B_FIXED_MODEL;
+    next.protocol = AGENT_B_FIXED_PROTOCOL;
+    next.contextWindowTokens = 204800;
+    next.maxInputTokens = 204800;
+    next.maxOutputTokens = 128000;
+    next.maxReasoningTokens = RUNTIME_MAX_REASONING_TOKENS;
+  }
+
   if (normalizedAgentId === "D") {
     const sourceProvider = sanitizeProvider(source.provider);
     const sourceModel = sanitizeModel(source.model).toLowerCase();
@@ -1005,6 +1025,7 @@ function sanitizeProtocol(value) {
     .toLowerCase();
   if (key === "responses" || key === "response") return "responses";
   if (key === "dashscope" || key === "native") return "dashscope";
+  if (key === "minimax" || key === "minimax-native") return "chat";
   return "chat";
 }
 
@@ -1018,6 +1039,7 @@ function sanitizeProvider(value) {
   if (key === "packycode" || key === "packy" || key === "packyapi") {
     return PACKYCODE_PROVIDER;
   }
+  if (key === "minimax" || key === "minimaxi") return "minimax";
   if (key === "aliyun" || key === "alibaba" || key === "dashscope") return "aliyun";
   if (key === "volcengine" || key === "volc" || key === "ark") return "volcengine";
   return DEFAULT_AGENT_RUNTIME_CONFIG.provider;

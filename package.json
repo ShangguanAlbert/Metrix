@@ -23,7 +23,10 @@
     "backfill:chat-attachment-links": "node scripts/backfill-chat-attachment-links.mjs",
     "test:chat-session-id-migration": "node scripts/test-chat-session-id-migration.mjs",
     "test:session-notes": "node scripts/test-session-notes-runtime.mjs",
-    "test:session-notes:integration": "node scripts/test-session-notes-stream-integration.mjs"
+    "test:session-notes:integration": "node scripts/test-session-notes-stream-integration.mjs",
+    "test:chat-agent-locking": "node scripts/test-chat-agent-locking.mjs",
+    "test:music-generation": "node scripts/test-music-generation-module.mjs",
+    "test:minimax-live": "node scripts/test-minimax-live.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

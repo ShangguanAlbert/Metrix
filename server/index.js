@@ -11,6 +11,8 @@ import { createChatDeps } from "./modules/chat/createChatDeps.js";
 import { registerChatRoutes } from "./modules/chat/routes.js";
 import { createImageDeps } from "./modules/images/createImageDeps.js";
 import { registerImageRoutes } from "./modules/images/routes.js";
+import { createMusicDeps } from "./modules/music/createMusicDeps.js";
+import { registerMusicRoutes } from "./modules/music/routes.js";
 import { registerAuthUserClassroomRoutes } from "./routes/auth-user-classroom.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerGroupChatRoutes } from "./routes/group-chat.js";
@@ -38,6 +40,7 @@ registerAuthUserClassroomRoutes(app, deps);
 registerAdminRoutes(app, deps);
 registerChatRoutes(app, createChatDeps(deps));
 registerImageRoutes(app, createImageDeps(deps));
+registerMusicRoutes(app, createMusicDeps(deps));
 registerNotesRoutes(app, deps);
 registerGroupChatRoutes(app, deps);
 

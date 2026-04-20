@@ -806,24 +806,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
   });
 
   function buildInitialPersistedChatState() {
-    const sessionId = createChatSessionId();
-    const firstTextAt = new Date().toISOString();
-    return sanitizeChatStatePayload({
-      activeId: sessionId,
-      groups: [],
-      sessions: [{ id: sessionId, title: "新对话 1", groupId: null, pinned: false }],
-      sessionMessages: {
-        [sessionId]: [
-          {
-            id: `m${Date.now()}-${crypto.randomBytes(3).toString("hex")}`,
-            role: "assistant",
-            content: "你好，今天做点啥？",
-            firstTextAt,
-          },
-        ],
-      },
-      settings: defaultChatState().settings,
-    });
+    return sanitizeChatStatePayload(defaultChatState());
   }
 
   async function ensureBootstrapChatState(stateDoc, userId, teacherScopeKey) {

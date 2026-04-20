@@ -3,10 +3,10 @@ import { ChevronDown } from "lucide-react";
 import "../styles/agentselect.css";
 
 const AGENTS = [
-  { id: "A", name: "智能体 A" },
-  { id: "B", name: "智能体 B" },
-  { id: "C", name: "远程教育" },
-  { id: "D", name: "千问3.5" },
+  { id: "A", name: "Agent A" },
+  { id: "B", name: "Agent B" },
+  { id: "C", name: "Agent C" },
+  { id: "D", name: "Agent D" },
 ];
 
 export default function AgentSelect({
@@ -16,20 +16,23 @@ export default function AgentSelect({
   disabled = false,
   disabledTitle = "",
   displayName = "",
+  readOnly = false,
 }) {
   const selectedIndex = useMemo(
     () =>
       Math.max(
         0,
-        AGENTS.findIndex((a) => a.id === value),
+        AGENTS.findIndex((agent) => agent.id === value),
       ),
     [value],
   );
 
-  const current = useMemo(
-    () => (displayName ? { id: value, name: displayName } : AGENTS.find((a) => a.id === value) ?? AGENTS[0]),
-    [displayName, value],
-  );
+  const current = useMemo(() => {
+    if (displayName) {
+      return { id: value, name: displayName };
+    }
+    return AGENTS.find((agent) => agent.id === value) ?? AGENTS[0];
+  }, [displayName, value]);
 
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(() => selectedIndex);
@@ -37,114 +40,127 @@ export default function AgentSelect({
   const btnRef = useRef(null);
   const popRef = useRef(null);
 
-  // 点击外部关闭
   useEffect(() => {
-    function onDocMouseDown(e) {
-      if (!open || disabled) return;
-      const t = e.target;
-      if (btnRef.current && btnRef.current.contains(t)) return;
-      if (popRef.current && popRef.current.contains(t)) return;
+    function onDocMouseDown(event) {
+      if (!open || disabled || readOnly) return;
+      const target = event.target;
+      if (btnRef.current && btnRef.current.contains(target)) return;
+      if (popRef.current && popRef.current.contains(target)) return;
       setOpen(false);
     }
+
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [open, disabled]);
+  }, [disabled, open, readOnly]);
 
-  function commitSelect(idx) {
-    if (disabled) return;
-    const a = AGENTS[idx];
-    if (!a) return;
-    onChange?.(a.id);
+  function commitSelect(index) {
+    if (disabled || readOnly) return;
+    const nextAgent = AGENTS[index];
+    if (!nextAgent) return;
+    onChange?.(nextAgent.id);
     setOpen(false);
     btnRef.current?.focus();
   }
 
-  function onButtonKeyDown(e) {
-    if (disabled) return;
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      setOpen((v) => {
-        const next = !v;
-        if (next) setActiveIndex(selectedIndex);
-        return next;
+  function onButtonKeyDown(event) {
+    if (disabled || readOnly) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setOpen((currentOpen) => {
+        const nextOpen = !currentOpen;
+        if (nextOpen) setActiveIndex(selectedIndex);
+        return nextOpen;
       });
     }
 
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
       if (!open) {
         setOpen(true);
         setActiveIndex(Math.min(AGENTS.length - 1, selectedIndex + 1));
       } else {
-        setActiveIndex((i) => Math.min(AGENTS.length - 1, i + 1));
+        setActiveIndex((index) => Math.min(AGENTS.length - 1, index + 1));
       }
     }
 
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
       if (!open) {
         setOpen(true);
         setActiveIndex(Math.max(0, selectedIndex - 1));
       } else {
-        setActiveIndex((i) => Math.max(0, i - 1));
+        setActiveIndex((index) => Math.max(0, index - 1));
       }
     }
   }
 
-  function onMenuKeyDown(e) {
-    if (e.key === "Escape") {
-      e.preventDefault();
+  function onMenuKeyDown(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
       setOpen(false);
       btnRef.current?.focus();
       return;
     }
 
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActiveIndex((i) => Math.min(AGENTS.length - 1, i + 1));
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.min(AGENTS.length - 1, index + 1));
       return;
     }
 
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveIndex((i) => Math.max(0, i - 1));
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(0, index - 1));
       return;
     }
 
-    if (e.key === "Enter") {
-      e.preventDefault();
+    if (event.key === "Enter") {
+      event.preventDefault();
       commitSelect(activeIndex);
     }
   }
 
   return (
-    <div className="agent">
-      <span className="agent-label"></span>
+    <div className={`agent${readOnly ? " is-read-only" : ""}`}>
+      <span className="agent-label" />
 
       <button
         ref={btnRef}
-        className="agent-trigger"
+        className={`agent-trigger${readOnly ? " is-read-only" : ""}`}
         type="button"
-        aria-haspopup="menu"
-        aria-expanded={open && !disabled}
+        aria-haspopup={readOnly ? undefined : "menu"}
+        aria-expanded={readOnly ? undefined : open && !disabled}
         disabled={disabled}
-        title={disabled ? disabledTitle : "切换智能体"}
-        onClick={() =>
+        title={
           disabled
+            ? disabledTitle
+            : readOnly
+              ? disabledTitle || "当前会话智能体已锁定"
+              : "切换智能体"
+        }
+        onClick={() =>
+          disabled || readOnly
             ? null
-            : setOpen((v) => {
-                const next = !v;
-                if (next) setActiveIndex(selectedIndex);
-                return next;
+            : setOpen((currentOpen) => {
+                const nextOpen = !currentOpen;
+                if (nextOpen) setActiveIndex(selectedIndex);
+                return nextOpen;
               })
         }
         onKeyDown={onButtonKeyDown}
       >
         <span className="agent-trigger-title">{current.name}</span>
-        <ChevronDown className="agent-caret" size={18} strokeWidth={2.4} aria-hidden="true" />
+        {!readOnly ? (
+          <ChevronDown
+            className="agent-caret"
+            size={18}
+            strokeWidth={2.4}
+            aria-hidden="true"
+          />
+        ) : null}
       </button>
 
-      {open && !disabled && (
+      {open && !disabled && !readOnly ? (
         <div
           ref={popRef}
           className="agent-popover"
@@ -153,25 +169,25 @@ export default function AgentSelect({
           tabIndex={-1}
           onKeyDown={onMenuKeyDown}
         >
-          {AGENTS.map((a, idx) => {
-            const selected = a.id === value;
-            const active = idx === activeIndex;
+          {AGENTS.map((agentOption, index) => {
+            const selected = agentOption.id === value;
+            const active = index === activeIndex;
 
             return (
               <div
-                key={a.id}
+                key={agentOption.id}
                 role="menuitemradio"
                 aria-checked={selected}
                 className={`agent-item ${active ? "active" : ""}`}
-                onMouseEnter={() => setActiveIndex(idx)}
+                onMouseEnter={() => setActiveIndex(index)}
                 onMouseLeave={() => setActiveIndex(selectedIndex)}
-                onMouseDown={(e) => e.preventDefault()} // 防止先失焦导致弹层先关
-                onClick={() => commitSelect(idx)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => commitSelect(index)}
               >
                 <span className="agent-check" aria-hidden="true">
                   {selected ? "✓" : ""}
                 </span>
-                <span className="agent-name">{a.name}</span>
+                <span className="agent-name">{agentOption.name}</span>
               </div>
             );
           })}
@@ -183,7 +199,7 @@ export default function AgentSelect({
                 type="button"
                 className="agent-settings-item"
                 onMouseEnter={() => setActiveIndex(selectedIndex)}
-                onMouseDown={(e) => e.preventDefault()}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   setOpen(false);
                   onOpenApiSettings();
@@ -194,7 +210,7 @@ export default function AgentSelect({
             </>
           ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

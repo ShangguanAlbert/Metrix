@@ -43,19 +43,24 @@ const AUTO_SAVE_MS = 5 * 60 * 1000;
 const PROVIDER_OPTIONS = [
   { value: "openrouter", label: "OpenRouter" },
   { value: "packycode", label: "PackyCode" },
+  { value: "minimax", label: "MiniMax" },
   { value: "volcengine", label: "Volcengine Ark" },
   { value: "aliyun", label: "Aliyun DashScope" },
 ];
 const KNOWN_PROVIDERS = new Set([
   "openrouter",
   "packycode",
+  "minimax",
   "volcengine",
   "aliyun",
 ]);
 const AGENT_A_FIXED_PROVIDER = "packycode";
 const AGENT_A_FIXED_MODEL = "gpt-5.4";
+const AGENT_B_FIXED_PROVIDER = "minimax";
+const AGENT_B_FIXED_MODEL = "MiniMax-M2.7";
 const AGENT_C_FIXED_MODEL = "doubao-seed-2-0-pro-260215";
-const AGENT_A_LOCKED_RUNTIME_FIELDS = new Set(["provider", "model"]);
+const AGENT_A_LOCKED_RUNTIME_FIELDS = new Set(["provider", "model", "protocol"]);
+const AGENT_B_LOCKED_RUNTIME_FIELDS = new Set(["provider", "model", "protocol"]);
 const AGENT_D_LOCKED_RUNTIME_FIELDS = new Set([
   "provider",
   "model",
@@ -188,25 +193,25 @@ const VOLCENGINE_WEB_SEARCH_SOURCE_OPTIONS = [
 const ADMIN_AGENT_META = Object.freeze({
   A: {
     label: "Agent A",
-    summary: "Locked to the PackyCode route for a stable flagship setup.",
+    summary: "Locked to the PackyCode GPT-5.4 route.",
   },
   B: {
     label: "Agent B",
-    summary: "The most flexible sandbox for provider and model experimentation.",
+    summary: "Locked to MiniMax-M2.7 through the native MiniMax provider.",
   },
   C: {
-    label: "Remote Learning",
+    label: "Agent C",
     summary: "A search-heavy Volcengine profile tuned for remote education flows.",
   },
   D: {
-    label: "Qwen 3.5",
+    label: "Agent D",
     summary: "An Aliyun-native profile with provider-specific controls and search policies.",
   },
 });
 function createDefaultAgentProviderMap() {
   return {
-    A: "volcengine",
-    B: "volcengine",
+    A: AGENT_A_FIXED_PROVIDER,
+    B: AGENT_B_FIXED_PROVIDER,
     C: "volcengine",
     D: "aliyun",
   };
@@ -214,8 +219,8 @@ function createDefaultAgentProviderMap() {
 
 function createDefaultAgentModelMap() {
   return {
-    A: "doubao-seed-1-6-251015",
-    B: "glm-4-7-251222",
+    A: AGENT_A_FIXED_MODEL,
+    B: AGENT_B_FIXED_MODEL,
     C: AGENT_C_FIXED_MODEL,
     D: "qwen3.5-plus",
   };
@@ -233,6 +238,8 @@ function sanitizeAgentProviderMap(raw) {
       next[agentId] = key;
     }
   });
+  next.A = AGENT_A_FIXED_PROVIDER;
+  next.B = AGENT_B_FIXED_PROVIDER;
   next.C = "volcengine";
   next.D = "aliyun";
   return next;
@@ -246,6 +253,8 @@ function sanitizeAgentModelMap(raw) {
       .trim()
       .slice(0, 180);
   });
+  next.A = AGENT_A_FIXED_MODEL;
+  next.B = AGENT_B_FIXED_MODEL;
   next.C = AGENT_C_FIXED_MODEL;
   next.D = "qwen3.5-plus";
   return next;
@@ -775,6 +784,7 @@ export default function AdminSettingsPage() {
   const webSearchSwitchDisabled = loading || !webSearchSupported;
 
   const isAgentASelected = selectedAgent === "A";
+  const isAgentBSelected = selectedAgent === "B";
   const isAgentCSelected = selectedAgent === "C";
   const isAgentDSelected = selectedAgent === "D";
   const isCoreAgentSelected = AGENT_IDS.includes(selectedAgent);
@@ -1096,6 +1106,7 @@ export default function AdminSettingsPage() {
   function updateRuntimeField(field, value) {
     if (!isCoreAgentSelected) return;
     if (selectedAgent === "A" && AGENT_A_LOCKED_RUNTIME_FIELDS.has(field)) return;
+    if (selectedAgent === "B" && AGENT_B_LOCKED_RUNTIME_FIELDS.has(field)) return;
     if (selectedAgent === "C" && AGENT_C_LOCKED_RUNTIME_FIELDS.has(field)) return;
     if (selectedAgent === "D" && AGENT_D_LOCKED_RUNTIME_FIELDS.has(field)) return;
     setRuntimeConfigs((prev) => {
@@ -1790,7 +1801,13 @@ export default function AdminSettingsPage() {
                   value={selectedProvider}
                   options={PROVIDER_OPTIONS}
                   onChange={(next) => updateRuntimeField("provider", next)}
-                  disabled={loading || isAgentASelected || isAgentCSelected || isAgentDSelected}
+                  disabled={
+                    loading ||
+                    isAgentASelected ||
+                    isAgentBSelected ||
+                    isAgentCSelected ||
+                    isAgentDSelected
+                  }
                 />
               </div>
 
@@ -1809,10 +1826,22 @@ export default function AdminSettingsPage() {
                       ? `Leave blank to use the default model: ${selectedModelDefault}`
                       : "Leave blank to use the matching `AGENT_MODEL_*` value from `.env`."
                   }
-                  disabled={loading || isAgentASelected || isAgentCSelected || isAgentDSelected}
+                  disabled={
+                    loading ||
+                    isAgentASelected ||
+                    isAgentBSelected ||
+                    isAgentCSelected ||
+                    isAgentDSelected
+                  }
                 />
               </label>
-              {showOpenRouterPanel ? (
+              {isCoreAgentSelected ? (
+                <p className="admin-field-note">
+                  This platform now fixes each public agent to its product model.
+                  You can still edit prompts and safe runtime behavior, but provider
+                  and model are read-only.
+                </p>
+              ) : showOpenRouterPanel ? (
                 <p className="admin-field-note">
                   The OpenRouter route only exposes max output tokens on this screen.
                 </p>

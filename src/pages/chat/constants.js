@@ -1,8 +1,28 @@
 export const AGENT_META = {
-  A: { name: "智能体 A" },
-  B: { name: "智能体 B" },
-  C: { name: "远程教育" },
-  D: { name: "千问3.5" },
+  A: {
+    name: "Agent A",
+    shortName: "Agent A",
+    modelLabel: "GPT-5.4",
+    summary: "旗舰通用对话模型",
+  },
+  B: {
+    name: "Agent B",
+    shortName: "Agent B",
+    modelLabel: "MiniMax-M2.7",
+    summary: "MiniMax 原生文本模型",
+  },
+  C: {
+    name: "Agent C",
+    shortName: "Agent C",
+    modelLabel: "Distance Education",
+    summary: "远程教育模型",
+  },
+  D: {
+    name: "Agent D",
+    shortName: "Agent D",
+    modelLabel: "Qwen-3.5",
+    summary: "千问旗舰模型",
+  },
 };
 
 export const DEFAULT_SYSTEM_PROMPT = "你是用户的助手";

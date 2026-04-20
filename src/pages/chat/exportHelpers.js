@@ -4,6 +4,7 @@ import {
   normalizeTemperature,
   normalizeTopP,
 } from "./chatHelpers";
+import { resolveReasoningTaggedText } from "../../../shared/reasoningTags.js";
 
 export function getSafeFileBaseName(sessionTitle) {
   const raw = String(sessionTitle || "").trim() || "chat-export";
@@ -11,12 +12,23 @@ export function getSafeFileBaseName(sessionTitle) {
 }
 
 function formatMessageBlock(m) {
+  const resolved = resolveReasoningTaggedText(m.content || "");
+  const rawReasoning = String(m.reasoning || "").trim();
+  const embeddedReasoning = String(resolved.reasoning || "").trim();
+  const mergedReasoning =
+    rawReasoning && embeddedReasoning
+      ? rawReasoning.includes(embeddedReasoning)
+        ? rawReasoning
+        : embeddedReasoning.includes(rawReasoning)
+          ? embeddedReasoning
+          : `${rawReasoning}\n\n${embeddedReasoning}`
+      : rawReasoning || embeddedReasoning;
   const role = m.role === "assistant" ? "助手" : "用户";
   const attachments = m.attachments?.length
     ? `\n附件：${m.attachments.map((a) => a.name).join("，")}`
     : "";
-  const reasoning = m.reasoning?.trim() ? `\n思路：\n${m.reasoning.trim()}` : "";
-  const body = m.content?.trim() ? m.content : "";
+  const reasoning = mergedReasoning ? `\n思路：\n${mergedReasoning}` : "";
+  const body = resolved.content?.trim() ? resolved.content : "";
   const feedback =
     m.role === "assistant"
       ? m.feedback === "up"

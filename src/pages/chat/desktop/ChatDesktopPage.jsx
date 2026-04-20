@@ -20,6 +20,7 @@ import MessageList from "../../../components/MessageList.jsx";
 import MessageInput from "../../../components/MessageInput.jsx";
 import ChatDocumentPreview from "../../../components/chat/ChatDocumentPreview.jsx";
 import ExportUserInfoModal from "../../../components/chat/ExportUserInfoModal.jsx";
+import AgentSelectionModal from "../../../features/chat/components/AgentSelectionModal.jsx";
 import {
   AGENT_META,
   CHAT_ROUND_WARNING_THRESHOLD,
@@ -79,6 +80,7 @@ import {
 } from "../../../app/authStorage.js";
 import {
   appendReturnUrlParam,
+  buildAbsoluteAppUrl,
   compactReturnUrlSearch,
   readReturnUrlFromSearch,
   redirectToReturnUrl,
@@ -92,12 +94,8 @@ import "../../../styles/chat.css";
 import "../../../styles/chat-motion.css";
 
 const DEFAULT_GROUPS = [];
-const DEFAULT_SESSIONS = [
-  { id: "s1", title: "新对话 1", groupId: null, pinned: false },
-];
-const DEFAULT_SESSION_MESSAGES = {
-  s1: [chatDataService.createWelcomeMessage()],
-};
+const DEFAULT_SESSIONS = [];
+const DEFAULT_SESSION_MESSAGES = {};
 const VIDEO_EXTENSIONS = new Set(["mp4", "avi", "mov"]);
 const WORD_PREVIEW_EXTENSIONS = new Set(["doc", "docx"]);
 const HTML_PREVIEW_EXTENSIONS = new Set(["html", "htm"]);
@@ -160,7 +158,6 @@ const DEFAULT_AGENT_PROVIDER_MAP = Object.freeze({
   C: "volcengine",
   D: "aliyun",
 });
-const TEACHER_SCOPE_YANG_JUNFENG = "yang-junfeng";
 const AGENT_C_LOCKED_PROVIDER = "volcengine";
 const AGENT_C_LOCKED_MODEL = "doubao-seed-2-0-pro-260215";
 const AGENT_C_LOCKED_PROTOCOL = "responses";
@@ -185,10 +182,6 @@ const TEACHER_HOME_DEFAULT_USER_INFO = Object.freeze({
   grade: TEACHER_HOME_DEFAULT_GRADE,
   className: "教师端",
 });
-const LOCKED_AGENT_BY_TEACHER_SCOPE = Object.freeze({
-  [TEACHER_SCOPE_YANG_JUNFENG]: "C",
-});
-
 function stripLegacyPlaceholderGroups(groups, sessions) {
   const safeGroups = Array.isArray(groups) ? groups : [];
   if (safeGroups.length === 0) return [];
@@ -512,18 +505,6 @@ function resolveAgentProvider(agentId, runtimeConfig, providerDefaults) {
   );
 }
 
-function normalizeTeacherScopeKey(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
-}
-
-function resolveLockedAgentByTeacherScope(teacherScopeKey) {
-  const normalized = normalizeTeacherScopeKey(teacherScopeKey);
-  const lockedAgent = LOCKED_AGENT_BY_TEACHER_SCOPE[normalized] || "";
-  return sanitizeSmartContextAgentId(lockedAgent);
-}
-
 function resolveChatReturnTarget(search = "") {
   try {
     const params = new URLSearchParams(String(search || ""));
@@ -845,7 +826,35 @@ function removeAgentBySessions(map, sessionIds) {
   return changed ? next : source;
 }
 
-function ensureAgentBySessionMap(map, sessions, fallbackAgent = "A") {
+function inferLegacySessionAgentId(
+  sessionId,
+  sessionMessages,
+  fallbackAgent = "A",
+  legacyAgent = "A",
+) {
+  const safeFallback = sanitizeSmartContextAgentId(fallbackAgent) || "A";
+  const safeLegacyAgent = sanitizeSmartContextAgentId(legacyAgent);
+  const messages = Array.isArray(sessionMessages?.[sessionId])
+    ? sessionMessages[sessionId]
+    : [];
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const runtimeAgentId = sanitizeStoredAgentId(messages[index]?.runtime?.agentId);
+    if (runtimeAgentId) {
+      return runtimeAgentId;
+    }
+  }
+
+  return safeLegacyAgent || safeFallback;
+}
+
+function ensureAgentBySessionMap(
+  map,
+  sessions,
+  sessionMessages,
+  fallbackAgent = "A",
+  legacyAgent = "A",
+) {
   const source = sanitizeAgentBySessionMap(map);
   const safeFallback = sanitizeSmartContextAgentId(fallbackAgent) || "A";
   const validSessionIds = new Set();
@@ -861,7 +870,14 @@ function ensureAgentBySessionMap(map, sessions, fallbackAgent = "A") {
   let changed = false;
   const next = {};
   validSessionIds.forEach((sessionId) => {
-    const nextAgent = sanitizeStoredAgentId(source[sessionId]) || safeFallback;
+    const nextAgent =
+      sanitizeStoredAgentId(source[sessionId]) ||
+      inferLegacySessionAgentId(
+        sessionId,
+        sessionMessages,
+        safeFallback,
+        legacyAgent,
+      );
     if (source[sessionId] !== nextAgent) changed = true;
     next[sessionId] = nextAgent;
   });
@@ -875,62 +891,12 @@ function ensureAgentBySessionMap(map, sessions, fallbackAgent = "A") {
   return next;
 }
 
-function lockAgentBySessionMap(map, sessions, lockedAgentId) {
-  const safeLockedAgentId = sanitizeSmartContextAgentId(lockedAgentId);
-  if (!safeLockedAgentId) return sanitizeAgentBySessionMap(map);
-
-  const source = sanitizeAgentBySessionMap(map);
-  const next = {};
-  let changed = false;
-  const validSessionIds = new Set();
-
-  if (Array.isArray(sessions)) {
-    sessions.slice(0, 600).forEach((session) => {
-      const sessionId = sanitizeSmartContextSessionId(session?.id);
-      if (!sessionId) return;
-      validSessionIds.add(sessionId);
-      if (source[sessionId] !== safeLockedAgentId) changed = true;
-      next[sessionId] = safeLockedAgentId;
-    });
-  }
-
-  Object.keys(source).forEach((sessionId) => {
-    if (!validSessionIds.has(sessionId)) {
-      changed = true;
-    }
-  });
-
-  if (!changed && Object.keys(next).length === Object.keys(source).length) {
-    return source;
-  }
-  return next;
-}
-
-function enableSmartContextForAgentSessions(map, sessions, agentId) {
-  const safeAgentId = sanitizeSmartContextAgentId(agentId);
-  if (!safeAgentId) return sanitizeSmartContextEnabledMap(map);
-
-  let next = sanitizeSmartContextEnabledMap(map);
-  if (!Array.isArray(sessions) || sessions.length === 0) return next;
-  sessions.slice(0, 600).forEach((session) => {
-    const sessionId = sanitizeSmartContextSessionId(session?.id);
-    if (!sessionId) return;
-    next = patchSmartContextEnabledBySessionAgent(
-      next,
-      sessionId,
-      safeAgentId,
-      true,
-    );
-  });
-  return next;
-}
-
 function createDefaultChatViewState() {
   return {
     groups: DEFAULT_GROUPS,
     sessions: DEFAULT_SESSIONS,
     sessionMessages: DEFAULT_SESSION_MESSAGES,
-    activeId: DEFAULT_SESSIONS[0]?.id || "s1",
+    activeId: "",
     agent: "A",
     agentBySession: {},
     agentRuntimeConfigs: createDefaultAgentRuntimeConfigMap(),
@@ -1014,6 +980,13 @@ export default function ChatDesktopPage() {
 
   const [activeId, setActiveId] = useState(() => initialViewState.activeId);
   const [agent, setAgent] = useState(() => initialViewState.agent);
+  const [defaultAgentChoice, setDefaultAgentChoice] = useState(
+    () => initialViewState.agent,
+  );
+  const [showAgentSelectionModal, setShowAgentSelectionModal] = useState(false);
+  const [pendingAgentChoice, setPendingAgentChoice] = useState(
+    () => initialViewState.agent,
+  );
   const [agentBySession, setAgentBySession] = useState(
     () => initialViewState.agentBySession,
   );
@@ -1059,9 +1032,6 @@ export default function ChatDesktopPage() {
   const [bootstrapPending, setBootstrapPending] = useState(true);
   const [bootstrapError, setBootstrapError] = useState("");
   const [noteActionError, setNoteActionError] = useState("");
-  const [teacherScopeKey, setTeacherScopeKey] = useState(
-    () => initialViewState.teacherScopeKey,
-  );
   const [dismissedRoundWarningBySession, setDismissedRoundWarningBySession] =
     useState({});
   const [messageBottomInset, setMessageBottomInset] = useState(0);
@@ -1112,10 +1082,10 @@ export default function ChatDesktopPage() {
   );
   const activeIdRef = useRef(initialViewState.activeId);
   const autoSessionTitleRequestRef = useRef(new Set());
+  const autoAgentSelectionPromptedRef = useRef(false);
   const pendingRouteSessionIdRef = useRef("");
   const pendingNavigationSessionIdRef = useRef("");
   const lastReportedRoutePathRef = useRef("");
-  const buildFreshAutoSessionBundleRef = useRef(null);
   const persistSessionStateImmediatelyRef = useRef(null);
 
   useEffect(() => {
@@ -1160,8 +1130,8 @@ export default function ChatDesktopPage() {
     [sessionMessages, activeId],
   );
   const activeSessionTitle = useMemo(
-    () => String(activeSession?.title || "").trim() || `智能体 ${agent}`,
-    [activeSession, agent],
+    () => String(activeSession?.title || "").trim() || "新建对话",
+    [activeSession],
   );
   const sessionDocumentEntries = useMemo(
     () => collectSessionDocumentEntries(activeId, messages),
@@ -1277,15 +1247,22 @@ export default function ChatDesktopPage() {
     sanitizeSmartContextSessionId(streamTargetRef.current?.sessionId) === activeId;
   const interactionLocked = bootstrapLoading || forceUserInfoModal || userInfoSaving;
   const shouldConfirmStreamingExit = isStreaming;
-  const teacherLockedAgentId = useMemo(
-    () => resolveLockedAgentByTeacherScope(teacherScopeKey),
-    [teacherScopeKey],
-  );
-  const teacherScopedAgentLocked = !!teacherLockedAgentId;
   const activeAgent = useMemo(() => AGENT_META[agent] || AGENT_META.A, [agent]);
   const activeAgentDisplayName = activeSessionUsesRemovedAgent
     ? `${REMOVED_AGENT_E_NAME}（已下线）`
-    : activeAgent.name;
+    : activeSession
+      ? activeAgent.name
+      : "请选择智能体";
+  const agentSelectionOptions = useMemo(
+    () =>
+      CHAT_AGENT_IDS.map((agentId) => ({
+        id: agentId,
+        name: AGENT_META[agentId]?.name || `Agent ${agentId}`,
+        modelLabel: AGENT_META[agentId]?.modelLabel || "",
+        summary: AGENT_META[agentId]?.summary || "",
+      })),
+    [],
+  );
   const activeRuntimeConfig = useMemo(
     () => resolveRuntimeConfigForAgent(agent, agentRuntimeConfigs),
     [agentRuntimeConfigs, agent],
@@ -1305,66 +1282,22 @@ export default function ChatDesktopPage() {
     [smartContextEnabledBySessionAgent, activeId, agent],
   );
   const smartContextSupported = activeProvider === "volcengine";
-  const effectiveSmartContextEnabled =
-    smartContextSupported && (teacherScopedAgentLocked || smartContextEnabled);
+  const effectiveSmartContextEnabled = smartContextSupported && smartContextEnabled;
   const smartContextToggleDisabled =
-    teacherScopedAgentLocked ||
     isStreaming ||
     interactionLocked ||
+    !activeId ||
     !smartContextSupported;
-  const smartContextInfoTitle = teacherScopedAgentLocked
-    ? "当前授课教师已锁定远程教育智能体，并强制开启智能上下文管理。"
+  const smartContextInfoTitle = !activeId
+    ? "请先创建会话后再设置智能上下文管理。"
     : smartContextSupported
-      ? "开启后将锁定当前智能体进行对话，不得切换智能体"
-      : "仅火山引擎智能体支持智能上下文管理，当前智能体已默认关闭";
-  const buildFreshAutoSessionBundle = useCallback(({
-    agentBySession: sourceAgentBySession,
-    smartContextEnabledBySessionAgent: sourceSmartContextMap,
-    preferredAgentId = "",
-  } = {}) => {
-    const sessionRecord = chatDataService.createSessionRecord();
-    const nextAgentId =
-      teacherLockedAgentId ||
-      sanitizeSmartContextAgentId(preferredAgentId) ||
-      sanitizeSmartContextAgentId(agent) ||
-      "A";
-    const nextAgentBySession = patchAgentBySession(
-      sourceAgentBySession,
-      sessionRecord.session.id,
-      nextAgentId,
-    );
-    let nextSmartContextEnabledBySessionAgent = sanitizeSmartContextEnabledMap(
-      sourceSmartContextMap,
-    );
-    if (teacherScopedAgentLocked) {
-      nextSmartContextEnabledBySessionAgent = patchSmartContextEnabledBySessionAgent(
-        nextSmartContextEnabledBySessionAgent,
-        sessionRecord.session.id,
-        nextAgentId,
-        true,
-      );
-    }
-    return {
-      sessionRecord,
-      sessions: [sessionRecord.session],
-      sessionMessages: {
-        [sessionRecord.session.id]: sessionRecord.messages,
-      },
-      activeId: sessionRecord.session.id,
-      agentBySession: nextAgentBySession,
-      smartContextEnabledBySessionAgent: nextSmartContextEnabledBySessionAgent,
-    };
-  }, [agent, teacherLockedAgentId, teacherScopedAgentLocked]);
-  useLayoutEffect(() => {
-    buildFreshAutoSessionBundleRef.current = buildFreshAutoSessionBundle;
-  }, [buildFreshAutoSessionBundle]);
-  const agentSwitchLocked =
-    teacherScopedAgentLocked || effectiveSmartContextEnabled || activeSessionUsesRemovedAgent;
-  const agentSelectDisabledTitle = teacherScopedAgentLocked
-    ? "当前授课教师下已锁定为“远程教育”智能体。"
-    : activeSessionUsesRemovedAgent
-      ? REMOVED_AGENT_E_NOTICE
-      : "开启智能上下文管理后，需先关闭开关才能切换智能体。";
+      ? "当前会话的智能体已锁定；此开关仅控制智能上下文管理。"
+      : "仅火山引擎智能体支持智能上下文管理，当前智能体已默认关闭。";
+  const agentSelectDisabledTitle = activeSessionUsesRemovedAgent
+    ? REMOVED_AGENT_E_NOTICE
+    : activeSession
+      ? "当前会话的智能体已锁定，无法中途更改。"
+      : "请先新建会话并选择智能体。";
   const canonicalActiveHref = buildChatSessionHref(activeId);
   const isSessionRouteSyncPending =
     !!activeId && canonicalActiveHref !== currentRouteHref;
@@ -1915,6 +1848,7 @@ export default function ChatDesktopPage() {
     nextActiveId,
     nextAgentBySession,
     nextSmartContextEnabledBySessionAgent,
+    nextDefaultAgentChoice,
   }) => {
     const safeGroups = Array.isArray(nextGroups)
       ? nextGroups
@@ -1933,7 +1867,11 @@ export default function ChatDesktopPage() {
     const safeSmartContextMap = sanitizeSmartContextEnabledMap(
       nextSmartContextEnabledBySessionAgent,
     );
-    const fallbackAgent = teacherLockedAgentId || agent || "A";
+    const fallbackAgent = agent || defaultAgentChoice || "A";
+    const persistedDefaultAgent =
+      sanitizeSmartContextAgentId(nextDefaultAgentChoice) ||
+      sanitizeSmartContextAgentId(defaultAgentChoice) ||
+      "A";
     const nextAgentId = readAgentBySession(
       safeAgentBySession,
       safeActiveId,
@@ -1954,8 +1892,7 @@ export default function ChatDesktopPage() {
       nextAgentId,
     );
     const nextEffectiveSmartContextEnabled =
-      nextProvider === "volcengine" &&
-      (teacherScopedAgentLocked || nextSmartContextEnabled);
+      nextProvider === "volcengine" && nextSmartContextEnabled;
 
     if (metaSaveTimerRef.current) {
       clearTimeout(metaSaveTimerRef.current);
@@ -1969,7 +1906,7 @@ export default function ChatDesktopPage() {
         groups: safeGroups,
         sessions: safeSessions,
         settings: {
-          agent: nextAgentId,
+          agent: persistedDefaultAgent,
           agentBySession: safeAgentBySession,
           apiTemperature: normalizeTemperature(nextRuntimeConfig.temperature),
           apiTopP: normalizeTopP(nextRuntimeConfig.topP),
@@ -1996,18 +1933,36 @@ export default function ChatDesktopPage() {
     }
   }, [
     agent,
+    defaultAgentChoice,
     agentProviderDefaults,
     agentRuntimeConfigs,
     lastAppliedReasoning,
-    teacherLockedAgentId,
-    teacherScopedAgentLocked,
   ]);
   useLayoutEffect(() => {
     persistSessionStateImmediatelyRef.current = persistSessionStateImmediately;
   }, [persistSessionStateImmediately]);
 
-  async function onNewChat() {
+  const openAgentSelectionModal = useCallback((preferredAgentId = "") => {
     if (sessionActionsLocked) return;
+    const nextAgentId =
+      sanitizeSmartContextAgentId(preferredAgentId) ||
+      sanitizeSmartContextAgentId(defaultAgentChoice) ||
+      sanitizeSmartContextAgentId(agent) ||
+      "A";
+    setPendingAgentChoice(nextAgentId);
+    setShowAgentSelectionModal(true);
+  }, [agent, defaultAgentChoice, sessionActionsLocked]);
+
+  const closeAgentSelectionModal = useCallback(() => {
+    setShowAgentSelectionModal(false);
+  }, []);
+
+  async function createSessionWithAgent(selectedAgentId) {
+    if (sessionActionsLocked) return;
+    const safeSelectedAgentId =
+      sanitizeSmartContextAgentId(selectedAgentId) ||
+      sanitizeSmartContextAgentId(defaultAgentChoice) ||
+      "A";
     const next = chatDataService.createSessionRecord();
     const currentSessions = Array.isArray(sessionsRef.current)
       ? sessionsRef.current
@@ -2030,7 +1985,6 @@ export default function ChatDesktopPage() {
         /^新对话(?:\s*\d+)?$/.test(String(session?.title || "").trim()),
       ).length + 1;
     next.session.title = untitledCount > 1 ? `新对话 ${untitledCount}` : "新对话";
-    const nextAgentId = teacherLockedAgentId || agent;
     const nextSessions = [next.session, ...currentSessions];
     const nextSessionMessages = {
       ...currentMessages,
@@ -2039,22 +1993,15 @@ export default function ChatDesktopPage() {
     const nextAgentBySession = patchAgentBySession(
       currentAgentBySession,
       next.session.id,
-      nextAgentId,
+      safeSelectedAgentId,
     );
-    const nextSmartContextMap = teacherScopedAgentLocked
-      ? patchSmartContextEnabledBySessionAgent(
-          currentSmartContextMap,
-          next.session.id,
-          nextAgentId,
-          true,
-        )
-      : currentSmartContextMap;
     const persistResult = await persistSessionStateImmediately({
       nextSessions,
       nextSessionMessages,
       nextActiveId: next.session.id,
       nextAgentBySession,
-      nextSmartContextEnabledBySessionAgent: nextSmartContextMap,
+      nextSmartContextEnabledBySessionAgent: currentSmartContextMap,
+      nextDefaultAgentChoice: safeSelectedAgentId,
     });
     if (!persistResult.ok) return;
     homeStageSessionIdRef.current = next.session.id;
@@ -2074,10 +2021,12 @@ export default function ChatDesktopPage() {
     setSessions(nextSessions);
     setSessionMessages(persistResult.sessionMessages);
     setAgentBySession(persistResult.agentBySession);
+    setDefaultAgentChoice(safeSelectedAgentId);
     setSmartContextEnabledBySessionAgent(
       persistResult.smartContextEnabledBySessionAgent,
     );
     setAgent(persistResult.agent);
+    setShowAgentSelectionModal(false);
     syncImmediateRefs({
       sessions: nextSessions,
       sessionMessages: persistResult.sessionMessages,
@@ -2091,6 +2040,10 @@ export default function ChatDesktopPage() {
     clearFloatingStatus();
     setSelectedAskText("");
     setFocusUserMessageId("");
+  }
+
+  function onNewChat() {
+    openAgentSelectionModal(defaultAgentChoice);
   }
 
   function onOpenImageGeneration() {
@@ -2133,6 +2086,13 @@ export default function ChatDesktopPage() {
         returnContext: context,
       },
     });
+  }
+
+  function onOpenMusicGeneration() {
+    if (!confirmStreamingExit("leave-page")) return;
+    const params = new URLSearchParams();
+    appendReturnUrlParam(params, buildAbsoluteAppUrl(buildChatSessionHref(activeId)));
+    navigate(withAuthSlot(`/music-generation?${params.toString()}`));
   }
 
   function onOpenNotes() {
@@ -2272,24 +2232,17 @@ export default function ChatDesktopPage() {
       currentAgentBySession,
       new Set([sessionId]),
     );
-    let autoCreatedSessionRecord = null;
+    let shouldPromptForAgent = false;
+    const preferredAgentAfterDelete = readSelectableAgentBySession(
+      currentAgentBySession,
+      currentActiveId,
+      defaultAgentChoice || agent || "A",
+    );
     if (nextSessions.length === 0) {
-      const freshBundle = buildFreshAutoSessionBundle({
-        agentBySession: nextAgentBySession,
-        smartContextEnabledBySessionAgent: nextSmartContextMap,
-        preferredAgentId: readAgentBySession(
-          currentAgentBySession,
-          currentActiveId,
-          teacherLockedAgentId || agent || "A",
-        ),
-      });
-      autoCreatedSessionRecord = freshBundle.sessionRecord;
-      homeStageSessionIdRef.current = freshBundle.activeId;
-      nextSessions = freshBundle.sessions;
-      nextMessages = freshBundle.sessionMessages;
-      nextActiveSessionId = freshBundle.activeId;
-      nextSmartContextMap = freshBundle.smartContextEnabledBySessionAgent;
-      nextAgentBySession = freshBundle.agentBySession;
+      shouldPromptForAgent = true;
+      homeStageSessionIdRef.current = "";
+      nextMessages = {};
+      nextActiveSessionId = "";
     }
     const persistResult = await persistSessionStateImmediately({
       nextSessions,
@@ -2299,20 +2252,6 @@ export default function ChatDesktopPage() {
       nextSmartContextEnabledBySessionAgent: nextSmartContextMap,
     });
     if (!persistResult.ok) return;
-    if (autoCreatedSessionRecord) {
-      try {
-        await persistMessageUpsertsImmediately(
-          autoCreatedSessionRecord.messages.map((message) => ({
-            sessionId: autoCreatedSessionRecord.session.id,
-            message,
-          })),
-          { awaitCompletion: true },
-        );
-      } catch (error) {
-        setStateSaveError(error?.message || "聊天记录保存失败");
-        return;
-      }
-    }
 
     emitChatDebugLog("delete_session_apply", {
       clickedSessionId: sanitizeSmartContextSessionId(sessionId),
@@ -2338,8 +2277,11 @@ export default function ChatDesktopPage() {
     });
     if (sessionId === currentActiveId) {
       activateSession(nextActiveSessionId || nextSessions[0]?.id || "", {
-        replace: autoCreatedSessionRecord !== null,
+        replace: shouldPromptForAgent,
       });
+    }
+    if (shouldPromptForAgent) {
+      openAgentSelectionModal(preferredAgentAfterDelete);
     }
     setDismissedRoundWarningBySession((prev) => {
       if (!prev[sessionId]) return prev;
@@ -2356,7 +2298,7 @@ export default function ChatDesktopPage() {
   }
 
   function onAgentChange(nextAgent) {
-    if (teacherScopedAgentLocked || agentSwitchLocked) return;
+    if (!activeId || activeSessionUsesRemovedAgent) return;
     setAgent(nextAgent);
     setAgentBySession((prev) => patchAgentBySession(prev, activeId, nextAgent));
   }
@@ -2394,24 +2336,17 @@ export default function ChatDesktopPage() {
       remove,
     );
     let nextAgentBySession = removeAgentBySessions(currentAgentBySession, remove);
-    let autoCreatedSessionRecord = null;
+    let shouldPromptForAgent = false;
+    const preferredAgentAfterDelete = readSelectableAgentBySession(
+      currentAgentBySession,
+      currentActiveId,
+      defaultAgentChoice || agent || "A",
+    );
     if (nextSessions.length === 0) {
-      const freshBundle = buildFreshAutoSessionBundle({
-        agentBySession: nextAgentBySession,
-        smartContextEnabledBySessionAgent: nextSmartContextMap,
-        preferredAgentId: readAgentBySession(
-          currentAgentBySession,
-          currentActiveId,
-          teacherLockedAgentId || agent || "A",
-        ),
-      });
-      autoCreatedSessionRecord = freshBundle.sessionRecord;
-      homeStageSessionIdRef.current = freshBundle.activeId;
-      nextSessions = freshBundle.sessions;
-      nextMessages = freshBundle.sessionMessages;
-      nextActiveSessionId = freshBundle.activeId;
-      nextSmartContextMap = freshBundle.smartContextEnabledBySessionAgent;
-      nextAgentBySession = freshBundle.agentBySession;
+      shouldPromptForAgent = true;
+      homeStageSessionIdRef.current = "";
+      nextMessages = {};
+      nextActiveSessionId = "";
     }
     const persistResult = await persistSessionStateImmediately({
       nextSessions,
@@ -2421,20 +2356,6 @@ export default function ChatDesktopPage() {
       nextSmartContextEnabledBySessionAgent: nextSmartContextMap,
     });
     if (!persistResult.ok) return;
-    if (autoCreatedSessionRecord) {
-      try {
-        await persistMessageUpsertsImmediately(
-          autoCreatedSessionRecord.messages.map((message) => ({
-            sessionId: autoCreatedSessionRecord.session.id,
-            message,
-          })),
-          { awaitCompletion: true },
-        );
-      } catch (error) {
-        setStateSaveError(error?.message || "聊天记录保存失败");
-        return;
-      }
-    }
 
     emitChatDebugLog("batch_delete_sessions_apply", {
       clickedSessionIds: Array.from(remove),
@@ -2460,8 +2381,11 @@ export default function ChatDesktopPage() {
     });
     if (remove.has(currentActiveId)) {
       activateSession(nextActiveSessionId || nextSessions[0]?.id || "", {
-        replace: autoCreatedSessionRecord !== null,
+        replace: shouldPromptForAgent,
       });
+    }
+    if (shouldPromptForAgent) {
+      openAgentSelectionModal(preferredAgentAfterDelete);
     }
     setDismissedRoundWarningBySession((prev) => {
       const next = { ...prev };
@@ -2489,7 +2413,7 @@ export default function ChatDesktopPage() {
   }
 
   function onToggleSmartContext(enabled) {
-    if (teacherScopedAgentLocked) return;
+    if (!activeId) return;
     const nextEnabled = !!enabled;
     setSmartContextEnabledBySessionAgent((prev) =>
       patchSmartContextEnabledBySessionAgent(
@@ -3737,7 +3661,6 @@ export default function ChatDesktopPage() {
 
         const state = data?.state || {};
         const hasStoredSessions = Array.isArray(state.sessions);
-        let bootstrapAutoSessionBundle = null;
         let nextSessions = hasStoredSessions ? state.sessions : DEFAULT_SESSIONS;
         const nextGroups = stripLegacyPlaceholderGroups(
           Array.isArray(state.groups) ? state.groups : DEFAULT_GROUPS,
@@ -3753,28 +3676,9 @@ export default function ChatDesktopPage() {
           state.settings && typeof state.settings === "object"
             ? state.settings
             : {};
-        if (hasStoredSessions && nextSessions.length === 0) {
-          bootstrapAutoSessionBundle = buildFreshAutoSessionBundleRef.current?.({
-            agentBySession: stateSettings.agentBySession,
-            smartContextEnabledBySessionAgent:
-              stateSettings.smartContextEnabledBySessionAgent,
-            preferredAgentId: stateSettings.agent,
-          });
-          nextSessions = bootstrapAutoSessionBundle.sessions;
-          nextSessionMessages = bootstrapAutoSessionBundle.sessionMessages;
-        }
         let rawActiveId = String(
           state.activeId || nextSessions[0]?.id || "",
         );
-        if (bootstrapAutoSessionBundle) {
-          rawActiveId = bootstrapAutoSessionBundle.activeId;
-          homeStageSessionIdRef.current = bootstrapAutoSessionBundle.activeId;
-        }
-        const nextTeacherScopeKey = normalizeTeacherScopeKey(
-          data?.teacherScopeKey,
-        );
-        const lockedAgentId =
-          resolveLockedAgentByTeacherScope(nextTeacherScopeKey);
         const nextRuntimeConfigs = sanitizeRuntimeConfigMap(
           data?.agentRuntimeConfigs,
         );
@@ -3788,8 +3692,9 @@ export default function ChatDesktopPage() {
           : null;
 
         const fallbackAgent =
-          lockedAgentId ||
           (AGENT_META[stateSettings.agent] ? stateSettings.agent : "A");
+        const nextDefaultAgentChoice =
+          sanitizeSmartContextAgentId(stateSettings.agent) || "A";
         const nextAppliedReasoning = normalizeReasoningEffort(
           stateSettings.lastAppliedReasoning ?? "high",
         );
@@ -3846,32 +3751,13 @@ export default function ChatDesktopPage() {
           resolvedSessionIds: Array.from(resolvedSessionIds),
         });
 
-        let nextAgentBySession = bootstrapAutoSessionBundle
-          ? bootstrapAutoSessionBundle.agentBySession
-          : ensureAgentBySessionMap(
-              stateSettings.agentBySession,
-              resolvedSessions,
-              fallbackAgent,
-            );
-        if (
-          !lockedAgentId &&
-          canRestoreSession &&
-          restoreContext?.agentId &&
-          AGENT_META[restoreContext.agentId]
-        ) {
-          nextAgentBySession = patchAgentBySession(
-            nextAgentBySession,
-            restoreContext.sessionId,
-            restoreContext.agentId,
-          );
-        }
-        if (lockedAgentId) {
-          nextAgentBySession = lockAgentBySessionMap(
-            nextAgentBySession,
-            resolvedSessions,
-            lockedAgentId,
-          );
-        }
+        const nextAgentBySession = ensureAgentBySessionMap(
+          stateSettings.agentBySession,
+          resolvedSessions,
+          resolvedMessages,
+          fallbackAgent,
+          stateSettings.agent,
+        );
 
         const nextAgent = readAgentBySession(
           nextAgentBySession,
@@ -3891,10 +3777,6 @@ export default function ChatDesktopPage() {
           nextProviderDefaults,
         );
 
-        if (bootstrapAutoSessionBundle) {
-          nextSmartContextEnabledMap =
-            bootstrapAutoSessionBundle.smartContextEnabledBySessionAgent;
-        }
         if (
           stateSettings.smartContextEnabled &&
           nextProvider === "volcengine"
@@ -3910,24 +3792,16 @@ export default function ChatDesktopPage() {
             nextSmartContextEnabledMap[legacyKey] = true;
           }
         }
-        if (lockedAgentId) {
-          const forcedSmartContextMap = enableSmartContextForAgentSessions(
-            nextSmartContextEnabledMap,
-            resolvedSessions,
-            lockedAgentId,
-          );
-          nextSmartContextEnabledMap = forcedSmartContextMap;
-        }
 
         setGroups(nextGroups);
         setSessions(resolvedSessions);
         setSessionMessages(resolvedMessages);
         setActiveId(resolvedActiveId);
         setAgent(nextAgent);
+        setDefaultAgentChoice(nextDefaultAgentChoice);
         setAgentBySession(nextAgentBySession);
         setAgentRuntimeConfigs(nextRuntimeConfigs);
         setAgentProviderDefaults(nextProviderDefaults);
-        setTeacherScopeKey(nextTeacherScopeKey);
         setApiTemperature(nextApiTemperature);
         setApiTopP(nextApiTopP);
         setApiReasoningEffort(nextApiReasoning);
@@ -3958,26 +3832,6 @@ export default function ChatDesktopPage() {
         } else {
           setForceUserInfoModal(false);
           setShowUserInfoModal(false);
-        }
-
-        if (bootstrapAutoSessionBundle && !cancelled) {
-          const persistResult = await persistSessionStateImmediatelyRef.current?.({
-            nextGroups,
-            nextSessions: resolvedSessions,
-            nextSessionMessages: resolvedMessages,
-            nextActiveId: resolvedActiveId,
-            nextAgentBySession,
-            nextSmartContextEnabledBySessionAgent: nextSmartContextEnabledMap,
-          });
-          if (persistResult?.ok) {
-            await persistMessageUpsertsImmediately(
-              bootstrapAutoSessionBundle.sessionRecord.messages.map((message) => ({
-                sessionId: bootstrapAutoSessionBundle.sessionRecord.session.id,
-                message,
-              })),
-              { awaitCompletion: true },
-            );
-          }
         }
 
         persistReadyRef.current = true;
@@ -4180,6 +4034,29 @@ export default function ChatDesktopPage() {
   }, [activeId, activeSessionAgent, agent]);
 
   useEffect(() => {
+    if (bootstrapLoading || forceUserInfoModal || userInfoSaving) {
+      return;
+    }
+    if (sessions.length > 0) {
+      autoAgentSelectionPromptedRef.current = false;
+      return;
+    }
+    if (showAgentSelectionModal || autoAgentSelectionPromptedRef.current) {
+      return;
+    }
+    autoAgentSelectionPromptedRef.current = true;
+    openAgentSelectionModal(defaultAgentChoice);
+  }, [
+    bootstrapLoading,
+    defaultAgentChoice,
+    forceUserInfoModal,
+    openAgentSelectionModal,
+    sessions.length,
+    showAgentSelectionModal,
+    userInfoSaving,
+  ]);
+
+  useEffect(() => {
     if (!persistReadyRef.current || bootstrapLoading) return;
     pendingMetaSaveRef.current = true;
 
@@ -4203,7 +4080,7 @@ export default function ChatDesktopPage() {
         const payload = {
           activeId,
           settings: {
-            agent,
+            agent: defaultAgentChoice,
             agentBySession: sanitizeAgentBySessionMap(agentBySession),
             apiTemperature: normalizeTemperature(apiTemperature),
             apiTopP: normalizeTopP(apiTopP),
@@ -4226,7 +4103,7 @@ export default function ChatDesktopPage() {
     }, 360);
   }, [
     activeId,
-    agent,
+    defaultAgentChoice,
     agentBySession,
     apiTemperature,
     apiTopP,
@@ -4383,6 +4260,7 @@ export default function ChatDesktopPage() {
         }}
         onOpenNotes={onOpenNotes}
         onOpenImageGeneration={onOpenImageGeneration}
+        onOpenMusicGeneration={onOpenMusicGeneration}
         onOpenGroupChat={onOpenGroupChat}
         onDeleteSession={onDeleteSession}
         onBatchDeleteSessions={onBatchDeleteSessions}
@@ -4418,12 +4296,11 @@ export default function ChatDesktopPage() {
               </button>
             ) : null}
             <AgentSelect
-              key={agentSwitchLocked ? "agent-locked" : "agent-unlocked"}
               value={agent}
               onChange={onAgentChange}
-              disabled={agentSwitchLocked}
               disabledTitle={agentSelectDisabledTitle}
               displayName={activeAgentDisplayName}
+              readOnly
             />
             <button
               type="button"
@@ -4619,6 +4496,15 @@ export default function ChatDesktopPage() {
           ) : null}
         </div>
       </div>
+
+      <AgentSelectionModal
+        open={showAgentSelectionModal}
+        value={pendingAgentChoice}
+        options={agentSelectionOptions}
+        onChange={setPendingAgentChoice}
+        onCancel={closeAgentSelectionModal}
+        onConfirm={() => createSessionWithAgent(pendingAgentChoice)}
+      />
 
       <ExportUserInfoModal
         open={showUserInfoModal}

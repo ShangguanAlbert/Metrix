@@ -31,10 +31,14 @@ function sanitizeProvider(value, fallback = "openrouter") {
     key === "openrouter" ||
     key === "packycode" ||
     key === "packy" ||
+    key === "minimax" ||
+    key === "minimaxi" ||
     key === "volcengine" ||
     key === "aliyun"
   ) {
-    return key === "packy" ? "packycode" : key;
+    if (key === "packy") return "packycode";
+    if (key === "minimaxi") return "minimax";
+    return key;
   }
   if (key === "packyapi") {
     return "packycode";
