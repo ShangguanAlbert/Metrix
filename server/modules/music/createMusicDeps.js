@@ -14,10 +14,13 @@ export function createMusicDeps(rootDeps) {
     buildGroupChatFileSignedDownloadUrl:
       rootDeps.buildGroupChatFileSignedDownloadUrl,
     uploadBufferToGroupChatOss: rootDeps.uploadBufferToGroupChatOss,
+    deleteGroupChatOssObject: rootDeps.deleteGroupChatOssObject,
     deleteGeneratedMusicHistoryOssObjects:
       rootDeps.deleteGeneratedMusicHistoryOssObjects,
     GeneratedMusicHistory: rootDeps.GeneratedMusicHistory,
+    GeneratedLyricsHistory: rootDeps.GeneratedLyricsHistory,
     toGeneratedMusicHistoryItem: rootDeps.toGeneratedMusicHistoryItem,
+    toGeneratedLyricsHistoryItem: rootDeps.toGeneratedLyricsHistoryItem,
     normalizeGeneratedMusicFormat: rootDeps.normalizeGeneratedMusicFormat,
     normalizeGeneratedMusicMimeType: rootDeps.normalizeGeneratedMusicMimeType,
     getProviderConfig: rootDeps.getProviderConfig,

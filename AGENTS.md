@@ -53,6 +53,7 @@
 ## 前端约束
 
 - 路由通过 `src/app/routes/index.js` 统一聚合，各功能路由定义应放在各自 `src/features/*/routes.js`
+- 当前前端路由入口是 `src/main.jsx` 中的 `BrowserRouter`，不是 React Router data router；在未显式迁移到 `createBrowserRouter` + `RouterProvider` 之前，不要引入仅 data router 可用的 API（例如 `useBlocker`、`useFetcher`、`useRevalidator` 等），否则会直接触发运行时异常并导致页面白屏
 - `src/App.jsx` 不要直接从 `./pages/*` 导入页面；请通过 `src/app/routes/` 和 `src/features/` 组织路由
 - `src/app/routes/**/*` 不要从 `../../pages/*` 导入内容；优先从对应 `features` 模块暴露路由或页面
 - 保持既有风格：
@@ -93,6 +94,7 @@
 
 - 优先做小而集中的修改，避免无关重构
 - 优先修根因，不做只掩盖症状的补丁
+- 用户明确不喜欢“兜底代码优先”的处理方式；遇到白屏、运行时异常、路由错误、接口异常等问题时，先定位实际报错和根因，再做最小、精准、可解释的修复，不要先堆 fallback、try/catch 包裹层、条件分支兜底或静默降级来掩盖问题
 - 保持现有目录边界与命名习惯，不随意迁移文件
 - 未经明确要求，不要：
   - 升级大版本依赖
@@ -104,6 +106,8 @@
 
 - 开始修改前，先读 `README.md`、`package.json` 与目标目录附近代码，确认该功能是走 `features`、`modules` 还是历史 `pages` 路径
 - 如果需要新增路由，先检查前端是否已有 feature route 聚合、后端是否已有 module route 注册点，再决定落点
+- 如果出现“页面白屏 / 打不开 / 一片空白”这类前端问题，先抓真实运行时报错，再核对当前 router 类型、hook 上下文、必需 provider、页面顶层 effect；不要在没有报错证据的情况下先加兜底渲染或保护分支
+- 这类仓库里 React Router 相关问题要先确认 API 是否与 `BrowserRouter` 兼容；尤其是离开确认、导航拦截、fetcher/revalidator 一类能力，先看 `src/main.jsx`，再决定能不能用对应 hook
 - 如果任务涉及部署问题，重点关注：
   - `EDUCHAT_BASE_PATH`
   - `vite.config.js`

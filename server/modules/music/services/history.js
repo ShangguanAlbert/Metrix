@@ -101,6 +101,7 @@ export async function listMusicHistoryHandler(req, res, deps) {
         title: 1,
         prompt: 1,
         lyrics: 1,
+        generationType: 1,
         isInstrumental: 1,
         lyricsOptimizer: 1,
         model: 1,
@@ -111,6 +112,11 @@ export async function listMusicHistoryHandler(req, res, deps) {
         audioSize: 1,
         audioStorageType: 1,
         ossKey: 1,
+        referenceAudioStorageType: 1,
+        referenceAudioOssKey: 1,
+        referenceAudioMimeType: 1,
+        referenceAudioSize: 1,
+        referenceAudioFileName: 1,
         createdAt: 1,
       },
     )
@@ -263,7 +269,7 @@ export async function clearMusicHistoryHandler(req, res, deps) {
   try {
     const docs = await deps.GeneratedMusicHistory.find(
       { userId },
-      { _id: 1, ossKey: 1 },
+      { _id: 1, ossKey: 1, referenceAudioOssKey: 1 },
     ).lean();
     const deletedOss = await deps.deleteGeneratedMusicHistoryOssObjects(docs);
     if (Array.isArray(deletedOss?.failedKeys) && deletedOss.failedKeys.length > 0) {
@@ -299,7 +305,7 @@ export async function deleteMusicHistoryItemHandler(req, res, deps) {
   try {
     const existing = await deps.GeneratedMusicHistory.findOne(
       { _id: musicId, userId },
-      { _id: 1, ossKey: 1 },
+      { _id: 1, ossKey: 1, referenceAudioOssKey: 1 },
     ).lean();
     if (!existing) {
       res.json(
@@ -322,7 +328,7 @@ export async function deleteMusicHistoryItemHandler(req, res, deps) {
 
     const deleted = await deps.GeneratedMusicHistory.findOneAndDelete(
       { _id: musicId, userId },
-      { projection: { _id: 1, ossKey: 1 } },
+      { projection: { _id: 1, ossKey: 1, referenceAudioOssKey: 1 } },
     );
     res.json(
       normalizeMusicHistoryDeleteResponse({
@@ -362,6 +368,7 @@ export async function renameMusicHistoryItemHandler(req, res, deps) {
           title: 1,
           prompt: 1,
           lyrics: 1,
+          generationType: 1,
           isInstrumental: 1,
           lyricsOptimizer: 1,
           model: 1,
@@ -372,6 +379,11 @@ export async function renameMusicHistoryItemHandler(req, res, deps) {
           audioSize: 1,
           audioStorageType: 1,
           ossKey: 1,
+          referenceAudioStorageType: 1,
+          referenceAudioOssKey: 1,
+          referenceAudioMimeType: 1,
+          referenceAudioSize: 1,
+          referenceAudioFileName: 1,
           createdAt: 1,
         },
       },

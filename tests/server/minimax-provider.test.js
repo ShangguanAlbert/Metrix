@@ -6,6 +6,7 @@ import {
   formatMiniMaxUpstreamError,
 } from "../../server/providers/minimax/index.js";
 import { buildMiniMaxMusicRequest } from "../../server/modules/music/services/generate.js";
+import { buildMiniMaxLyricsRequest } from "../../server/modules/music/services/lyrics.js";
 
 const musicDepsDouble = {
   sanitizeText(value, fallback = "", maxLength = 2000) {
@@ -22,6 +23,9 @@ const musicDepsDouble = {
     const numeric = Number.parseInt(value, 10);
     if (!Number.isFinite(numeric)) return fallback;
     return Math.max(min, Math.min(max, numeric));
+  },
+  sanitizeGroupChatFileName(value) {
+    return String(value || "").trim();
   },
   normalizeGeneratedMusicFormat(value) {
     const format = String(value || "").trim().toLowerCase();
@@ -44,6 +48,10 @@ test("buildMiniMaxProviderConfig reads defaults and api key", () => {
   assert.equal(
     config.musicEndpoint,
     "https://api.minimaxi.com/v1/music_generation",
+  );
+  assert.equal(
+    config.lyricsEndpoint,
+    "https://api.minimaxi.com/v1/lyrics_generation",
   );
 });
 
@@ -95,35 +103,87 @@ test("formatMiniMaxUpstreamError maps common upstream codes to stable Chinese me
   );
 });
 
-test("buildMiniMaxMusicRequest validates instrumental and lyric modes", () => {
+test("buildMiniMaxMusicRequest validates compose and cover modes", () => {
   const instrumental = buildMiniMaxMusicRequest(
     {
       model: "music-2.6-free",
       prompt: "温暖木吉他与钢琴",
       isInstrumental: true,
-      format: "wav",
-      sampleRate: 32000,
-      bitrate: 128000,
     },
     musicDepsDouble,
   );
 
+  assert.equal(instrumental.meta.generationType, "compose");
   assert.equal(instrumental.payload.is_instrumental, true);
-  assert.equal(instrumental.payload.audio_setting.format, "wav");
-  assert.equal(instrumental.meta.sampleRate, 32000);
+  assert.equal(instrumental.payload.audio_setting.format, "mp3");
+  assert.equal(instrumental.meta.sampleRate, 44100);
+
+  const cover = buildMiniMaxMusicRequest(
+    {
+      model: "music-cover-free",
+      prompt: "女声流行翻唱",
+      lyrics: "这是一段可选歌词",
+    },
+    musicDepsDouble,
+    {
+      referenceAudioFile: {
+        originalname: "demo.mp3",
+        mimetype: "audio/mpeg",
+        size: 4,
+        buffer: Buffer.from([1, 2, 3, 4]),
+      },
+    },
+  );
+  assert.equal(cover.meta.generationType, "cover");
+  assert.equal(cover.meta.referenceAudioFileName, "demo.mp3");
+  assert.equal(typeof cover.payload.audio_base64, "string");
 
   assert.throws(
     () =>
       buildMiniMaxMusicRequest(
         {
-          model: "music-2.6",
-          prompt: "",
-          lyrics: "",
-          isInstrumental: false,
-          lyricsOptimizer: false,
+          model: "music-cover",
+          prompt: "男声翻唱",
         },
         musicDepsDouble,
       ),
-    /非纯音乐需要填写歌词/,
+    /需要上传参考音频/,
+  );
+});
+
+test("buildMiniMaxLyricsRequest validates write and edit modes", () => {
+  const writeFullSong = buildMiniMaxLyricsRequest(
+    {
+      mode: "write_full_song",
+      prompt: "毕业季、抒情、钢琴",
+      title: "我们的夏天",
+    },
+    musicDepsDouble,
+  );
+  assert.equal(writeFullSong.payload.mode, "write_full_song");
+  assert.equal(writeFullSong.payload.title, "我们的夏天");
+
+  const edit = buildMiniMaxLyricsRequest(
+    {
+      mode: "edit",
+      prompt: "续写副歌",
+      lyrics: "原歌词",
+    },
+    musicDepsDouble,
+  );
+  assert.equal(edit.payload.mode, "edit");
+  assert.equal(edit.payload.lyrics, "原歌词");
+
+  assert.throws(
+    () =>
+      buildMiniMaxLyricsRequest(
+        {
+          mode: "edit",
+          prompt: "继续写",
+          lyrics: "",
+        },
+        musicDepsDouble,
+      ),
+    /需要填写原歌词/,
   );
 });

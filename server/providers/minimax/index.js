@@ -2,6 +2,8 @@ const DEFAULT_MINIMAX_CHAT_ENDPOINT =
   "https://api.minimaxi.com/v1/chat/completions";
 const DEFAULT_MINIMAX_MUSIC_ENDPOINT =
   "https://api.minimaxi.com/v1/music_generation";
+const DEFAULT_MINIMAX_LYRICS_ENDPOINT =
+  "https://api.minimaxi.com/v1/lyrics_generation";
 
 function sanitizeHttpEndpoint(value, fallback = "") {
   const text = String(value || "").trim();
@@ -47,6 +49,10 @@ export function buildMiniMaxProviderConfig({ env = {}, apiKey = "" } = {}) {
     musicEndpoint: sanitizeHttpEndpoint(
       sourceEnv.MINIMAX_MUSIC_ENDPOINT,
       DEFAULT_MINIMAX_MUSIC_ENDPOINT,
+    ),
+    lyricsEndpoint: sanitizeHttpEndpoint(
+      sourceEnv.MINIMAX_LYRICS_ENDPOINT,
+      DEFAULT_MINIMAX_LYRICS_ENDPOINT,
     ),
     apiKey: readApiKey(apiKey, sourceEnv.MINIMAX_API_KEY),
     missingKeyMessage:

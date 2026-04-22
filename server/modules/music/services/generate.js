@@ -1,25 +1,62 @@
+import { Buffer } from "node:buffer";
+import multer from "multer";
 import { normalizeMusicGenerationResponse } from "../../../../shared/contracts/music.js";
 
-const MUSIC_MODELS = new Set(["music-2.6", "music-2.6-free"]);
+const COMPOSE_MODELS = new Set(["music-2.6", "music-2.6-free"]);
+const COVER_MODELS = new Set(["music-cover", "music-cover-free"]);
+const ALL_MUSIC_MODELS = new Set([...COMPOSE_MODELS, ...COVER_MODELS]);
 const MAX_MONGO_AUDIO_BYTES = 12 * 1024 * 1024;
+const MUSIC_SYNC_MAX_ATTEMPTS = 12;
+const MUSIC_SYNC_WAIT_MS = 3000;
+const MUSIC_REFERENCE_AUDIO_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+const MUSIC_REFERENCE_AUDIO_UPLOAD = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    files: 1,
+    fileSize: MUSIC_REFERENCE_AUDIO_MAX_FILE_SIZE_BYTES,
+  },
+});
 const FIXED_AUDIO_SETTING = {
   format: "mp3",
   sampleRate: 44100,
   bitrate: 256000,
 };
 
-function sanitizeMusicModel(value) {
-  const model = String(value || "").trim();
-  return MUSIC_MODELS.has(model) ? model : "music-2.6-free";
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
-function sanitizeAudioSetting(body, deps) {
-  void body;
-  void deps;
+function sanitizeMusicModel(value) {
+  const model = String(value || "").trim();
+  return ALL_MUSIC_MODELS.has(model) ? model : "music-2.6-free";
+}
+
+function isCoverModel(model) {
+  return COVER_MODELS.has(String(model || "").trim());
+}
+
+function sanitizeAudioSetting() {
   return {
     format: FIXED_AUDIO_SETTING.format,
     sampleRate: FIXED_AUDIO_SETTING.sampleRate,
     bitrate: FIXED_AUDIO_SETTING.bitrate,
+  };
+}
+
+function normalizeUploadFile(file, deps) {
+  if (!file || !Buffer.isBuffer(file?.buffer) || !file.buffer.length) {
+    return null;
+  }
+  return {
+    fileName: deps.sanitizeGroupChatFileName(
+      file?.originalname || "reference-audio.bin",
+    ),
+    mimeType: String(file?.mimetype || "application/octet-stream").trim() ||
+      "application/octet-stream",
+    size: Number(file?.size || file.buffer.length || 0),
+    buffer: file.buffer,
   };
 }
 
@@ -36,27 +73,63 @@ async function readAudioBufferFromMiniMaxResponse(audio, apiKey) {
   if (!audioText) return Buffer.alloc(0);
 
   if (/^https?:\/\//i.test(audioText)) {
-    const resp = await fetch(audioText, {
+    const response = await fetch(audioText, {
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
     });
-    if (!resp.ok) {
-      throw new Error(`音乐文件下载失败（${resp.status}）。`);
+    if (!response.ok) {
+      throw new Error(`音乐文件下载失败（${response.status}）。`);
     }
-    return Buffer.from(await resp.arrayBuffer());
+    return Buffer.from(await response.arrayBuffer());
   }
 
   return decodeHexAudio(audioText);
 }
 
-export function buildMiniMaxMusicRequest(body, deps) {
+export function buildMiniMaxMusicRequest(body, deps, options = {}) {
   const model = sanitizeMusicModel(body?.model);
   const prompt = deps.sanitizeText(body?.prompt, "", 2000);
   const lyrics = deps.sanitizeText(body?.lyrics, "", 3500);
   const isInstrumental = deps.sanitizeRuntimeBoolean(body?.isInstrumental, false);
   const lyricsOptimizer = deps.sanitizeRuntimeBoolean(body?.lyricsOptimizer, false);
   const aigcWatermark = deps.sanitizeRuntimeBoolean(body?.aigcWatermark, false);
-  const audioSetting = sanitizeAudioSetting(body, deps);
+  const referenceAudioFile = normalizeUploadFile(options?.referenceAudioFile, deps);
 
+  if (isCoverModel(model)) {
+    if (!prompt) {
+      throw new Error("翻唱模式需要填写目标风格描述。");
+    }
+    if (!referenceAudioFile) {
+      throw new Error("翻唱模式需要上传参考音频。");
+    }
+    return {
+      meta: {
+        model,
+        prompt,
+        lyrics,
+        generationType: "cover",
+        isInstrumental: false,
+        lyricsOptimizer: false,
+        aigcWatermark: false,
+        format: "mp3",
+        sampleRate: 0,
+        bitrate: 0,
+        referenceAudioFileName: referenceAudioFile.fileName,
+        referenceAudioMimeType: referenceAudioFile.mimeType,
+        referenceAudioSize: referenceAudioFile.size,
+      },
+      payload: {
+        model,
+        prompt,
+        lyrics,
+        stream: false,
+        output_format: "url",
+        audio_base64: referenceAudioFile.buffer.toString("base64"),
+      },
+      referenceAudioFile,
+    };
+  }
+
+  const audioSetting = sanitizeAudioSetting();
   if (isInstrumental && !prompt) {
     throw new Error("生成纯音乐时需要填写风格/场景描述。");
   }
@@ -72,12 +145,16 @@ export function buildMiniMaxMusicRequest(body, deps) {
       model,
       prompt,
       lyrics,
+      generationType: "compose",
       isInstrumental,
       lyricsOptimizer,
       aigcWatermark,
       format: audioSetting.format,
       sampleRate: audioSetting.sampleRate,
       bitrate: audioSetting.bitrate,
+      referenceAudioFileName: "",
+      referenceAudioMimeType: "",
+      referenceAudioSize: 0,
     },
     payload: {
       model,
@@ -94,7 +171,112 @@ export function buildMiniMaxMusicRequest(body, deps) {
         format: audioSetting.format,
       },
     },
+    referenceAudioFile: null,
   };
+}
+
+async function callMiniMaxMusicEndpoint(providerConfig, payload, deps) {
+  const upstreamResponse = await fetch(providerConfig.musicEndpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${providerConfig.apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await deps.safeReadText(upstreamResponse);
+  let json = {};
+  try {
+    json = raw ? JSON.parse(raw) : {};
+  } catch {
+    json = {};
+  }
+
+  if (!upstreamResponse.ok) {
+    throw new Error(
+      deps.formatProviderUpstreamError(
+        "minimax",
+        "music",
+        upstreamResponse.status,
+        raw,
+      ),
+    );
+  }
+
+  const statusCode = Number(json?.base_resp?.status_code ?? 0);
+  if (statusCode !== 0) {
+    throw new Error(
+      deps.formatProviderUpstreamError(
+        "minimax",
+        "music",
+        400,
+        JSON.stringify(json),
+      ),
+    );
+  }
+
+  return json;
+}
+
+async function waitForCompletedMusic({ providerConfig, payload, deps }) {
+  let lastJson = {};
+  for (let attempt = 1; attempt <= MUSIC_SYNC_MAX_ATTEMPTS; attempt += 1) {
+    const json = await callMiniMaxMusicEndpoint(providerConfig, payload, deps);
+    lastJson = json;
+
+    const audioBuffer = await readAudioBufferFromMiniMaxResponse(
+      json?.data?.audio,
+      providerConfig.apiKey,
+    );
+    if (audioBuffer.length > 0) {
+      return { json, audioBuffer };
+    }
+
+    const status = Number(json?.data?.status || 0);
+    if (status !== 1) {
+      break;
+    }
+
+    if (attempt < MUSIC_SYNC_MAX_ATTEMPTS) {
+      await sleep(MUSIC_SYNC_WAIT_MS);
+    }
+  }
+
+  throw new Error(
+    Number(lastJson?.data?.status || 0) === 1
+      ? "MiniMax 仍在生成中，请稍后重试。"
+      : "MiniMax 未返回可保存的音乐内容。",
+  );
+}
+
+async function backupReferenceAudioToOss({
+  req,
+  deps,
+  referenceAudioFile,
+}) {
+  if (!referenceAudioFile) {
+    return null;
+  }
+
+  const userId = deps.sanitizeId(req.authStorageUserId || req.authUser?._id, "");
+  if (!userId) {
+    throw new Error("无效用户身份。");
+  }
+
+  const uploaded = await deps.uploadBufferToGroupChatOss({
+    scope: "music-generation-reference-audio",
+    userId,
+    fileName: referenceAudioFile.fileName,
+    mimeType: referenceAudioFile.mimeType,
+    dataBuffer: referenceAudioFile.buffer,
+    cacheControl: "private, no-store",
+  });
+  if (!uploaded) {
+    throw new Error("参考音频备份到阿里云 OSS 失败，请稍后重试。");
+  }
+
+  return uploaded;
 }
 
 async function persistGeneratedMusic({
@@ -103,7 +285,7 @@ async function persistGeneratedMusic({
   meta,
   audioBuffer,
   upstream,
-  providerConfig,
+  referenceAudioBackup,
 }) {
   const userId = deps.sanitizeId(req.authStorageUserId || req.authUser?._id, "");
   if (!userId) {
@@ -139,9 +321,11 @@ async function persistGeneratedMusic({
 
   const doc = await deps.GeneratedMusicHistory.create({
     userId,
+    title: "",
     model: meta.model,
     prompt: meta.prompt,
     lyrics: meta.lyrics,
+    generationType: meta.generationType,
     isInstrumental: meta.isInstrumental,
     lyricsOptimizer: meta.lyricsOptimizer,
     format: meta.format,
@@ -149,16 +333,23 @@ async function persistGeneratedMusic({
     bitrate: meta.bitrate,
     durationMs,
     audioStorageType: "oss",
-    audioUrl: uploaded?.fileUrl || "",
-    ossKey: uploaded?.ossKey || "",
-    ossBucket: uploaded?.ossBucket || "",
-    ossRegion: uploaded?.ossRegion || "",
-    audioMimeType: uploaded?.mimeType || mimeType,
-    audioSize: uploaded?.size || audioBuffer.length,
+    audioUrl: uploaded.fileUrl || "",
+    ossKey: uploaded.ossKey || "",
+    ossBucket: uploaded.ossBucket || "",
+    ossRegion: uploaded.ossRegion || "",
+    audioMimeType: uploaded.mimeType || mimeType,
+    audioSize: uploaded.size || audioBuffer.length,
     audioData: Buffer.alloc(0),
+    referenceAudioStorageType: referenceAudioBackup ? "oss" : "",
+    referenceAudioUrl: referenceAudioBackup?.fileUrl || "",
+    referenceAudioOssKey: referenceAudioBackup?.ossKey || "",
+    referenceAudioOssBucket: referenceAudioBackup?.ossBucket || "",
+    referenceAudioOssRegion: referenceAudioBackup?.ossRegion || "",
+    referenceAudioMimeType: meta.referenceAudioMimeType || "",
+    referenceAudioSize: meta.referenceAudioSize || 0,
+    referenceAudioFileName: meta.referenceAudioFileName || "",
   });
 
-  void providerConfig;
   return deps.toGeneratedMusicHistoryItem(doc);
 }
 
@@ -175,75 +366,45 @@ export async function generateMusicHandler(req, res, deps) {
 
   let request;
   try {
-    request = buildMiniMaxMusicRequest(req.body || {}, deps);
+    request = buildMiniMaxMusicRequest(req.body || {}, deps, {
+      referenceAudioFile: req.file || null,
+    });
   } catch (error) {
     res.status(400).json({ error: error?.message || "音乐生成参数无效。" });
     return;
   }
 
+  let referenceAudioBackup = null;
   try {
-    const upstreamResp = await fetch(providerConfig.musicEndpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${providerConfig.apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(request.payload),
+    referenceAudioBackup = await backupReferenceAudioToOss({
+      req,
+      deps,
+      referenceAudioFile: request.referenceAudioFile,
     });
-    const raw = await deps.safeReadText(upstreamResp);
-    let json = {};
-    try {
-      json = raw ? JSON.parse(raw) : {};
-    } catch {
-      json = {};
-    }
 
-    if (!upstreamResp.ok) {
-      res.status(upstreamResp.status).json({
-        error: deps.formatProviderUpstreamError(
-          "minimax",
-          "music",
-          upstreamResp.status,
-          raw,
-        ),
-      });
-      return;
-    }
-
-    const statusCode = Number(json?.base_resp?.status_code ?? 0);
-    if (statusCode !== 0) {
-      res.status(400).json({
-        error: deps.formatProviderUpstreamError(
-          "minimax",
-          "music",
-          400,
-          JSON.stringify(json),
-        ),
-      });
-      return;
-    }
-
-    const audio = String(json?.data?.audio || "").trim();
-    const audioBuffer = await readAudioBufferFromMiniMaxResponse(
-      audio,
-      providerConfig.apiKey,
-    );
-    if (!audioBuffer.length) {
-      res.status(502).json({ error: "MiniMax 未返回可保存的音乐内容。" });
-      return;
-    }
+    const completed = await waitForCompletedMusic({
+      providerConfig,
+      payload: request.payload,
+      deps,
+    });
 
     const item = await persistGeneratedMusic({
       req,
       deps,
       meta: request.meta,
-      audioBuffer,
-      upstream: json,
-      providerConfig,
+      audioBuffer: completed.audioBuffer,
+      upstream: completed.json,
+      referenceAudioBackup,
     });
     res.json(normalizeMusicGenerationResponse({ ok: true, item }));
   } catch (error) {
+    if (referenceAudioBackup?.ossKey && deps.deleteGroupChatOssObject) {
+      try {
+        await deps.deleteGroupChatOssObject(referenceAudioBackup.ossKey);
+      } catch {
+        // Ignore cleanup failures here; the main error is more important to users.
+      }
+    }
     res.status(500).json({
       error: error?.message || "音乐生成失败，请稍后重试。",
     });
@@ -251,7 +412,12 @@ export async function generateMusicHandler(req, res, deps) {
 }
 
 export function registerMusicGenerationRoutes(app, deps) {
-  app.post("/api/music/generate", deps.requireChatAuth, async (req, res) => {
-    await generateMusicHandler(req, res, deps);
-  });
+  app.post(
+    "/api/music/generate",
+    deps.requireChatAuth,
+    MUSIC_REFERENCE_AUDIO_UPLOAD.single("referenceAudio"),
+    async (req, res) => {
+      await generateMusicHandler(req, res, deps);
+    },
+  );
 }

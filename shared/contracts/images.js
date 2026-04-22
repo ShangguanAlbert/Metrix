@@ -14,10 +14,14 @@ export function normalizeImageHistoryLimit(value, fallback = DEFAULT_IMAGE_HISTO
 }
 
 export function normalizeImageHistoryItem(item = {}) {
+  const normalizedId = String(item?._id || item?.id || "");
+  const normalizedUrl = String(item?.imageUrl || item?.url || "");
   return {
-    _id: String(item?._id || item?.id || ""),
+    _id: normalizedId,
+    id: normalizedId,
     prompt: String(item?.prompt || ""),
-    imageUrl: String(item?.imageUrl || ""),
+    imageUrl: normalizedUrl,
+    url: normalizedUrl,
     imageStorageType: String(item?.imageStorageType || ""),
     responseFormat: String(item?.responseFormat || ""),
     size: String(item?.size || ""),

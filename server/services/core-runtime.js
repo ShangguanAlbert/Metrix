@@ -1250,6 +1250,7 @@ const generatedMusicHistorySchema = new mongoose.Schema(
     title: { type: String, default: "" },
     prompt: { type: String, default: "" },
     lyrics: { type: String, default: "" },
+    generationType: { type: String, default: "compose" },
     isInstrumental: { type: Boolean, default: false },
     lyricsOptimizer: { type: Boolean, default: false },
     model: { type: String, default: "" },
@@ -1265,6 +1266,14 @@ const generatedMusicHistorySchema = new mongoose.Schema(
     audioMimeType: { type: String, default: "audio/mpeg" },
     audioSize: { type: Number, default: 0 },
     audioData: { type: Buffer, default: Buffer.alloc(0) },
+    referenceAudioStorageType: { type: String, default: "" },
+    referenceAudioUrl: { type: String, default: "" },
+    referenceAudioOssKey: { type: String, default: "" },
+    referenceAudioOssBucket: { type: String, default: "" },
+    referenceAudioOssRegion: { type: String, default: "" },
+    referenceAudioMimeType: { type: String, default: "" },
+    referenceAudioSize: { type: Number, default: 0 },
+    referenceAudioFileName: { type: String, default: "" },
   },
   {
     timestamps: true,
@@ -1279,6 +1288,31 @@ generatedMusicHistorySchema.index(
 const GeneratedMusicHistory =
   mongoose.models.GeneratedMusicHistory ||
   mongoose.model("GeneratedMusicHistory", generatedMusicHistorySchema);
+
+const generatedLyricsHistorySchema = new mongoose.Schema(
+  {
+    userId: { type: String, required: true, index: true },
+    title: { type: String, default: "" },
+    mode: { type: String, default: "write_full_song" },
+    prompt: { type: String, default: "" },
+    sourceLyrics: { type: String, default: "" },
+    songTitle: { type: String, default: "" },
+    styleTags: { type: String, default: "" },
+    lyrics: { type: String, default: "" },
+  },
+  {
+    timestamps: true,
+    collection: "generated_lyrics_histories",
+  },
+);
+generatedLyricsHistorySchema.index(
+  { userId: 1, createdAt: -1 },
+  { name: "ix_generated_lyrics_histories_user_created_at_desc" },
+);
+
+const GeneratedLyricsHistory =
+  mongoose.models.GeneratedLyricsHistory ||
+  mongoose.model("GeneratedLyricsHistory", generatedLyricsHistorySchema);
 
 const groupChatRoomReadStateSchema = new mongoose.Schema(
   {
@@ -6937,12 +6971,16 @@ function toGeneratedMusicHistoryItem(doc) {
   const safeId = sanitizeId(doc?._id, "");
   const format = normalizeGeneratedMusicFormat(doc?.format);
   const ossKey = sanitizeGroupChatOssObjectKey(doc?.ossKey);
+  const referenceAudioOssKey = sanitizeGroupChatOssObjectKey(
+    doc?.referenceAudioOssKey,
+  );
   return {
     _id: safeId,
     title: sanitizeText(doc?.title, "", 80),
     model: sanitizeText(doc?.model, "", 120),
     prompt: sanitizeText(doc?.prompt, "", 2000),
     lyrics: sanitizeText(doc?.lyrics, "", 3500),
+    generationType: sanitizeText(doc?.generationType, "compose", 32),
     isInstrumental: !!doc?.isInstrumental,
     lyricsOptimizer: !!doc?.lyricsOptimizer,
     format,
@@ -6953,24 +6991,56 @@ function toGeneratedMusicHistoryItem(doc) {
     hasOssBackup:
       sanitizeGroupChatFileStorageType(doc?.audioStorageType) === "oss" ||
       !!ossKey,
+    referenceAudioFileName: sanitizeText(doc?.referenceAudioFileName, "", 255),
+    referenceAudioMimeType: sanitizeText(doc?.referenceAudioMimeType, "", 120),
+    referenceAudioSize: sanitizeRuntimeInteger(
+      doc?.referenceAudioSize,
+      0,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    hasReferenceAudioBackup:
+      sanitizeGroupChatFileStorageType(doc?.referenceAudioStorageType) === "oss" ||
+      !!referenceAudioOssKey,
     createdAt: sanitizeIsoDate(doc?.createdAt),
     contentPath: buildGeneratedMusicHistoryContentPath(safeId),
+  };
+}
+
+function toGeneratedLyricsHistoryItem(doc) {
+  return {
+    _id: sanitizeId(doc?._id, ""),
+    title: sanitizeText(doc?.title, "", 80),
+    mode: sanitizeText(doc?.mode, "write_full_song", 32),
+    prompt: sanitizeText(doc?.prompt, "", 2000),
+    sourceLyrics: sanitizeText(doc?.sourceLyrics, "", 3500),
+    songTitle: sanitizeText(doc?.songTitle, "", 160),
+    styleTags: sanitizeText(doc?.styleTags, "", 500),
+    lyrics: sanitizeText(doc?.lyrics, "", 3500),
+    createdAt: sanitizeIsoDate(doc?.createdAt),
   };
 }
 
 async function deleteGeneratedMusicHistoryOssObjects(historyItems) {
   const docs = Array.isArray(historyItems) ? historyItems : [];
   const failedKeys = [];
+  const seenKeys = new Set();
   let deletedCount = 0;
 
   for (const doc of docs) {
-    const ossKey = sanitizeGroupChatOssObjectKey(doc?.ossKey);
-    if (!ossKey) continue;
-    try {
-      const deleted = await deleteGroupChatOssObject(ossKey);
-      if (deleted) deletedCount += 1;
-    } catch {
-      failedKeys.push(ossKey);
+    const candidateKeys = [
+      sanitizeGroupChatOssObjectKey(doc?.ossKey),
+      sanitizeGroupChatOssObjectKey(doc?.referenceAudioOssKey),
+    ].filter(Boolean);
+    for (const ossKey of candidateKeys) {
+      if (seenKeys.has(ossKey)) continue;
+      seenKeys.add(ossKey);
+      try {
+        const deleted = await deleteGroupChatOssObject(ossKey);
+        if (deleted) deletedCount += 1;
+      } catch {
+        failedKeys.push(ossKey);
+      }
     }
   }
 
@@ -17820,6 +17890,8 @@ export {
   GeneratedImageHistory,
   generatedMusicHistorySchema,
   GeneratedMusicHistory,
+  generatedLyricsHistorySchema,
+  GeneratedLyricsHistory,
   groupChatRoomReadStateSchema,
   groupChatRoomSchema,
   GroupChatRoom,
@@ -17924,6 +17996,7 @@ export {
   normalizeGeneratedMusicFormat,
   normalizeGeneratedMusicMimeType,
   toGeneratedMusicHistoryItem,
+  toGeneratedLyricsHistoryItem,
   parseTeacherScopedStorageUserId,
   resolveGeneratedImageOutputUrl,
   fetchGeneratedImageBinaryFromUrl,

@@ -1341,28 +1341,28 @@
   overscroll-behavior: auto;
   padding: 20px 22px 24px;
   border-radius: 28px;
-  background: var(--bg-surface);
-  box-shadow: inset 0 0 0 1px rgba(232, 230, 220, 0.94);
+  background: transparent;
+  box-shadow: none;
 }
 
 .image-ideogram-board[data-library-view="explore"] {
-  background: var(--bg-surface);
-  box-shadow: inset 0 0 0 1px rgba(232, 230, 220, 0.94);
+  background: transparent;
+  box-shadow: none;
 }
 
 .image-ideogram-board[data-library-view="collections"] {
-  background: var(--bg-surface);
-  box-shadow: inset 0 0 0 1px rgba(232, 230, 220, 0.94);
+  background: transparent;
+  box-shadow: none;
 }
 
 .image-ideogram-board[data-library-view="my-images"] {
-  background: var(--bg-surface);
-  box-shadow: inset 0 0 0 1px rgba(232, 230, 220, 0.94);
+  background: transparent;
+  box-shadow: none;
 }
 
 .image-ideogram-board[data-library-view="likes"] {
-  background: var(--bg-surface);
-  box-shadow: inset 0 0 0 1px rgba(232, 230, 220, 0.94);
+  background: transparent;
+  box-shadow: none;
 }
 
 .image-gallery-empty {

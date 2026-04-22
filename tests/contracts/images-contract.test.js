@@ -23,8 +23,33 @@ test("normalizeImageHistoryListResponse normalizes item arrays", () => {
   assert.deepEqual(normalized.items, [
     {
       _id: "123",
+      id: "123",
       prompt: "hello",
       imageUrl: "",
+      url: "",
+      imageStorageType: "",
+      responseFormat: "",
+      size: "",
+      model: "",
+      createdAt: "",
+    },
+  ]);
+});
+
+test("normalizeImageHistoryListResponse preserves id/url payload shape", () => {
+  const normalized = normalizeImageHistoryListResponse({
+    ok: true,
+    items: [{ id: 456, url: "/api/images/history/456/content", prompt: "world" }],
+  });
+
+  assert.equal(normalized.ok, true);
+  assert.deepEqual(normalized.items, [
+    {
+      _id: "456",
+      id: "456",
+      prompt: "world",
+      imageUrl: "/api/images/history/456/content",
+      url: "/api/images/history/456/content",
       imageStorageType: "",
       responseFormat: "",
       size: "",
