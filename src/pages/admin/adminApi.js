@@ -539,6 +539,41 @@ export function exportAdminGroupChatsTxt(
   );
 }
 
+export async function exportAdminGroupChatsZip(
+  adminToken,
+  teacherScopeKey,
+  options = {},
+) {
+  const path = withExportDateQuery(
+    withTeacherScopeQuery("/api/auth/admin/export/group-chats-zip", teacherScopeKey),
+    options?.exportDate,
+  );
+  const resp = await fetch(path, {
+    headers: authHeader(adminToken),
+  });
+
+  if (!resp.ok) {
+    let message = "";
+    try {
+      const data = await resp.json();
+      message = data?.error || data?.message || "";
+    } catch {
+      try {
+        message = await resp.text();
+      } catch {
+        message = "";
+      }
+    }
+    throw new Error(message || `请求失败（${resp.status}）`);
+  }
+
+  const blob = await resp.blob();
+  const filename =
+    readContentDispositionFilename(resp.headers.get("Content-Disposition")) ||
+    "educhat-group-chats.zip";
+  return { blob, filename };
+}
+
 export function exportAdminGeneratedImagesTxt(adminToken, teacherScopeKey) {
   return request(
     withTeacherScopeQuery(

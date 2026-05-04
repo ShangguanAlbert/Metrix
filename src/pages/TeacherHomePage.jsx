@@ -69,7 +69,7 @@ import {
   exportAdminChatsZip,
   exportAdminClassroomHomeworkLessonZip,
   exportAdminGeneratedImagesTxt,
-  exportAdminGroupChatsTxt,
+  exportAdminGroupChatsZip,
   exportAdminUsersTxt,
   dissolveAdminGroupChatRoom,
   deleteAdminClassroomTaskFile,
@@ -2475,39 +2475,39 @@ export default function TeacherHomePage() {
     });
   }
 
-  async function onExportCenterGroupChatsTxt() {
+  async function onExportCenterGroupChatsZip() {
     await runExportCenterTask("group-chats", async () => {
-      const data = await exportAdminGroupChatsTxt(
+      const data = await exportAdminGroupChatsZip(
         adminToken,
         exportCenterScopeKey,
       );
-      triggerTextDownload(
-        data?.filename || "educhat-group-chats.txt",
-        data?.content || "",
+      triggerBrowserDownload(
+        data?.blob,
+        data?.filename || "educhat-group-chats.zip",
       );
-      setExportCenterNotice("群聊聊天记录导出完成。");
+      setExportCenterNotice("群聊聊天记录（ZIP）导出完成。");
     });
   }
 
-  async function onExportCenterGroupChatsTxtByDate() {
+  async function onExportCenterGroupChatsZipByDate() {
     const safeExportDate = String(exportCenterDate || "").trim();
     if (!isValidDateInputValue(safeExportDate)) {
       setExportCenterError("请选择有效的导出日期。");
       return;
     }
     await runExportCenterTask("group-chats-date", async () => {
-      const data = await exportAdminGroupChatsTxt(
+      const data = await exportAdminGroupChatsZip(
         adminToken,
         exportCenterScopeKey,
         {
           exportDate: safeExportDate,
         },
       );
-      triggerTextDownload(
-        data?.filename || `educhat-group-chats-${safeExportDate}.txt`,
-        data?.content || "",
+      triggerBrowserDownload(
+        data?.blob,
+        data?.filename || `educhat-group-chats-${safeExportDate}.zip`,
       );
-      setExportCenterNotice(`群聊聊天记录（${safeExportDate}）导出完成。`);
+      setExportCenterNotice(`群聊聊天记录（${safeExportDate}，ZIP）导出完成。`);
     });
   }
 
@@ -7063,24 +7063,24 @@ export default function TeacherHomePage() {
                     <div className="teacher-export-center-group">
                       <h3>群聊与图片</h3>
                       <p>
-                        群聊支持按范围或按日期导出，图片记录单独导出为 TXT。
+                        群聊导出为 ZIP，内含聊天 TXT 与对应附件；图片记录单独导出为 TXT。
                       </p>
                       <div className="teacher-export-center-actions">
                         <button
                           type="button"
                           className="teacher-ghost-btn"
-                          onClick={() => void onExportCenterGroupChatsTxt()}
+                          onClick={() => void onExportCenterGroupChatsZip()}
                           disabled={!!exportCenterLoading}
                         >
                           {exportCenterLoading === "group-chats"
                             ? "导出中..."
-                            : "导出群聊聊天记录（TXT）"}
+                            : "导出群聊聊天记录（ZIP 含附件）"}
                         </button>
                         <button
                           type="button"
                           className="teacher-ghost-btn"
                           onClick={() =>
-                            void onExportCenterGroupChatsTxtByDate()
+                            void onExportCenterGroupChatsZipByDate()
                           }
                           disabled={
                             !!exportCenterLoading ||
@@ -7089,7 +7089,7 @@ export default function TeacherHomePage() {
                         >
                           {exportCenterLoading === "group-chats-date"
                             ? "导出中..."
-                            : "导出指定日期群聊记录（TXT）"}
+                            : "导出指定日期群聊记录（ZIP 含附件）"}
                         </button>
                         <button
                           type="button"

@@ -1,3 +1,7 @@
+import {
+  buildAdminGroupChatsZipBundle,
+} from "../services/admin-group-chat-export.js";
+
 export function registerAdminRoutes(app, deps) {
   const {
     express,
@@ -3478,6 +3482,62 @@ export function registerAdminRoutes(app, deps) {
           : `educhat-group-chats-${teacherScopeKey}-${suffix}.txt`,
         content,
       });
+    } catch (error) {
+      res.status(500).json({
+        error: error?.message || "导出群聊聊天记录失败，请稍后重试。",
+      });
+    }
+  });
+
+  app.get("/api/auth/admin/export/group-chats-zip", async (req, res) => {
+    if (!(await authenticateAdminRequest(req, res))) return;
+    const teacherScopeKey = sanitizeTeacherScopeKey(req.query?.teacherScopeKey);
+    const exportDate = sanitizeExportDate(req.query?.exportDate);
+
+    if (req.query?.exportDate != null && !exportDate) {
+      res.status(400).json({ error: "请选择有效的导出日期。" });
+      return;
+    }
+
+    try {
+      const data = await readAdminGroupChatsExportData(
+        teacherScopeKey,
+        exportDate,
+      );
+      const bundle = await buildAdminGroupChatsZipBundle(data, {
+        getTeacherScopeLabel,
+        formatDisplayTime,
+        sanitizeTeacherScopeKey,
+        sanitizeExportDate,
+        sanitizeId,
+        sanitizeText,
+        sanitizeGroupChatMemberUserIds,
+        sanitizeGroupChatImageFileName,
+        sanitizeGroupChatFileName,
+        sanitizeGroupChatFileMimeType,
+        sanitizeGroupChatHttpUrl,
+        sanitizeGroupChatOssObjectKey,
+        sanitizeZipEntryName,
+        resolveFileExtensionByMimeType,
+        parseGeneratedImageDataUrl,
+        extractGeneratedImageDataBuffer,
+        buildGroupChatOssObjectUrl,
+        callGroupChatOssWithTimeoutFallback,
+        groupChatOssClient,
+        findGroupChatStoredFileByRoomAndId,
+        fetch,
+      });
+      const zipBuffer = buildZipBuffer(bundle.files);
+      const suffix = formatFileStamp(new Date());
+      const fileName = exportDate
+        ? `educhat-group-chats-${teacherScopeKey}-${exportDate}-${suffix}.zip`
+        : `educhat-group-chats-${teacherScopeKey}-${suffix}.zip`;
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader(
+        "Content-Disposition",
+        buildAttachmentContentDisposition(fileName),
+      );
+      res.send(zipBuffer);
     } catch (error) {
       res.status(500).json({
         error: error?.message || "导出群聊聊天记录失败，请稍后重试。",
