@@ -32,7 +32,8 @@
    - 至少配置一个 provider 的 API Key；若使用 PackyCode，请设置 `PACKYCODE_API_KEY`；若使用 MiniMax，请设置 `MINIMAX_API_KEY`
    - 如需本地模拟子路径部署，可额外设置 `EDUCHAT_BASE_PATH=/hznu/metaxfang/`
    - 本地调试群聊 `@AI` 时，建议单独启动 Mongo 和 Redis，再用 `npm run dev`
-   - 本地默认 Redis 地址可直接使用 `.env` 里的 `GROUP_CHAT_AI_REDIS_URL=redis://127.0.0.1:6379`
+   - 本地默认 Redis 地址可直接使用 `.env` 里的 `GROUP_CHAT_AI_REDIS_URL=redis://127.0.0.1:6380`
+   - 如同时部署了 Dify 等也占用宿主机 `6379` 的服务，EduChat 的 Docker Redis 默认映射到宿主机 `6380`
 3. 启动服务：
    - `npm run dev`
    - 该命令会同时启动后端、前端和群聊 `@AI` worker
@@ -59,6 +60,7 @@
 - `npm run dev` 默认会连带启动群聊 `@AI` worker，不需要再额外执行 `npm run worker:group-chat-ai`
 - 服务器 Docker 部署直接使用：
   - `docker compose up -d --build`
+- Docker 容器内部 Redis 仍固定为 `redis://redis:6379`；只有宿主机调试入口改为 `127.0.0.1:6380`
 
 ## PackyCode Provider
 
