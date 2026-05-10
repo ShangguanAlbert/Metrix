@@ -216,8 +216,9 @@ export function createPartySocketClient({
   function joinRoom(roomId) {
     const safeRoomId = sanitizeRoomId(roomId);
     if (!safeRoomId) return;
+    const alreadyDesired = desiredRooms.has(safeRoomId);
     desiredRooms.add(safeRoomId);
-    if (authed) {
+    if (authed && !alreadyDesired) {
       send({ type: "join_room", roomId: safeRoomId });
     }
   }

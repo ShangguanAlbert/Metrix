@@ -55,6 +55,11 @@ import {
   sendPartyTextMessage,
   togglePartyMessageReaction,
 } from "../../party/partyApi.js";
+import {
+  arePartyIdListsEqual,
+  getPartyRoomSubscriptionDiff,
+  normalizePartyRoomOnlineUserIds,
+} from "../../party/partyRealtimeState.js";
 import { createPartySocketClient } from "../../party/partySocket.js";
 import "../../../styles/chat.css";
 import "../../../styles/party-chat.css";
@@ -1550,22 +1555,25 @@ export default function PartyChatDesktopPage({
   const applyRoomPresence = useCallback((roomId, onlineUserIds) => {
     const safeRoomId = String(roomId || "").trim();
     if (!safeRoomId) return;
-    const normalizedOnlineUserIds = Array.from(
-      new Set(
-        (Array.isArray(onlineUserIds) ? onlineUserIds : [])
-          .map((item) => String(item || "").trim())
-          .filter(Boolean),
-      ),
-    );
-    setRooms((prev) =>
-      prev.map((room) => {
+    setRooms((prev) => {
+      let changed = false;
+      const next = prev.map((room) => {
         if (room.id !== safeRoomId) return room;
+        const normalizedOnlineUserIds = normalizePartyRoomOnlineUserIds(
+          onlineUserIds,
+          room.memberUserIds,
+        );
+        if (arePartyIdListsEqual(room.onlineMemberUserIds, normalizedOnlineUserIds)) {
+          return room;
+        }
+        changed = true;
         return {
           ...room,
           onlineMemberUserIds: normalizedOnlineUserIds,
         };
-      }),
-    );
+      });
+      return changed ? next : prev;
+    });
   }, []);
 
   const applyRoomReadState = useCallback((roomId, readState) => {
@@ -1941,17 +1949,12 @@ export default function PartyChatDesktopPage({
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket) return;
-    const nextRoomIds = new Set(
-      rooms
-        .map((room) => String(room?.id || "").trim())
-        .filter(Boolean),
+    const { nextRoomIds, joinRoomIds, leaveRoomIds } = getPartyRoomSubscriptionDiff(
+      joinedRoomIdsRef.current,
+      rooms,
     );
-    nextRoomIds.forEach((roomId) => socket.joinRoom(roomId));
-    joinedRoomIdsRef.current.forEach((roomId) => {
-      if (!nextRoomIds.has(roomId)) {
-        socket.leaveRoom(roomId);
-      }
-    });
+    joinRoomIds.forEach((roomId) => socket.joinRoom(roomId));
+    leaveRoomIds.forEach((roomId) => socket.leaveRoom(roomId));
     joinedRoomIdsRef.current = nextRoomIds;
   }, [rooms]);
 
@@ -4778,14 +4781,7 @@ function normalizeRoomReadStates(rawReadStates) {
 }
 
 function normalizeRoomOnlineUserIds(rawOnlineUserIds, memberUserIds = []) {
-  const memberSet = new Set(Array.isArray(memberUserIds) ? memberUserIds : []);
-  return Array.from(
-    new Set(
-      (Array.isArray(rawOnlineUserIds) ? rawOnlineUserIds : [])
-        .map((item) => String(item || "").trim())
-        .filter((userId) => userId && memberSet.has(userId)),
-    ),
-  );
+  return normalizePartyRoomOnlineUserIds(rawOnlineUserIds, memberUserIds);
 }
 
 function normalizeMessages(rawMessages) {

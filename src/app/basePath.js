@@ -23,7 +23,15 @@ function normalizeBasePath(value = "/") {
   return pathname === "/" ? "/" : `${pathname}/`;
 }
 
-const APP_BASE_PATH = normalizeBasePath(import.meta.env.BASE_URL || "/");
+const IMPORT_META_ENV =
+  typeof import.meta === "object" &&
+  import.meta &&
+  typeof import.meta.env === "object" &&
+  import.meta.env
+    ? import.meta.env
+    : {};
+
+const APP_BASE_PATH = normalizeBasePath(IMPORT_META_ENV.BASE_URL || "/");
 const APP_BASE_PREFIX = APP_BASE_PATH === "/" ? "" : APP_BASE_PATH.slice(0, -1);
 
 function isExternalUrl(value) {
