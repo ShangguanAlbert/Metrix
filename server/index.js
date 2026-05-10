@@ -18,6 +18,7 @@ import { registerAdminRoutes } from "./routes/admin.js";
 import { registerGroupChatRoutes } from "./routes/group-chat.js";
 import { registerNotesRoutes } from "./routes/notes.js";
 import { createGroupChatRealtimeHub } from "./runtime/group-chat-realtime-hub.js";
+import { subscribeGroupChatAiEvents } from "./runtime/group-chat-ai-events.js";
 
 const app = express();
 const APP_BASE_PATH = resolveConfiguredBasePath();
@@ -81,6 +82,15 @@ async function startServer() {
 
   const server = http.createServer(app);
   groupChatRealtimeHub.initWebSocketServer(server);
+  const unsubscribeGroupChatAiEvents = subscribeGroupChatAiEvents({
+    env: process.env,
+    logger: console,
+    onMessageUpdated: (payload) => {
+      const roomId = String(payload?.roomId || payload?.message?.roomId || "").trim();
+      if (!roomId || !payload?.message) return;
+      groupChatRealtimeHub.broadcastMessageUpdated(roomId, payload.message);
+    },
+  });
 
   server.listen(deps.port, () => {
     console.log(`API server listening on http://localhost:${deps.port}`);
@@ -89,6 +99,24 @@ async function startServer() {
     );
     console.log(`Configured app base path: ${APP_BASE_PATH}`);
   });
+
+  const shutdown = async () => {
+    try {
+      await unsubscribeGroupChatAiEvents();
+    } catch {
+      // ignore
+    }
+    server.close();
+    try {
+      await deps.mongoose.disconnect();
+    } catch {
+      // ignore
+    }
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 
   void startupTasks.run();
 }

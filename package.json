@@ -26,7 +26,8 @@
     "test:session-notes:integration": "node scripts/test-session-notes-stream-integration.mjs",
     "test:chat-agent-locking": "node scripts/test-chat-agent-locking.mjs",
     "test:music-generation": "node scripts/test-music-generation-module.mjs",
-    "test:minimax-live": "node scripts/test-minimax-live.mjs"
+    "test:minimax-live": "node scripts/test-minimax-live.mjs",
+    "worker:group-chat-ai": "node server/workers/group-chat-ai-worker.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
@@ -53,6 +54,7 @@
     "express": "^5.2.1",
     "gpt-tokenizer": "^3.4.0",
     "highlight.js": "^11.11.1",
+    "ioredis": "^5.10.1",
     "lucide-react": "^0.563.0",
     "mammoth": "^1.11.0",
     "marked": "^18.0.0",

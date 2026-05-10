@@ -14,11 +14,14 @@
    - 如需使用 MiniMax 原生聊天、歌词生成与音乐生成：配置 `MINIMAX_API_KEY`；可选覆盖 `MINIMAX_CHAT_ENDPOINT`、`MINIMAX_MUSIC_ENDPOINT` 与 `MINIMAX_LYRICS_ENDPOINT`
    - 如启用文件 OSS 存储：配置 `ALIYUN_OSS_*` 与 `ALIYUN_ACCESS_KEY_*`；公共读桶请设 `ALIYUN_OSS_PUBLIC_READ=true`，私有桶保持 `false`；网络路由建议使用 `ALIYUN_OSS_NETWORK_MODE`：`public`（本地）/`internal_prefer`（ECS 生产）/`internal_only`（严格内网）。`ALIYUN_OSS_INTERNAL` 仍兼容旧配置
    - 默认启用启动自检（Bucket 可达性 + 写删探测），可通过 `ALIYUN_OSS_STARTUP_CHECK_*` 开关调整
+   - `docker compose` 会一并启动 `mongo`、`redis`、`app` 与 `group-chat-ai-worker`
+   - 容器内群聊 `@AI` 队列固定连接 `redis://redis:6379`，不使用 `.env` 里写给本机调试的 `127.0.0.1`
 2. 启动服务：
    - `docker compose up -d --build`
 3. 查看状态：
    - `docker compose ps`
    - `docker compose logs -f app`
+   - `docker compose logs -f group-chat-ai-worker`
 
 ## 本地部署
 
@@ -28,8 +31,11 @@
    - `cp .env.example .env`
    - 至少配置一个 provider 的 API Key；若使用 PackyCode，请设置 `PACKYCODE_API_KEY`；若使用 MiniMax，请设置 `MINIMAX_API_KEY`
    - 如需本地模拟子路径部署，可额外设置 `EDUCHAT_BASE_PATH=/hznu/metaxfang/`
+   - 本地调试群聊 `@AI` 时，建议单独启动 Mongo 和 Redis，再用 `npm run dev`
+   - 本地默认 Redis 地址可直接使用 `.env` 里的 `GROUP_CHAT_AI_REDIS_URL=redis://127.0.0.1:6379`
 3. 启动服务：
    - `npm run dev`
+   - 该命令会同时启动后端、前端和群聊 `@AI` worker
 
 ## 固定公开 Agent
 
@@ -38,6 +44,21 @@
 - `Agent C (Distance Education)` → `volcengine / doubao-seed-2-0-pro-260215`
 - `Agent D (Qwen-3.5)` → `aliyun / qwen3.5-plus`
 - 新建聊天时必须先选择 agent；选定后会在整个会话生命周期内锁定，不支持会话中途切换
+
+## 群聊 `@AI`
+
+- 群聊里的 `@AI` 固定走 `Agent A (packycode / gpt-5.4)`，学生不能自行选择模型
+- 群聊 `@AI` 采用 `Web 服务 + Redis 队列 + 独立 worker` 架构
+- 启用前请在 `.env` 中配置：
+  - `GROUP_CHAT_AI_REDIS_URL`
+  - 可选 `GROUP_CHAT_AI_REDIS_PREFIX`
+- 本地联调启动顺序建议：
+  - 先启动 Mongo
+  - 再启动 Redis
+  - `npm run dev`
+- `npm run dev` 默认会连带启动群聊 `@AI` worker，不需要再额外执行 `npm run worker:group-chat-ai`
+- 服务器 Docker 部署直接使用：
+  - `docker compose up -d --build`
 
 ## PackyCode Provider
 

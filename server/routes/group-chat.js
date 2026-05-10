@@ -1,3 +1,17 @@
+import { GroupChatAiTask } from "../models/group-chat-ai-task.js";
+import {
+  buildGroupChatAiContextSnapshot,
+  buildGroupChatAiFailedReplyDraft,
+  buildGroupChatAiPendingReplyDraft,
+  isGroupChatAiMentionRequested,
+} from "../services/group-chat-ai.js";
+import { getGroupChatAiRedisClient, getGroupChatAiRedisPrefix } from "../runtime/group-chat-ai-runtime.js";
+import {
+  enqueueGroupChatAiTaskId,
+  reserveGroupChatAiPendingCapacity,
+  rollbackGroupChatAiPendingCapacity,
+} from "../runtime/group-chat-ai-redis.js";
+
 export function registerGroupChatRoutes(app, deps) {
   const {
     express,
@@ -1383,6 +1397,161 @@ export function registerGroupChatRoutes(app, deps) {
         throw new Error("消息格式化失败");
       }
       broadcastGroupChatMessageCreated(roomId, normalizedMessage);
+
+      if (isGroupChatAiMentionRequested(content)) {
+        const recentDocs = await GroupChatMessage.find({ roomId })
+          .sort({ createdAt: -1 })
+          .limit(24)
+          .lean();
+        recentDocs.reverse();
+        const recentMessages = recentDocs
+          .map((item) => normalizeGroupChatMessageDoc(item))
+          .filter(Boolean);
+        const contextSnapshot = buildGroupChatAiContextSnapshot({
+          room: normalizedRoom,
+          triggerMessage: normalizedMessage,
+          recentMessages,
+        });
+        const redis = getGroupChatAiRedisClient(process.env);
+        const redisPrefix = getGroupChatAiRedisPrefix(process.env);
+        const duplicateHash = crypto
+          .createHash("sha1")
+          .update(`${roomId}::${userId}::${contextSnapshot.userQuestion}`)
+          .digest("hex");
+
+        let queueDecision = {
+          accepted: false,
+          code: "redis_unavailable",
+          message: "AI 队列服务暂不可用，请稍后再试。",
+        };
+        if (redis) {
+          queueDecision = await reserveGroupChatAiPendingCapacity(redis, {
+            prefix: redisPrefix,
+            roomId,
+            userId,
+            duplicateHash,
+          });
+        }
+
+        if (!queueDecision.accepted) {
+          const failedReplyDoc = await GroupChatMessage.create({
+            ...buildGroupChatAiFailedReplyDraft({
+              roomId,
+              triggerMessageId: normalizedMessage.id,
+              requestedByUserId: userId,
+              errorMessage: queueDecision.message,
+            }),
+            replyPreviewText: content.slice(0, 80),
+            replySenderName: senderName,
+            replyType: "text",
+          });
+          const normalizedFailedReply = normalizeGroupChatMessageDoc(failedReplyDoc);
+          if (normalizedFailedReply) {
+            broadcastGroupChatMessageCreated(roomId, normalizedFailedReply);
+          }
+        } else {
+          const taskId = String(new mongoose.Types.ObjectId());
+          const placeholderMessageId = String(new mongoose.Types.ObjectId());
+          const placeholderDraft = buildGroupChatAiPendingReplyDraft({
+            roomId,
+            triggerMessageId: normalizedMessage.id,
+            requestedByUserId: userId,
+          });
+
+          let placeholderDoc = null;
+          let taskDoc = null;
+          try {
+            placeholderDoc = await GroupChatMessage.create({
+              _id: placeholderMessageId,
+              ...placeholderDraft,
+              replyPreviewText: content.slice(0, 80),
+              replySenderName: senderName,
+              replyType: "text",
+              aiMeta: {
+                ...placeholderDraft.aiMeta,
+                taskId,
+              },
+            });
+            taskDoc = await GroupChatAiTask.create({
+              _id: taskId,
+              roomId,
+              triggerMessageId: normalizedMessage.id,
+              placeholderMessageId,
+              requestedByUserId: userId,
+              requestedByUserName: senderName,
+              agentId: "A",
+              provider: "packycode",
+              model: "gpt-5.4",
+              status: "pending",
+              contextSnapshot,
+              attachmentRefs: Array.isArray(contextSnapshot.attachmentMessages)
+                ? contextSnapshot.attachmentMessages.map((item) => ({
+                    messageId: item.id,
+                    type: item.type,
+                    fileId: item?.file?.fileId || "",
+                    fileName: item?.file?.fileName || item?.image?.fileName || "",
+                  }))
+                : [],
+              queueJobId: taskId,
+              attemptCount: 0,
+              lastQueuedAt: new Date(),
+            });
+            await enqueueGroupChatAiTaskId(redis, {
+              prefix: redisPrefix,
+              taskId,
+            });
+            const normalizedPlaceholder = normalizeGroupChatMessageDoc(placeholderDoc);
+            if (normalizedPlaceholder) {
+              broadcastGroupChatMessageCreated(roomId, normalizedPlaceholder);
+            }
+          } catch {
+            await rollbackGroupChatAiPendingCapacity(redis, {
+              prefix: redisPrefix,
+              roomId,
+              userId,
+              duplicateHash,
+            }).catch(() => {});
+            if (taskDoc?._id) {
+              await GroupChatAiTask.findByIdAndUpdate(taskDoc._id, {
+                $set: {
+                  status: "failed",
+                  finishedAt: new Date(),
+                  lastError: "AI 队列创建失败，请稍后再试。",
+                  leaseUntil: null,
+                  dequeuedAt: null,
+                },
+              }).catch(() => {});
+            }
+            if (placeholderDoc?._id) {
+              const failedPlaceholder = await GroupChatMessage.findByIdAndUpdate(
+                placeholderDoc._id,
+                {
+                  $set: {
+                    content: "AI 队列创建失败，请稍后再试。",
+                    aiMeta: {
+                      taskId,
+                      agentId: "A",
+                      provider: "packycode",
+                      model: "gpt-5.4",
+                      requestedByUserId: userId,
+                      triggerMessageId: normalizedMessage.id,
+                      status: "failed",
+                      streaming: false,
+                      error: "AI 队列创建失败，请稍后再试。",
+                    },
+                  },
+                },
+                { new: true },
+              ).lean();
+              const normalizedFailedPlaceholder =
+                normalizeGroupChatMessageDoc(failedPlaceholder);
+              if (normalizedFailedPlaceholder) {
+                broadcastGroupChatMessageCreated(roomId, normalizedFailedPlaceholder);
+              }
+            }
+          }
+        }
+      }
 
       res.json({
         ok: true,

@@ -33,6 +33,7 @@ export function createPartySocketClient({
   onAuthed,
   onJoined,
   onMessageCreated,
+  onMessageUpdated,
   onMessageDeleted,
   onMessageReactionsUpdated,
   onRoomUpdated,
@@ -113,6 +114,11 @@ export function createPartySocketClient({
 
     if (type === "message_created") {
       onMessageCreated?.(payload);
+      return;
+    }
+
+    if (type === "message_updated") {
+      onMessageUpdated?.(payload);
       return;
     }
 

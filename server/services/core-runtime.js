@@ -1376,6 +1376,21 @@ const groupChatMessageReactionSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const groupChatAiMetaSchema = new mongoose.Schema(
+  {
+    taskId: { type: String, default: "" },
+    agentId: { type: String, default: "A" },
+    provider: { type: String, default: "packycode" },
+    model: { type: String, default: "gpt-5.4" },
+    requestedByUserId: { type: String, default: "" },
+    triggerMessageId: { type: String, default: "" },
+    status: { type: String, default: "" },
+    streaming: { type: Boolean, default: false },
+    error: { type: String, default: "" },
+  },
+  { _id: false },
+);
+
 const groupChatStoredFileSchema = new mongoose.Schema(
   {
     roomId: { type: String, required: true, index: true },
@@ -1422,6 +1437,11 @@ const groupChatMessageSchema = new mongoose.Schema(
       type: String,
       enum: ["text", "image", "file", "system"],
       required: true,
+    },
+    senderKind: {
+      type: String,
+      enum: ["user", "system", "ai"],
+      default: "user",
     },
     senderUserId: { type: String, default: "" },
     senderName: { type: String, default: "" },
@@ -1513,6 +1533,10 @@ const groupChatMessageSchema = new mongoose.Schema(
     reactions: {
       type: [groupChatMessageReactionSchema],
       default: () => [],
+    },
+    aiMeta: {
+      type: groupChatAiMetaSchema,
+      default: () => ({}),
     },
   },
   {
@@ -12321,6 +12345,7 @@ function extractRequestFailureCode(error) {
 function isRetryableRequestFailure(error) {
   const code = extractRequestFailureCode(error);
   return (
+    code === "EPIPE" ||
     code === "ECONNRESET" ||
     code === "ETIMEDOUT" ||
     code === "UND_ERR_CONNECT_TIMEOUT" ||
@@ -14149,6 +14174,43 @@ function normalizeGroupChatRoomFileItemFromMessageDoc(doc) {
   };
 }
 
+function normalizeGroupChatAiMeta(value) {
+  if (!value || typeof value !== "object") return null;
+  const taskId = sanitizeId(value?.taskId, "");
+  const triggerMessageId = sanitizeId(value?.triggerMessageId, "");
+  const requestedByUserId = sanitizeId(value?.requestedByUserId, "");
+  const status = sanitizeText(value?.status, "", 16).toLowerCase();
+  const provider = sanitizeText(value?.provider, "", 40).toLowerCase();
+  const model = sanitizeText(value?.model, "", 120);
+  const agentId = sanitizeText(value?.agentId, "", 20).toUpperCase();
+  const streaming = sanitizeRuntimeBoolean(value?.streaming, false);
+  const error = sanitizeText(value?.error, "", 240);
+  if (
+    !taskId &&
+    !triggerMessageId &&
+    !requestedByUserId &&
+    !status &&
+    !provider &&
+    !model &&
+    !agentId &&
+    !streaming &&
+    !error
+  ) {
+    return null;
+  }
+  return {
+    taskId,
+    agentId,
+    provider,
+    model,
+    requestedByUserId,
+    triggerMessageId,
+    status,
+    streaming,
+    error,
+  };
+}
+
 function normalizeGroupChatMessageDoc(doc) {
   if (!doc) return null;
   const id = sanitizeId(doc?._id, "");
@@ -14169,6 +14231,12 @@ function normalizeGroupChatMessageDoc(doc) {
     id,
     roomId,
     type,
+    senderKind:
+      type === "system"
+        ? "system"
+        : sanitizeText(doc?.senderKind, "", 12).toLowerCase() === "ai"
+          ? "ai"
+          : "user",
     senderUserId: sanitizeId(doc?.senderUserId, ""),
     senderName: sanitizeText(
       doc?.senderName,
@@ -14193,6 +14261,7 @@ function normalizeGroupChatMessageDoc(doc) {
     ).slice(0, 12),
     reactions: normalizeGroupChatReactions(doc?.reactions),
     createdAt: sanitizeIsoDate(doc?.createdAt),
+    aiMeta: normalizeGroupChatAiMeta(doc?.aiMeta),
   };
 
   if (type === "image") {
@@ -16004,7 +16073,10 @@ async function updateGroupChatRoomReadState({
         readStates: nextReadStates,
       },
     },
-    { new: true },
+    {
+      new: true,
+      timestamps: false,
+    },
   ).lean();
 }
 
@@ -16505,6 +16577,20 @@ function broadcastGroupChatMessageCreated(roomId, message) {
   if (!normalizedMessage) return;
   broadcastGroupChatWsPayload(roomId, {
     type: "message_created",
+    roomId: sanitizeId(roomId, normalizedMessage.roomId),
+    message: normalizedMessage,
+  });
+}
+
+function broadcastGroupChatMessageUpdated(roomId, message) {
+  const rawMessage =
+    message && typeof message === "object" && message.id
+      ? { ...message, _id: message.id }
+      : message;
+  const normalizedMessage = normalizeGroupChatMessageDoc(rawMessage);
+  if (!normalizedMessage) return;
+  broadcastGroupChatWsPayload(roomId, {
+    type: "message_updated",
     roomId: sanitizeId(roomId, normalizedMessage.roomId),
     message: normalizedMessage,
   });
@@ -18404,6 +18490,7 @@ export {
   broadcastGroupChatMemberPresenceUpdated,
   broadcastGroupChatRoomReadStateUpdated,
   broadcastGroupChatMessageCreated,
+  broadcastGroupChatMessageUpdated,
   broadcastGroupChatMessageReactionsUpdated,
   broadcastGroupChatMessageDeleted,
   broadcastGroupChatRoomUpdated,

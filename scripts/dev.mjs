@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 import process from "node:process";
+import { buildDevProcessSpecs } from "./dev-runtime.mjs";
 
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 const API_HOST = "127.0.0.1";
@@ -87,16 +88,21 @@ async function waitForApiReady() {
 }
 
 async function main() {
-  run("server", npmCmd, ["run", "server"]);
-  const ready = await waitForApiReady();
-  if (!ready) {
-    console.warn(
-      `[dev] API server did not become reachable on ${API_HOST}:${API_PORT} within ${
-        API_READY_TIMEOUT_MS / 1000
-      }s; starting Vite anyway.`,
-    );
+  for (const spec of buildDevProcessSpecs()) {
+    if (spec.waitForApiReady) {
+      run(spec.name, npmCmd, spec.npmArgs);
+      const ready = await waitForApiReady();
+      if (!ready) {
+        console.warn(
+          `[dev] API server did not become reachable on ${API_HOST}:${API_PORT} within ${
+            API_READY_TIMEOUT_MS / 1000
+          }s; continuing startup anyway.`,
+        );
+      }
+      continue;
+    }
+    run(spec.name, npmCmd, spec.npmArgs);
   }
-  run("vite", npmCmd, ["run", "dev:web"]);
 }
 
 void main();

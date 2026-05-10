@@ -6,6 +6,9 @@ export function createGroupChatRealtimeHub(deps) {
     broadcastMessageCreated(roomId, message) {
       deps.broadcastGroupChatMessageCreated(roomId, message);
     },
+    broadcastMessageUpdated(roomId, message) {
+      deps.broadcastGroupChatMessageUpdated(roomId, message);
+    },
     broadcastMessageDeleted(roomId, messageId) {
       deps.broadcastGroupChatMessageDeleted(roomId, messageId);
     },

@@ -11,6 +11,11 @@ import MessageInput from "../components/MessageInput.jsx";
 import MessageList from "../components/MessageList.jsx";
 import PortalSelect from "../components/PortalSelect.jsx";
 import {
+  createStoredDebugSourceFiles,
+  DEBUG_REGENERATE_REUPLOAD_MESSAGE,
+  hasUnreplayableDebugSourceFiles,
+} from "../features/admin/services/debugSessionState.js";
+import {
   fetchAdminAgentSettings,
   prepareAdminDebugAttachments,
   uploadAdminVolcengineDebugFiles,
@@ -1483,7 +1488,7 @@ export default function AdminSettingsPage() {
       id: `u-${Date.now()}`,
       role: "user",
       content: userContent,
-      sourceFiles: safeFiles,
+      sourceFiles: createStoredDebugSourceFiles(safeFiles),
       attachments,
     };
     const assistantMessageId = `a-${Date.now()}`;
@@ -1660,6 +1665,10 @@ export default function AdminSettingsPage() {
 
     const promptMsg = list[promptIndex];
     const sourceFiles = Array.isArray(promptMsg.sourceFiles) ? promptMsg.sourceFiles : [];
+    if (hasUnreplayableDebugSourceFiles(sourceFiles)) {
+      setDebugError(DEBUG_REGENERATE_REUPLOAD_MESSAGE);
+      return;
+    }
     const {
       localFiles,
       volcengineFileRefs,

@@ -393,8 +393,13 @@ export default function PartyChatDesktopPage({
   }, [activeRoom, usersById]);
   const mentionableMembers = useMemo(() => {
     const myUserId = String(me.id || "").trim();
-    if (!myUserId) return activeMembers;
-    return activeMembers.filter((member) => String(member?.id || "").trim() !== myUserId);
+    const members = !myUserId
+      ? activeMembers
+      : activeMembers.filter((member) => String(member?.id || "").trim() !== myUserId);
+    return [
+      { id: "__group_chat_ai__", name: "AI" },
+      ...members,
+    ];
   }, [activeMembers, me.id]);
   const activeOnlineUserIdSet = useMemo(() => {
     return new Set(
@@ -1479,6 +1484,38 @@ export default function PartyChatDesktopPage({
     });
   }, []);
 
+  const applyMessageUpdated = useCallback((roomId, rawMessage) => {
+    const safeRoomId = String(roomId || "").trim();
+    const message = normalizeMessage(rawMessage);
+    if (!safeRoomId || !message) return;
+    setMessagesByRoom((prev) => {
+      const current = Array.isArray(prev[safeRoomId]) ? prev[safeRoomId] : [];
+      if (!current.length) {
+        return {
+          ...prev,
+          [safeRoomId]: [message],
+        };
+      }
+      let changed = false;
+      const next = current.map((item) => {
+        if (item.id !== message.id) return item;
+        changed = true;
+        return {
+          ...item,
+          ...message,
+        };
+      });
+      if (!changed) {
+        next.push(message);
+      }
+      next.sort((a, b) => toTimestamp(a.createdAt) - toTimestamp(b.createdAt));
+      return {
+        ...prev,
+        [safeRoomId]: next.slice(-300),
+      };
+    });
+  }, []);
+
   const applyMemberJoined = useCallback((roomId, user) => {
     const safeRoomId = String(roomId || "").trim();
     const safeUserId = String(user?.id || "").trim();
@@ -1825,6 +1862,11 @@ export default function PartyChatDesktopPage({
         mergeMessages(roomId, [message], { replace: false });
         touchRoom(roomId, message.createdAt || new Date().toISOString());
       },
+      onMessageUpdated: (payload) => {
+        const roomId = String(payload?.roomId || payload?.message?.roomId || "").trim();
+        if (!roomId) return;
+        applyMessageUpdated(roomId, payload?.message);
+      },
       onMessageReactionsUpdated: (payload) => {
         const roomId = String(payload?.roomId || "").trim();
         const messageId = String(payload?.messageId || "").trim();
@@ -1880,6 +1922,7 @@ export default function PartyChatDesktopPage({
   }, [
     applyMemberJoined,
     applyMessageDeleted,
+    applyMessageUpdated,
     applyMessageReactions,
     applyRoomPresence,
     applyRoomReadState,
@@ -3481,6 +3524,7 @@ export default function PartyChatDesktopPage({
                       ) : (
                         activeMessages.map((message) => {
                           const isMine = message.senderUserId === me.id;
+                          const isAiMessage = message.senderKind === "ai";
                           const isMenuOpen = messageMenuState.messageId === message.id;
                           const showReactions = isMenuOpen && messageMenuState.showReactions;
                           const messageReactions = Array.isArray(message.reactions) ? message.reactions : [];
@@ -3521,7 +3565,7 @@ export default function PartyChatDesktopPage({
                                   ) : null}
                                   <NameAvatar
                                     name={message.senderName}
-                                    tone={isAgentForwardMessage ? "agent" : "user"}
+                                    tone={isAgentForwardMessage || isAiMessage ? "agent" : "user"}
                                   />
                                   <div className="party-message-main">
                                     <div className="party-message-head">
@@ -3543,6 +3587,17 @@ export default function PartyChatDesktopPage({
                                       {isMine && message.deliveryStatus === "failed" ? (
                                         <span className="party-message-delivery failed" title="发送失败">
                                           发送失败
+                                        </span>
+                                      ) : null}
+                                      {isAiMessage &&
+                                      message.aiMeta?.status &&
+                                      (message.aiMeta.status === "pending" ||
+                                        message.aiMeta.status === "running") ? (
+                                        <span
+                                          className={`party-message-delivery ai-status status-${message.aiMeta.status}`}
+                                          title={message.aiMeta.error || "AI 状态"}
+                                        >
+                                          {formatAiStatus(message.aiMeta?.status)}
                                         </span>
                                       ) : null}
                                     </div>
@@ -4809,6 +4864,9 @@ function normalizeMessage(raw) {
     id,
     roomId: String(raw?.roomId || "").trim(),
     type,
+    senderKind: String(raw?.senderKind || (type === "system" ? "system" : "user"))
+      .trim()
+      .toLowerCase(),
     senderUserId: String(raw?.senderUserId || "").trim(),
     senderName: String(raw?.senderName || (type === "system" ? "系统" : "用户")),
     content: type === "system" ? systemContent : String(raw?.content || ""),
@@ -4819,6 +4877,20 @@ function normalizeMessage(raw) {
     image,
     file,
     reactions: normalizeMessageReactions(raw?.reactions),
+    aiMeta:
+      raw?.aiMeta && typeof raw.aiMeta === "object"
+        ? {
+            taskId: String(raw.aiMeta.taskId || "").trim(),
+            agentId: String(raw.aiMeta.agentId || "").trim(),
+            provider: String(raw.aiMeta.provider || "").trim(),
+            model: String(raw.aiMeta.model || "").trim(),
+            requestedByUserId: String(raw.aiMeta.requestedByUserId || "").trim(),
+            triggerMessageId: String(raw.aiMeta.triggerMessageId || "").trim(),
+            status: String(raw.aiMeta.status || "").trim().toLowerCase(),
+            streaming: Boolean(raw.aiMeta.streaming),
+            error: String(raw.aiMeta.error || ""),
+          }
+        : null,
   };
 }
 
@@ -4866,6 +4938,14 @@ function normalizeUsers(rawUsers) {
     };
   });
   return map;
+}
+
+function formatAiStatus(status) {
+  const key = String(status || "").trim().toLowerCase();
+  if (key === "pending") return "AI 排队中";
+  if (key === "running") return "AI 正在回答";
+  if (key === "failed") return "回答失败";
+  return "AI";
 }
 
 function formatRoomCodeInput(value) {
