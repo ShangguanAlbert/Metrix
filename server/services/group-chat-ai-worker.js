@@ -224,6 +224,7 @@ async function patchAiPlaceholderMessage({
   redisPrefix,
   task,
   patch = {},
+  logger = console,
 }) {
   const placeholderMessageId = String(task?.placeholderMessageId || "").trim();
   if (!placeholderMessageId) return null;
@@ -239,6 +240,13 @@ async function patchAiPlaceholderMessage({
   ).lean();
   const normalized = normalizeGroupChatMessageDoc(nextDoc);
   if (normalized) {
+    logger.info?.(
+      `[group-chat-ai-worker] publishing message_updated taskId=${String(
+        task?._id || "",
+      )} roomId=${String(task?.roomId || "").trim()} messageId=${String(
+        normalized.id || "",
+      ).trim()} status=${String(patch?.aiMeta?.status || normalized?.aiMeta?.status || "").trim()}`,
+    );
     await publishGroupChatAiMessageUpdated(redis, {
       prefix: redisPrefix,
       roomId: String(task?.roomId || ""),
@@ -366,6 +374,7 @@ export function createGroupChatAiWorker({
         redis,
         redisPrefix,
         task: runningTask,
+        logger,
         patch: {
           content: "AI 正在回答…",
           aiMeta: buildTaskAiMeta(runningTask, "running", {
@@ -395,6 +404,7 @@ export function createGroupChatAiWorker({
             redis,
             redisPrefix,
             task: runningTask,
+            logger,
             patch: {
               content: assistantContent || "AI 正在回答…",
               aiMeta: buildTaskAiMeta(runningTask, "running", {
@@ -453,6 +463,7 @@ export function createGroupChatAiWorker({
         redis,
         redisPrefix,
         task: runningTask,
+        logger,
         patch: {
           content: assistantContent || "AI 已完成回答。",
           aiMeta: buildTaskAiMeta(runningTask, "done", {
@@ -478,6 +489,7 @@ export function createGroupChatAiWorker({
         redis,
         redisPrefix,
         task: failedTask,
+        logger,
         patch: {
           content: message,
           aiMeta: buildTaskAiMeta(failedTask, "failed", {
@@ -578,6 +590,7 @@ export function createGroupChatAiWorker({
         redis,
         redisPrefix,
         task,
+        logger,
         patch: {
           content: errorMessage,
           aiMeta: buildTaskAiMeta(task, "failed", {

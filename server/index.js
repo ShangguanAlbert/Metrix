@@ -88,6 +88,11 @@ async function startServer() {
     onMessageUpdated: (payload) => {
       const roomId = String(payload?.roomId || payload?.message?.roomId || "").trim();
       if (!roomId || !payload?.message) return;
+      console.info(
+        `[group-chat-ai-app] broadcasting message_updated roomId=${roomId} messageId=${String(
+          payload?.message?.id || "",
+        ).trim()} socketCount=${groupChatRealtimeHub.getRoomSocketCount(roomId)}`,
+      );
       groupChatRealtimeHub.broadcastMessageUpdated(roomId, payload.message);
     },
   });

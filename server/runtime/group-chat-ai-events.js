@@ -26,6 +26,11 @@ export function subscribeGroupChatAiEvents({
     try {
       const payload = JSON.parse(String(payloadText || "{}"));
       if (String(payload?.type || "").trim().toLowerCase() === "message_updated") {
+        logger.info?.(
+          `[group-chat-ai-events] received message_updated roomId=${String(
+            payload?.roomId || payload?.message?.roomId || "",
+          ).trim()} messageId=${String(payload?.message?.id || "").trim()}`,
+        );
         onMessageUpdated?.(payload);
       }
     } catch (error) {

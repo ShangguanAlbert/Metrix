@@ -13919,6 +13919,12 @@ function getGroupChatOnlineUserIdsByRoom(roomId) {
     .filter(Boolean);
 }
 
+function getGroupChatRoomSocketCount(roomId) {
+  const safeRoomId = sanitizeId(roomId, "");
+  if (!safeRoomId) return 0;
+  return Number(groupChatWsRoomSockets.get(safeRoomId)?.size || 0);
+}
+
 function normalizeGroupChatRoomDoc(doc, options = {}) {
   if (!doc) return null;
   const viewerUserId = sanitizeId(options?.viewerUserId, "");
@@ -18401,6 +18407,7 @@ export {
   sanitizeGroupChatMutedMemberUserIds,
   normalizeGroupChatReadStates,
   getGroupChatOnlineUserIdsByRoom,
+  getGroupChatRoomSocketCount,
   normalizeGroupChatRoomDoc,
   isGroupChatMemberMuted,
   normalizeGroupChatFilesApiInputType,

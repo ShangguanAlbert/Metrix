@@ -27,5 +27,8 @@ export function createGroupChatRealtimeHub(deps) {
     getOnlineUserIdsByRoom(roomId) {
       return deps.getGroupChatOnlineUserIdsByRoom(roomId);
     },
+    getRoomSocketCount(roomId) {
+      return deps.getGroupChatRoomSocketCount(roomId);
+    },
   };
 }
