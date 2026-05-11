@@ -16163,6 +16163,7 @@ function initGroupChatWebSocketServer(server) {
       pathname = String(request.url || "").trim().split("?")[0] || "/";
     }
     if (!acceptedPaths.has(pathname)) return;
+    console.info(`[group-chat-ws] upgrade accepted path=${pathname}`);
     wss.handleUpgrade(request, socket, head, (upgradedSocket) => {
       wss.emit("connection", upgradedSocket, request);
     });
@@ -16311,6 +16312,7 @@ async function handleGroupChatWsAuth(socket, payload) {
       name: meta.userName,
     },
   });
+  console.info(`[group-chat-ws] authed userId=${meta.userId}`);
 }
 
 async function handleGroupChatWsJoinRoom(socket, payload) {
@@ -16340,6 +16342,11 @@ async function handleGroupChatWsJoinRoom(socket, payload) {
   }
 
   attachSocketToGroupChatRoom(socket, roomId);
+  console.info(
+    `[group-chat-ws] joined roomId=${roomId} userId=${meta.userId} socketCount=${getGroupChatRoomSocketCount(
+      roomId,
+    )}`,
+  );
   sendGroupChatWsPayload(socket, {
     type: "joined",
     roomId,
