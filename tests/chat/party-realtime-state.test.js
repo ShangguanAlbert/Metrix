@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   arePartyIdListsEqual,
   getPartyRoomSubscriptionDiff,
+  joinAllPartyRooms,
   normalizePartyRoomOnlineUserIds,
 } from "../../src/pages/party/partyRealtimeState.js";
 
@@ -33,4 +34,23 @@ test("getPartyRoomSubscriptionDiff only joins newly added rooms and leaves remov
   assert.deepEqual(diff.joinRoomIds, ["room-3"]);
   assert.deepEqual(diff.leaveRoomIds, ["room-1"]);
   assert.deepEqual(Array.from(diff.nextRoomIds), ["room-2", "room-3"]);
+});
+
+test("joinAllPartyRooms joins every current room once after socket auth", () => {
+  const joined = [];
+  const socket = {
+    joinRoom(roomId) {
+      joined.push(roomId);
+    },
+  };
+
+  const nextRoomIds = joinAllPartyRooms(socket, [
+    { id: "room-1" },
+    { id: " room-2 " },
+    { id: "" },
+    null,
+  ]);
+
+  assert.deepEqual(joined, ["room-1", "room-2"]);
+  assert.deepEqual(Array.from(nextRoomIds), ["room-1", "room-2"]);
 });

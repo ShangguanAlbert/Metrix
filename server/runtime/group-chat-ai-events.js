@@ -14,7 +14,11 @@ export function subscribeGroupChatAiEvents({
     return async () => {};
   }
 
-  const subscriber = createGroupChatAiRedisConnection({ env });
+  const subscriber = createGroupChatAiRedisConnection({
+    env,
+    logger,
+    connectionName: "group-chat-ai-events",
+  });
   const prefix = resolveGroupChatAiRedisPrefix(env);
   const channel = buildGroupChatAiRedisKeys({ prefix }).events;
 

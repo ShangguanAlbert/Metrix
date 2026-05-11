@@ -4,6 +4,7 @@ import {
 } from "../services/group-chat-ai.js";
 
 const DEFAULT_PREFIX = "educhat:group-chat-ai";
+const REDIS_LIFECYCLE_LOGGING_BOUND = Symbol("groupChatAiRedisLifecycleLoggingBound");
 const GROUP_CHAT_AI_ENQUEUE_MESSAGES = Object.freeze({
   duplicate_active: "相同问题已在处理中。",
   room_pending_limit: "当前群聊等待中的 AI 请求过多，请稍后再试。",
@@ -77,13 +78,64 @@ export function isGroupChatAiRedisEnabled(env = process.env) {
   return !!resolveGroupChatAiRedisUrl(env);
 }
 
-export function createGroupChatAiRedisConnection({ env = process.env } = {}) {
+export function attachGroupChatAiRedisLifecycleLogging(
+  redis,
+  {
+    logger = console,
+    connectionName = "group-chat-ai",
+    redisUrl = "",
+  } = {},
+) {
+  if (!redis || typeof redis.on !== "function" || redis[REDIS_LIFECYCLE_LOGGING_BOUND]) {
+    return redis;
+  }
+
+  let hasLoggedConnectionError = false;
+  const endpointSuffix = redisUrl ? ` (${redisUrl})` : "";
+
+  redis.on("error", (error) => {
+    if (hasLoggedConnectionError) return;
+    hasLoggedConnectionError = true;
+    logger.warn?.(
+      `[${connectionName}] Redis connection error${endpointSuffix}. Waiting for reconnect attempts.`,
+      error,
+    );
+  });
+
+  redis.on("ready", () => {
+    if (!hasLoggedConnectionError) return;
+    hasLoggedConnectionError = false;
+    logger.info?.(`[${connectionName}] Redis connection restored${endpointSuffix}.`);
+  });
+
+  Object.defineProperty(redis, REDIS_LIFECYCLE_LOGGING_BOUND, {
+    value: true,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+
+  return redis;
+}
+
+export function createGroupChatAiRedisConnection(
+  {
+    env = process.env,
+    logger = console,
+    connectionName = "group-chat-ai",
+  } = {},
+) {
   const redisUrl = resolveGroupChatAiRedisUrl(env);
   if (!redisUrl) return null;
-  return new Redis(redisUrl, {
+  const redis = new Redis(redisUrl, {
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
     lazyConnect: false,
+  });
+  return attachGroupChatAiRedisLifecycleLogging(redis, {
+    logger,
+    connectionName,
+    redisUrl,
   });
 }
 

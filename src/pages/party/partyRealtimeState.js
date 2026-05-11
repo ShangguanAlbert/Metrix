@@ -57,3 +57,18 @@ export function getPartyRoomSubscriptionDiff(currentJoinedIds, rooms) {
     leaveRoomIds,
   };
 }
+
+export function joinAllPartyRooms(socket, rooms) {
+  const nextRoomIds = new Set(
+    (Array.isArray(rooms) ? rooms : [])
+      .map((room) => sanitizePartyId(room?.id))
+      .filter(Boolean),
+  );
+  if (!socket || typeof socket.joinRoom !== "function") {
+    return nextRoomIds;
+  }
+  nextRoomIds.forEach((roomId) => {
+    socket.joinRoom(roomId);
+  });
+  return nextRoomIds;
+}

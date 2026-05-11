@@ -58,6 +58,7 @@ import {
 import {
   arePartyIdListsEqual,
   getPartyRoomSubscriptionDiff,
+  joinAllPartyRooms,
   normalizePartyRoomOnlineUserIds,
 } from "../../party/partyRealtimeState.js";
 import { createPartySocketClient } from "../../party/partySocket.js";
@@ -220,6 +221,7 @@ export default function PartyChatDesktopPage({
   const messagesViewportRef = useRef(null);
   const socketRef = useRef(null);
   const joinedRoomIdsRef = useRef(new Set());
+  const roomsRef = useRef([]);
   const quickJoinAttemptedRoomCodeRef = useRef("");
   const latestMessageAtRef = useRef("");
   const activeRoomIdRef = useRef("");
@@ -1691,6 +1693,10 @@ export default function PartyChatDesktopPage({
   }, [activeRoomId]);
 
   useEffect(() => {
+    roomsRef.current = rooms;
+  }, [rooms]);
+
+  useEffect(() => {
     void loadBootstrap();
   }, [loadBootstrap]);
 
@@ -1863,6 +1869,9 @@ export default function PartyChatDesktopPage({
 
     const socketClient = createPartySocketClient({
       token,
+      onAuthed: () => {
+        joinedRoomIdsRef.current = joinAllPartyRooms(socketClient, roomsRef.current);
+      },
       onMessageCreated: (payload) => {
         const roomId = String(payload?.roomId || payload?.message?.roomId || "").trim();
         const message = normalizeMessage(payload?.message);

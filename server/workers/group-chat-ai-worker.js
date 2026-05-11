@@ -16,7 +16,11 @@ async function main() {
   const deps = createAppContext();
   await deps.mongoose.connect(deps.mongoUri, { serverSelectionTimeoutMS: 6000 });
 
-  const redis = createGroupChatAiRedisConnection({ env: process.env });
+  const redis = createGroupChatAiRedisConnection({
+    env: process.env,
+    logger: console,
+    connectionName: "group-chat-ai-worker",
+  });
   const worker = createGroupChatAiWorker({
     redis,
     redisPrefix: resolveGroupChatAiRedisPrefix(process.env),
