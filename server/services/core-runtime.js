@@ -24,7 +24,11 @@ import OSS from "ali-oss";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { WebSocketServer } from "ws";
 import { countTokens, encodeChat } from "gpt-tokenizer";
-import { resolveConfiguredBasePath, withBasePath } from "../config/base-path.js";
+import {
+  resolveBasePathAwareWebSocketPaths,
+  resolveConfiguredBasePath,
+  withBasePath,
+} from "../config/base-path.js";
 import { SYSTEM_PROMPT_LEAK_PROTECTION_TOP_PROMPT } from "../prompts/leakProtectionPrompt.js";
 import { PROMPT_LEAK_PROBE_KEYWORDS } from "../prompts/leakProtectionKeywords.js";
 
@@ -16138,9 +16142,24 @@ function isMongoObjectIdLike(value) {
 
 function initGroupChatWebSocketServer(server) {
   const wss = new WebSocketServer({
-    server,
-    path: GROUP_CHAT_WS_PATH,
+    noServer: true,
     maxPayload: GROUP_CHAT_WS_MAX_PAYLOAD_BYTES,
+  });
+  const acceptedPaths = new Set(
+    resolveBasePathAwareWebSocketPaths(GROUP_CHAT_WS_PATH, APP_BASE_PATH),
+  );
+
+  server.on("upgrade", (request, socket, head) => {
+    let pathname = "";
+    try {
+      pathname = new URL(request.url || "/", "http://localhost").pathname || "/";
+    } catch {
+      pathname = String(request.url || "").trim().split("?")[0] || "/";
+    }
+    if (!acceptedPaths.has(pathname)) return;
+    wss.handleUpgrade(request, socket, head, (upgradedSocket) => {
+      wss.emit("connection", upgradedSocket, request);
+    });
   });
 
   wss.on("connection", (socket) => {

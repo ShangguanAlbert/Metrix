@@ -53,3 +53,9 @@ export function withBasePath(pathname = "", basePath = "/") {
   }
   return `${prefix}${text}`;
 }
+
+export function resolveBasePathAwareWebSocketPaths(pathname = "", basePath = "/") {
+  const safePathname = String(pathname || "").trim();
+  if (!safePathname) return [];
+  return Array.from(new Set([safePathname, withBasePath(safePathname, basePath)].filter(Boolean)));
+}
