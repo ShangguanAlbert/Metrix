@@ -25,7 +25,6 @@ export function getStudentHomeworkHistoryLessons(
   const nowMs = Number.isFinite(options?.nowMs) ? options.nowMs : Date.now();
   const source = Array.isArray(lessons) ? lessons : [];
   return source
-    .filter((lesson) => lesson && lesson.enabled !== false)
     .map((lesson) => {
       const id = String(lesson?.id || "").trim();
       const submissions = Array.isArray(submissionsByLesson?.[id])

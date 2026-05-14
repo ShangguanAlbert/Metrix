@@ -342,6 +342,7 @@ export default function ModeSelectionPage() {
   const [taskSettings, setTaskSettings] = useState({
     firstLessonDate: CLASS_TASK_FALLBACK_DATE,
     teacherCoursePlans: [],
+    teacherHistoryCoursePlans: [],
     seatLayout: null,
   });
 
@@ -361,6 +362,9 @@ export default function ModeSelectionPage() {
       ),
       teacherCoursePlans: Array.isArray(data?.teacherCoursePlans)
         ? data.teacherCoursePlans
+        : [],
+      teacherHistoryCoursePlans: Array.isArray(data?.teacherHistoryCoursePlans)
+        ? data.teacherHistoryCoursePlans
         : [],
       seatLayout: nextSeatLayout,
     });
@@ -454,8 +458,13 @@ export default function ModeSelectionPage() {
 
   const historyLessons = useMemo(
     () =>
-      getStudentHomeworkHistoryLessons(sortedLessons, homeworkSubmissionsByLesson),
-    [homeworkSubmissionsByLesson, sortedLessons],
+      getStudentHomeworkHistoryLessons(
+        Array.isArray(taskSettings.teacherHistoryCoursePlans)
+          ? taskSettings.teacherHistoryCoursePlans
+          : [],
+        homeworkSubmissionsByLesson,
+      ),
+    [homeworkSubmissionsByLesson, taskSettings.teacherHistoryCoursePlans],
   );
 
   useEffect(() => {

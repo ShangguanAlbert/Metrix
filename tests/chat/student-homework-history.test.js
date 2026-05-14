@@ -57,6 +57,7 @@ test("getStudentHomeworkHistoryLessons keeps only started enabled lessons and an
     [
       { id: "past-b", submitted: false, submissionCount: 0 },
       { id: "past-a", submitted: true, submissionCount: 1 },
+      { id: "closed", submitted: false, submissionCount: 0 },
     ],
   );
 });

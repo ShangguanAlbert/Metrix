@@ -1108,25 +1108,44 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
     const isShangguanTeacher = teacherScopeKey === SHANGGUAN_FUZE_TEACHER_SCOPE_KEY;
     const userProfile = sanitizeUserProfile(req.authUser?.profile);
-    const userClassName = sanitizeSeatLayoutClassName(userProfile.className);
+    const userClassName = sanitizeClassroomUserClassName(userProfile.className);
+    const seatLayoutClassName = sanitizeSeatLayoutClassName(userProfile.className);
     let productImprovementEnabled = false;
     let teacherCoursePlans = [];
+    let teacherHistoryCoursePlans = [];
     let seatLayout = null;
 
     if (isShangguanTeacher) {
       const config = await readAdminAgentConfig();
       productImprovementEnabled = !!config.shangguanClassTaskProductImprovementEnabled;
+      teacherHistoryCoursePlans = sortAdminClassroomCoursePlans(
+        config.teacherCoursePlans
+          .map((lesson) => ({
+            ...lesson,
+            className: resolveClassroomLessonClassName(lesson),
+          }))
+          .filter(
+            (lesson) =>
+              !userClassName ||
+              resolveClassroomLessonClassName(lesson) === userClassName,
+          ),
+      );
       teacherCoursePlans = sortAdminClassroomCoursePlans(
         config.teacherCoursePlans
           .filter((lesson) => sanitizeRuntimeBoolean(lesson?.enabled, true))
           .map((lesson) => ({
             ...lesson,
             className: resolveClassroomLessonClassName(lesson),
-          })),
+          }))
+          .filter(
+            (lesson) =>
+              !userClassName ||
+              resolveClassroomLessonClassName(lesson) === userClassName,
+          ),
       );
       seatLayout = buildSeatLayoutResponseForUser(
         normalizeSeatLayoutsByClassFromConfig(config),
-        userClassName,
+        seatLayoutClassName,
         req.authUser,
         userProfile,
       );
@@ -1141,6 +1160,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       questionnaireUrl: CLASSROOM_QUESTIONNAIRE_URL,
       productImprovementEnabled,
       teacherCoursePlans,
+      teacherHistoryCoursePlans,
       seatLayout,
     });
   });
@@ -1240,11 +1260,9 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     }
 
     const config = await readAdminAgentConfig();
+    const userProfile = sanitizeUserProfile(req.authUser?.profile);
+    const userClassName = sanitizeClassroomUserClassName(userProfile.className);
     const lessons = config.teacherCoursePlans
-      .filter(
-        (lesson) =>
-          sanitizeRuntimeBoolean(lesson?.enabled, true),
-      )
       .map((lesson) => ({
         id: sanitizeId(lesson?.id, ""),
         courseName: sanitizeText(lesson?.courseName, "", 80),
@@ -1255,6 +1273,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         homeworkUploadEnabled: true,
         enabled: sanitizeRuntimeBoolean(lesson?.enabled, true),
       }))
+      .filter((lesson) => !userClassName || lesson.className === userClassName)
       .filter((lesson) => lesson.id);
 
     if (lessons.length === 0) {
