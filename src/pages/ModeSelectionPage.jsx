@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
+  CLASSROOM_FILE_KIND_HOMEWORK,
   CLASSROOM_FILE_KIND_TASK,
   getClassroomFileDownloadErrorText,
   getClassroomFileFallbackName,
@@ -29,12 +30,14 @@ import { appendReturnUrlParam, buildAbsoluteAppUrl } from "../app/returnNavigati
 import { SHANGGUAN_FUZE_TEACHER_SCOPE_KEY } from "../../shared/teacherScopes.js";
 import {
   deleteClassroomHomeworkFile,
+  downloadClassroomHomeworkFile,
   downloadClassroomLessonFile,
   fetchClassroomHomeworkSubmissions,
   fetchClassroomTaskSettings,
   updateClassroomSeatAssignment,
   uploadClassroomHomeworkFiles,
 } from "./classroom/classroomApi.js";
+import { getStudentHomeworkHistoryLessons } from "../features/classroom/studentHomeworkHistory.js";
 import "../styles/teacher-home.css";
 import "../styles/mode-selection.css";
 import "../styles/student-home.css";
@@ -335,6 +338,7 @@ export default function ModeSelectionPage() {
   const [seatError, setSeatError] = useState("");
   const [seatSelectedIndex, setSeatSelectedIndex] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [selectedHistoryLessonId, setSelectedHistoryLessonId] = useState("");
   const [taskSettings, setTaskSettings] = useState({
     firstLessonDate: CLASS_TASK_FALLBACK_DATE,
     teacherCoursePlans: [],
@@ -448,6 +452,12 @@ export default function ModeSelectionPage() {
     [enabledLessons],
   );
 
+  const historyLessons = useMemo(
+    () =>
+      getStudentHomeworkHistoryLessons(sortedLessons, homeworkSubmissionsByLesson),
+    [homeworkSubmissionsByLesson, sortedLessons],
+  );
+
   useEffect(() => {
     if (sortedLessons.length === 0) {
       setSelectedCourseId("");
@@ -471,6 +481,18 @@ export default function ModeSelectionPage() {
     }
   }, [homeworkComposerOpenLessonId, sortedLessons]);
 
+  useEffect(() => {
+    if (historyLessons.length === 0) {
+      setSelectedHistoryLessonId("");
+      return;
+    }
+    const hasSelected = historyLessons.some(
+      (lesson) => String(lesson?.id || "") === String(selectedHistoryLessonId || ""),
+    );
+    if (hasSelected) return;
+    setSelectedHistoryLessonId(String(historyLessons[0]?.id || ""));
+  }, [historyLessons, selectedHistoryLessonId]);
+
   const selectedCourse = useMemo(
     () =>
       sortedLessons.find(
@@ -487,6 +509,15 @@ export default function ModeSelectionPage() {
           )
         : -1,
     [selectedCourse, sortedLessons],
+  );
+
+  const selectedHistoryLesson = useMemo(
+    () =>
+      historyLessons.find(
+        (lesson) =>
+          String(lesson?.id || "") === String(selectedHistoryLessonId || ""),
+      ) || null,
+    [historyLessons, selectedHistoryLessonId],
   );
 
   const modeSelectionReturnUrl = useMemo(
@@ -727,12 +758,54 @@ export default function ModeSelectionPage() {
     }
   }
 
+  async function onDownloadHomeworkHistoryFile(fileId) {
+    const safeFileId = String(fileId || "").trim();
+    if (!safeFileId) return;
+    setDownloadError("");
+    setDownloadingFileId(safeFileId);
+    try {
+      const data = await downloadClassroomHomeworkFile(safeFileId, {
+        fileKind: CLASSROOM_FILE_KIND_HOMEWORK,
+      });
+      if (data?.downloadUrl) {
+        triggerUrlDownload(
+          data.downloadUrl,
+          data.fileName ||
+            getClassroomFileFallbackName(CLASSROOM_FILE_KIND_HOMEWORK),
+        );
+      } else if (data?.blob) {
+        triggerBrowserDownload(
+          data.blob,
+          data.fileName ||
+            getClassroomFileFallbackName(CLASSROOM_FILE_KIND_HOMEWORK),
+        );
+      } else {
+        throw new Error(
+          getClassroomFileDownloadErrorText(CLASSROOM_FILE_KIND_HOMEWORK),
+        );
+      }
+    } catch (error) {
+      setDownloadError(
+        error?.message ||
+          getClassroomFileDownloadErrorText(CLASSROOM_FILE_KIND_HOMEWORK),
+      );
+    } finally {
+      setDownloadingFileId("");
+    }
+  }
+
   const sidebarItems = [
     {
       key: "classroom",
       label: "课堂任务",
       icon: BookOpenCheck,
       hint: "按节次查看教师发布的课堂任务",
+    },
+    {
+      key: "history-homework",
+      label: "历史作业",
+      icon: Download,
+      hint: "查看已开始课时中的历史作业并下载",
     },
     {
       key: "seat-selection",
@@ -776,6 +849,9 @@ export default function ModeSelectionPage() {
     ? Array.isArray(homeworkSubmissionsByLesson[selectedLessonId])
       ? homeworkSubmissionsByLesson[selectedLessonId]
       : []
+    : [];
+  const selectedHistoryLessonFiles = Array.isArray(selectedHistoryLesson?.submissions)
+    ? selectedHistoryLesson.submissions
     : [];
   const homeworkUploading = homeworkUploadingLessonId === selectedLessonId;
   const classroomSeatLayout = useMemo(
@@ -1422,6 +1498,164 @@ export default function ModeSelectionPage() {
                   </div>
                 </div>
               ) : null}
+            </div>
+          ) : activePanel === "history-homework" ? (
+            <div className="teacher-panel-stack student-panel-stack">
+              <header className="teacher-panel-head">
+                <div>
+                  <h2>历史作业</h2>
+                  <p>查看已经开始课时中的个人历史作业，并下载自己提交过的文件。</p>
+                </div>
+              </header>
+
+              {settingsLoading || homeworkLoading ? (
+                <div
+                  className="student-classroom-loading"
+                  role="status"
+                  aria-live="polite"
+                  aria-label="正在读取历史作业"
+                >
+                  <span className="student-classroom-loading-spinner" />
+                </div>
+              ) : null}
+              {settingsError ? (
+                <p className="task-status-tip error" role="alert">
+                  {settingsError}
+                </p>
+              ) : null}
+              {downloadError ? (
+                <p className="task-status-tip error" role="alert">
+                  {downloadError}
+                </p>
+              ) : null}
+              {downloadingFileId ? (
+                <p className="task-status-tip" role="status" aria-live="polite">
+                  文件正在下载，请稍后。
+                </p>
+              ) : null}
+
+              <section className="teacher-card teacher-lesson-workbench student-lesson-workbench">
+                <div className="teacher-lesson-list-panel student-lesson-list-panel">
+                  <div className="teacher-lesson-list-head">
+                    <h3>历史课时</h3>
+                    <div className="teacher-lesson-list-head-right">
+                      <span>{`${historyLessons.length} 节课`}</span>
+                    </div>
+                  </div>
+
+                  {historyLessons.length === 0 ? (
+                    <p className="teacher-empty-text">暂时还没有历史课时可查看。</p>
+                  ) : (
+                    <div className="teacher-lesson-list">
+                      {historyLessons.map((lesson, index) => {
+                        const lessonId = String(lesson?.id || "");
+                        const active =
+                          lessonId === String(selectedHistoryLessonId || "");
+                        const submittedText = lesson?.submitted
+                          ? `已提交 ${lesson?.submissionCount || 0} 份`
+                          : "未提交";
+                        return (
+                          <article
+                            key={lessonId || `history-lesson-${index + 1}`}
+                            className={`teacher-lesson-row${active ? " active" : ""}`}
+                          >
+                            <button
+                              type="button"
+                              className="teacher-lesson-row-main"
+                              onClick={() => setSelectedHistoryLessonId(lessonId)}
+                            >
+                              <strong>{lesson?.courseName || `第${index + 1}节课`}</strong>
+                              <p>{formatLessonTimeLabel(lesson)}</p>
+                              <span>{submittedText}</span>
+                            </button>
+                            <div className="teacher-lesson-row-actions">
+                              <span
+                                className={`teacher-lesson-status${
+                                  lesson?.submitted ? "" : " closed"
+                                }`}
+                              >
+                                {lesson?.submitted ? "已提交" : "未提交"}
+                              </span>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="teacher-lesson-detail-panel student-lesson-detail-panel">
+                  {historyLessons.length === 0 ? (
+                    <p className="teacher-empty-text">暂时还没有历史课时可查看。</p>
+                  ) : !selectedHistoryLesson ? (
+                    <p className="teacher-empty-text">请选择左侧课时查看历史作业。</p>
+                  ) : (
+                    <>
+                      <div className="teacher-task-draft-head student-lesson-detail-head">
+                        <strong>{selectedHistoryLesson?.courseName || "历史课时"}</strong>
+                        <span>{formatLessonTimeLabel(selectedHistoryLesson)}</span>
+                      </div>
+
+                      <div className="teacher-lesson-detail-scroll">
+                        <div className="teacher-grid-two student-lesson-meta-grid">
+                          <div className="teacher-info-line">
+                            <strong>提交状态</strong>
+                            <span>{selectedHistoryLesson?.submitted ? "已提交" : "未提交"}</span>
+                          </div>
+                          <div className="teacher-info-line">
+                            <strong>文件数量</strong>
+                            <span>{`${selectedHistoryLesson?.submissionCount || 0} 份`}</span>
+                          </div>
+                        </div>
+
+                        <section className="student-lesson-section">
+                          <h3>我的历史作业</h3>
+                          {selectedHistoryLessonFiles.length === 0 ? (
+                            <p className="teacher-empty-text">这节课你还没有提交作业。</p>
+                          ) : (
+                            <div className="task-lesson-file-list">
+                              {selectedHistoryLessonFiles.map((file, index) => {
+                                const fileId = String(file?.id || "");
+                                const isDownloading = downloadingFileId === fileId;
+                                return (
+                                  <button
+                                    key={fileId || `history-file-${index + 1}`}
+                                    type="button"
+                                    className="task-lesson-file-btn"
+                                    onClick={() =>
+                                      void onDownloadHomeworkHistoryFile(fileId)
+                                    }
+                                    disabled={!fileId || isDownloading}
+                                  >
+                                    <span className="task-lesson-file-content">
+                                      <strong>{file?.name || "作业文件"}</strong>
+                                      <small>{formatFileSize(file?.size)}</small>
+                                      <small>{`上传于 ${formatUploadTime(file?.uploadedAt)}`}</small>
+                                      {isDownloading ? (
+                                        <small>文件正在下载，请稍后。</small>
+                                      ) : null}
+                                    </span>
+                                    <span className="task-lesson-file-action">
+                                      {isDownloading ? (
+                                        "下载中..."
+                                      ) : (
+                                        <>
+                                          <Download size={16} />
+                                          <span>下载</span>
+                                        </>
+                                      )}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </section>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </section>
             </div>
           ) : activePanel === "seat-selection" ? (
             <div className="teacher-panel-stack student-panel-stack">

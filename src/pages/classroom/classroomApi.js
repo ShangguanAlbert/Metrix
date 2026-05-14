@@ -100,19 +100,12 @@ export function deleteClassroomHomeworkFile(lessonId, fileId) {
   );
 }
 
-export async function downloadClassroomLessonFile(
-  fileId,
-  { fileKind } = {},
-) {
-  const safeFileId = String(fileId || "").trim();
+async function downloadClassroomFile(path, { fileKind } = {}) {
   const fallbackFileName = getClassroomFileFallbackName(fileKind);
-  const resp = await fetch(
-    `/api/classroom/lessons/files/${encodeURIComponent(safeFileId)}/download`,
-    {
-      method: "GET",
-      headers: authHeaders(),
-    },
-  );
+  const resp = await fetch(path, {
+    method: "GET",
+    headers: authHeaders(),
+  });
   const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
 
   if (!resp.ok) {
@@ -154,4 +147,20 @@ export async function downloadClassroomLessonFile(
     blob,
     fileName: fileName || fallbackFileName,
   };
+}
+
+export async function downloadClassroomLessonFile(fileId, { fileKind } = {}) {
+  const safeFileId = String(fileId || "").trim();
+  return downloadClassroomFile(
+    `/api/classroom/lessons/files/${encodeURIComponent(safeFileId)}/download`,
+    { fileKind },
+  );
+}
+
+export async function downloadClassroomHomeworkFile(fileId, { fileKind } = {}) {
+  const safeFileId = String(fileId || "").trim();
+  return downloadClassroomFile(
+    `/api/classroom/homework/files/${encodeURIComponent(safeFileId)}/download`,
+    { fileKind },
+  );
 }

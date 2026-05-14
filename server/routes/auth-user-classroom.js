@@ -1497,6 +1497,72 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     },
   );
 
+  app.get(
+    "/api/classroom/homework/files/:fileId/download",
+    requireChatAuth,
+    async (req, res) => {
+      const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+      if (teacherScopeKey !== SHANGGUAN_FUZE_TEACHER_SCOPE_KEY) {
+        res.status(403).json({ error: "当前班级暂不支持下载该作业文件。" });
+        return;
+      }
+
+      const fileId = sanitizeId(req.params.fileId, "");
+      if (!fileId) {
+        res.status(400).json({ error: "作业文件标识无效。" });
+        return;
+      }
+
+      const studentUserId = sanitizeId(req.authUser?._id, "");
+      if (!studentUserId) {
+        res.status(401).json({ error: "登录状态无效，请重新登录后重试。" });
+        return;
+      }
+
+      const fileDoc = await ClassroomHomeworkFile.findOne({
+        key: ADMIN_CONFIG_KEY,
+        teacherScopeKey,
+        fileId,
+        studentUserId,
+      }).lean();
+      if (!fileDoc) {
+        res.status(404).json({ error: "作业文件不存在或已失效。" });
+        return;
+      }
+
+      const fileName = sanitizeGroupChatFileName(fileDoc.fileName || "作业文件.bin");
+      const mimeType = sanitizeGroupChatFileMimeType(fileDoc.mimeType);
+      const storageType = sanitizeGroupChatFileStorageType(fileDoc.storageType);
+      const ossKey = sanitizeGroupChatOssObjectKey(fileDoc.ossKey);
+      if (storageType === "oss" && ossKey) {
+        const downloadUrl = await buildTeacherLessonFileDownloadUrl({
+          ossKey,
+          fileName,
+        });
+        if (!downloadUrl) {
+          res.status(404).json({ error: "作业文件下载链接不可用，请稍后重试。" });
+          return;
+        }
+        res.json({
+          ok: true,
+          downloadUrl,
+          fileName,
+          mimeType,
+        });
+        return;
+      }
+
+      if (!Buffer.isBuffer(fileDoc.binary) || fileDoc.binary.length === 0) {
+        res.status(404).json({ error: "作业文件不存在或已失效。" });
+        return;
+      }
+      res.setHeader("Content-Type", mimeType);
+      res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fileName));
+      res.setHeader("Content-Length", String(fileDoc.binary.length));
+      res.send(fileDoc.binary);
+    },
+  );
+
   app.get("/api/user/profile", requireChatAuth, async (req, res) => {
     const profile = sanitizeUserProfile(req.authUser.profile);
     res.json({

@@ -46,7 +46,7 @@
   animation: student-home-sidebar-enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.student-home-main {
+.student-home-page .teacher-home-main.student-home-main {
   border: 0;
   border-left: 0;
   border-radius: 0;
@@ -284,8 +284,13 @@
   }
 }
 
-.student-lesson-workbench {
+.student-home-page .student-lesson-workbench.teacher-card {
   min-height: 560px;
+  border: 0;
+  border-radius: 0;
+  background: var(--teacher-page-bg);
+  box-shadow: none;
+  padding: 0;
 }
 
 .student-lesson-list-panel {
