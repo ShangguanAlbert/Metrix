@@ -326,6 +326,8 @@ export default function ModeSelectionPage() {
   const [downloadError, setDownloadError] = useState("");
   const [downloadingFileId, setDownloadingFileId] = useState("");
   const [homeworkLoading, setHomeworkLoading] = useState(false);
+  const [homeworkRefreshing, setHomeworkRefreshing] = useState(false);
+  const [homeworkRefreshed, setHomeworkRefreshed] = useState(false);
   const [homeworkError, setHomeworkError] = useState("");
   const [homeworkUploadingLessonId, setHomeworkUploadingLessonId] = useState("");
   const [deletingHomeworkFileId, setDeletingHomeworkFileId] = useState("");
@@ -489,6 +491,12 @@ export default function ModeSelectionPage() {
       setHomeworkDropActive(false);
     }
   }, [homeworkComposerOpenLessonId, sortedLessons]);
+
+  useEffect(() => {
+    if (!homeworkRefreshed) return;
+    const timerId = window.setTimeout(() => setHomeworkRefreshed(false), 2000);
+    return () => window.clearTimeout(timerId);
+  }, [homeworkRefreshed]);
 
   useEffect(() => {
     if (historyLessons.length === 0) {
@@ -764,6 +772,26 @@ export default function ModeSelectionPage() {
       );
     } finally {
       setDownloadingFileId("");
+    }
+  }
+
+  async function onRefreshHomeworkSubmissions() {
+    if (homeworkRefreshing) return;
+    setHomeworkRefreshing(true);
+    try {
+      const homeworkData = await fetchClassroomHomeworkSubmissions().catch(() => ({
+        submissionsByLesson: {},
+      }));
+      setHomeworkSubmissionsByLesson(
+        homeworkData && typeof homeworkData === "object"
+          ? homeworkData.submissionsByLesson && typeof homeworkData.submissionsByLesson === "object"
+            ? homeworkData.submissionsByLesson
+            : {}
+          : {},
+      );
+      setHomeworkRefreshed(true);
+    } finally {
+      setHomeworkRefreshing(false);
     }
   }
 
@@ -1515,6 +1543,24 @@ export default function ModeSelectionPage() {
                   <h2>历史作业</h2>
                   <p>查看已经开始课时中的个人历史作业，并下载自己提交过的文件。</p>
                 </div>
+                <div className="teacher-panel-actions">
+                  {historyLessons.length > 0 && (
+                    <div className="student-homework-summary">
+                      <span className="student-homework-summary-submitted">{`已交 ${historyLessons.filter((l) => l.submitted).length} 次`}</span>
+                      <span className="student-homework-summary-missed">{`漏交 ${historyLessons.filter((l) => !l.submitted).length} 次`}</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
+                    onClick={() => void onRefreshHomeworkSubmissions()}
+                    disabled={homeworkRefreshing}
+                    aria-label="刷新作业记录"
+                    title="刷新作业记录"
+                  >
+                    <RefreshCw size={15} />
+                  </button>
+                </div>
               </header>
 
               {settingsLoading || homeworkLoading ? (
@@ -1863,6 +1909,13 @@ export default function ModeSelectionPage() {
           )}
         </main>
       </div>
+      {homeworkRefreshed ? (
+        <div className="teacher-home-toast-wrap" aria-live="polite">
+          <p className="teacher-home-alert success teacher-home-toast teacher-home-toast-fade teacher-home-refresh-toast" role="status">
+            已刷新
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
