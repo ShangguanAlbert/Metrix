@@ -41,7 +41,10 @@ export function getStudentHomeworkHistoryLessons(
     })
     .filter(
       (lesson) =>
-        lesson.id && Number.isFinite(lesson.startMs) && lesson.startMs <= nowMs,
+        lesson.id &&
+        Number.isFinite(lesson.startMs) &&
+        lesson.startMs <= nowMs &&
+        lesson.homeworkUploadEnabled !== false,
     )
     .sort((a, b) => b.startMs - a.startMs);
 }

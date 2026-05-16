@@ -1267,7 +1267,7 @@ export default function ModeSelectionPage() {
                               disabled={!selectedHomeworkUploadEnabled}
                             >
                               {selectedHomeworkUploadEnabled ? <Upload size={15} /> : <Lock size={15} />}
-                              <span>{selectedHomeworkUploadEnabled ? "提交作业" : "教师暂未开启作业上传"}</span>
+                              <span>{selectedHomeworkUploadEnabled ? "提交作业" : "本节课无需交作业"}</span>
                             </button>
                           </div>
                           {String(selectedCourse?.notes || "").trim() ? (

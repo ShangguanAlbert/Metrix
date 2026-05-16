@@ -800,12 +800,12 @@ function buildTaskTypePatch(task, nextType) {
   };
 }
 
-function forceHomeworkUploadEnabled(plans) {
+function normalizeLessonPlans(plans) {
   const source = Array.isArray(plans) ? plans : [];
   return source.map((lesson) => ({
     ...(lesson && typeof lesson === "object" ? lesson : {}),
     className: normalizeLessonClassName(lesson?.className),
-    homeworkUploadEnabled: true,
+    homeworkUploadEnabled: lesson?.homeworkUploadEnabled !== false,
   }));
 }
 
@@ -816,7 +816,7 @@ function buildClassroomConfigSnapshot({
 } = {}) {
   return JSON.stringify({
     productTaskEnabled: !!productTaskEnabled,
-    teacherCoursePlans: forceHomeworkUploadEnabled(
+    teacherCoursePlans: normalizeLessonPlans(
       Array.isArray(teacherCoursePlans) ? teacherCoursePlans : [],
     ),
     classroomDisciplineConfig: normalizeDisciplineConfig(
@@ -1476,7 +1476,7 @@ export default function TeacherHomePage() {
         (lesson) => ({
           ...(lesson && typeof lesson === "object" ? lesson : {}),
           className: normalizeLessonClassName(lesson?.className),
-          homeworkUploadEnabled: true,
+          homeworkUploadEnabled: lesson?.homeworkUploadEnabled !== false,
         }),
       );
       setHomeworkLessons(lessons);
@@ -1607,7 +1607,7 @@ export default function TeacherHomePage() {
         const plans = Array.isArray(plansData?.teacherCoursePlans)
           ? plansData.teacherCoursePlans
           : [];
-        const normalizedPlans = forceHomeworkUploadEnabled(plans);
+        const normalizedPlans = normalizeLessonPlans(plans);
         const normalizedDisciplineConfig = normalizeDisciplineConfig(
           plansData?.classroomDisciplineConfig,
         );
@@ -4015,7 +4015,7 @@ export default function TeacherHomePage() {
       if (!silent) setError("");
       if (!silent) setClassroomSaveNotice("");
       setSaving(true);
-      const plansToSave = forceHomeworkUploadEnabled(teacherCoursePlans);
+      const plansToSave = normalizeLessonPlans(teacherCoursePlans);
       try {
         const data = await saveAdminClassroomPlans(adminToken, {
           shangguanClassTaskProductImprovementEnabled: !!productTaskEnabled,
@@ -4025,7 +4025,7 @@ export default function TeacherHomePage() {
         const savedPlans = Array.isArray(data?.teacherCoursePlans)
           ? data.teacherCoursePlans
           : [];
-        const normalizedPlans = forceHomeworkUploadEnabled(savedPlans);
+        const normalizedPlans = normalizeLessonPlans(savedPlans);
         const nextProductEnabled =
           !!data?.shangguanClassTaskProductImprovementEnabled;
         const normalizedDisciplineConfig = normalizeDisciplineConfig(
@@ -4168,7 +4168,7 @@ export default function TeacherHomePage() {
       const plans = Array.isArray(data?.teacherCoursePlans)
         ? data.teacherCoursePlans
         : [];
-      const normalizedPlans = forceHomeworkUploadEnabled(plans);
+      const normalizedPlans = normalizeLessonPlans(plans);
       setTeacherCoursePlans(normalizedPlans);
       setClassroomUpdatedAt(
         String(data?.updatedAt || new Date().toISOString()),
@@ -4219,7 +4219,7 @@ export default function TeacherHomePage() {
       const plans = Array.isArray(data?.teacherCoursePlans)
         ? data.teacherCoursePlans
         : [];
-      const normalizedPlans = forceHomeworkUploadEnabled(plans);
+      const normalizedPlans = normalizeLessonPlans(plans);
       setTeacherCoursePlans(normalizedPlans);
       setClassroomUpdatedAt(
         String(data?.updatedAt || new Date().toISOString()),
@@ -5641,36 +5641,38 @@ export default function TeacherHomePage() {
                       <div className="teacher-lesson-title-row">
                         <strong>课时设置</strong>
                         {selectedCourse ? (
-                          <label
-                            className="teacher-ios-switch teacher-lesson-title-switch"
-                            title="切换本节课开放状态"
-                            aria-label={
-                              selectedCourse.enabled === false
-                                ? "未开放"
-                                : "已开放"
-                            }
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedCourse.enabled !== false}
-                              onChange={(e) =>
-                                onUpdateSelectedLesson({
-                                  enabled: e.target.checked,
-                                })
-                              }
-                            />
-                            <span
-                              className="teacher-ios-switch-track"
-                              aria-hidden="true"
+                          <div className="teacher-lesson-title-controls">
+                            <div
+                              className="teacher-lesson-switch-row"
+                              role="switch"
+                              aria-checked={selectedCourse.enabled !== false}
+                              title={selectedCourse.enabled === false ? "课时未开放，点击开放" : "课时已开放，点击关闭"}
+                              onClick={() => onUpdateSelectedLesson({ enabled: selectedCourse.enabled === false })}
                             >
-                              <span className="teacher-ios-switch-thumb" />
-                            </span>
-                          </label>
-                        ) : null}
-                      </div>
-                      <div className="teacher-lesson-detail-toolbar">
-                        {selectedCourse ? (
-                          <>
+                              {selectedCourse.enabled === false
+                                ? <Lock size={14} className="teacher-lesson-switch-icon" />
+                                : <LockOpen size={14} className="teacher-lesson-switch-icon active" />
+                              }
+                              <span className="teacher-ios-switch" aria-hidden="true">
+                                <span className={`teacher-ios-switch-track${selectedCourse.enabled !== false ? " checked" : ""}`}>
+                                  <span className="teacher-ios-switch-thumb" />
+                                </span>
+                              </span>
+                            </div>
+                            <div
+                              className="teacher-lesson-switch-row"
+                              role="switch"
+                              aria-checked={selectedCourse.homeworkUploadEnabled !== false}
+                              title={selectedCourse.homeworkUploadEnabled === false ? "本课无需交作业，点击开启" : "本课需要交作业，点击关闭"}
+                              onClick={() => onUpdateSelectedLesson({ homeworkUploadEnabled: selectedCourse.homeworkUploadEnabled === false })}
+                            >
+                              <ClipboardList size={14} className={`teacher-lesson-switch-icon${selectedCourse.homeworkUploadEnabled === false ? "" : " active"}`} />
+                              <span className="teacher-ios-switch" aria-hidden="true">
+                                <span className={`teacher-ios-switch-track${selectedCourse.homeworkUploadEnabled !== false ? " checked" : ""}`}>
+                                  <span className="teacher-ios-switch-thumb" />
+                                </span>
+                              </span>
+                            </div>
                             <PortalSelect
                               className="teacher-lesson-class-select"
                               value={normalizeLessonClassName(
@@ -5698,11 +5700,12 @@ export default function TeacherHomePage() {
                             </button>
                             <button
                               type="button"
-                              className="teacher-ghost-btn teacher-lesson-rename-trigger"
+                              className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
                               onClick={onOpenRenameLessonDialog}
+                              title="重命名课时"
+                              aria-label="重命名课时"
                             >
                               <Pencil size={14} />
-                              <span>重命名课时</span>
                             </button>
                             <button
                               type="button"
@@ -5716,7 +5719,7 @@ export default function TeacherHomePage() {
                             >
                               <Trash2 size={14} />
                             </button>
-                          </>
+                          </div>
                         ) : null}
                       </div>
                     </div>

@@ -10225,7 +10225,7 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
   }
 
   const enabled = sanitizeRuntimeBoolean(source.enabled, true);
-  const homeworkUploadEnabled = true;
+  const homeworkUploadEnabled = sanitizeRuntimeBoolean(source.homeworkUploadEnabled, true);
   const files = sanitizeAdminClassroomCourseFilesPayload(source.files);
   const courseName = sanitizeText(source.courseName || source.name, "", 80);
   const className = sanitizeAdminClassroomClassName(

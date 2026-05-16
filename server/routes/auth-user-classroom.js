@@ -1270,7 +1270,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         courseStartAt: sanitizeIsoDate(lesson?.courseStartAt) || "",
         courseEndAt: sanitizeIsoDate(lesson?.courseEndAt) || "",
         courseTime: sanitizeText(lesson?.courseTime, "", 120),
-        homeworkUploadEnabled: true,
+        homeworkUploadEnabled: sanitizeRuntimeBoolean(lesson?.homeworkUploadEnabled, true),
         enabled: sanitizeRuntimeBoolean(lesson?.enabled, true),
       }))
       .filter((lesson) => !userClassName || lesson.className === userClassName)
@@ -2422,7 +2422,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         courseEndAt: sanitizeIsoDate(lesson?.courseEndAt) || "",
         courseTime: sanitizeText(lesson?.courseTime, "", 120),
         enabled: sanitizeRuntimeBoolean(lesson?.enabled, true),
-        homeworkUploadEnabled: true,
+        homeworkUploadEnabled: sanitizeRuntimeBoolean(lesson?.homeworkUploadEnabled, true),
         studentTotal: roster.length,
         uploadedStudentCount,
         missingStudentCount: missingStudents.length,
