@@ -2,16 +2,21 @@
 
 ## Summary
 
-- 目标：在现有群聊 `@AI` 基础上，为每个群维护后台 `notes`，并让 AI 在合适时机主动参与讨论。
+- 目标：在现有群聊 `@AI` 基础上，为每个群维护后台 `notes`，并让 AI 在**确定性的"补位"场景**下主动开口。
 - 群聊 AI 全局固定为 `packycode / gpt-5.4`，学生不可选择模型。
 - 第一版不落真实 Markdown 文件，不给前台展示笔记；`notes` 仅作为后台长期上下文。
-- 主动参与采用“受控陪练型”策略：
-  - 群聊空闲一段时间后，低频发 1 条引导消息
-  - 群聊讨论明显卡住时，低频发 1 条推进消息
+- 主动参与 v1 **只做一种触发**：**悬空问题应答**(orphan-question answer)
+  - 群内出现疑问/求助语气
+  - 一段时间内无人有效回答
+  - 没有任何人 `@AI`
+  - AI 才主动答一次
+- v1 显式**不做**以下两类(留到 v2，依赖真实数据再放开)：
+  - 空闲后轻提醒(idle nudge)
+  - 讨论卡住时介入(stuck intervention)
 - 主动参与链路 **不占用正常 `@AI` 的执行容量**：
   - 学生手动 `@AI` 使用主 worker 池
-  - 后台 `notes` 刷新与主动发言使用独立 proactive worker 池
-- 新增后台 notes 和主动参与后，实时链路仍必须满足：
+  - 后台 `notes` 刷新与主动应答使用独立 proactive worker 池
+- 实时链路红线：
   - 空闲挂机时不能自己循环
   - 重复事件不能放大副作用
   - 无变化时不能重复写 state 或重复广播
@@ -19,8 +24,17 @@
 ## Goals
 
 - 让群聊 AI 不只在学生 `@AI` 时被动响应，而是能长期理解每个群在讨论什么。
-- 让 AI 在不打扰正常学习的前提下，适度地主动把讨论拉回学习目标、文件内容或未解决问题。
+- 让 AI 在**用户已经表达需要帮助、但没人响应**的情况下补位答题。
 - 保证学生手动 `@AI` 的稳定性和响应优先级，不被后台主动任务拖慢。
+- 显式拒绝"AI 主动引导学习"型行为(纪律委员化)——v1 只做补位，不做引导。
+
+## Non-Goals (v1)
+
+- **不做** AI 自发引导讨论方向、把闲聊拉回学习。
+- **不做** 基于 LLM 主观判定的"讨论卡住"介入。
+- **不做** 群聊笔记的前台展示、下载、编辑。
+- **不做** 主动参与频率/开关的 UI 配置(只走服务端配置)。
+- **不做** 教师可视的"AI 巡课"定时总结(v2 候选)。
 
 ## Architecture
 
@@ -29,7 +43,7 @@
 - Web 服务负责：
   - 接收群消息
   - 落库用户消息
-  - 识别是否需要刷新房间 `notes`
+  - 识别消息是否为疑问/求助
   - 在满足条件时创建 AI 任务
   - 通过群聊 WebSocket 广播 AI 消息
 - Redis 负责：
@@ -44,7 +58,7 @@
   - 持久化 `GroupChatRoomNotes`
 - AI workers 分为两类：
   - `group-chat-ai-worker`：只处理学生手动 `@AI`
-  - `group-chat-ai-proactive-worker`：只处理 `notes_refresh` 和 `proactive_nudge`
+  - `group-chat-ai-proactive-worker`：处理 `notes_refresh`、`proactive_check`、`proactive_answer`
 
 ### 2. 为什么要独立 proactive worker 池
 
@@ -68,15 +82,21 @@
   - 沿用当前群聊 `@AI` 流式回复能力
 - `notes_refresh`
   - 后台刷新房间长期笔记
-  - 不向前台创建消息
-  - 不触发任何无意义的群房间广播
-- `proactive_nudge`
-  - AI 主动发起一条普通群消息
+  - 纯维护任务，**不**派生主动消息
+  - 不向前台创建消息，不触发任何房间广播
+- `proactive_check`
+  - 主动判定任务，独立排队
+  - 输入：当前 notes + 新增消息 + 触发原因
+  - 输出：是否创建 `proactive_answer`
+  - 拆出独立任务的目的：让 `notes_refresh` 的事务不被判定逻辑污染
+- `proactive_answer`
+  - AI 主动发起一条普通群消息(v1 唯一允许的主动消息形态)
   - 带 `AI 主动发起` 标记
+  - `triggerReason` 字段记录具体原因，v1 只允许 `orphan_question`
 
 ### 4. 固定模型策略
 
-- 三类任务统一固定为：
+- 四类任务统一固定为：
   - `agentId = "A"`
   - `provider = "packycode"`
   - `model = "gpt-5.4"`
@@ -95,44 +115,62 @@
   - `roomId`
   - `provider`
   - `model`
-  - `notes`
-  - `recentTurns`
+  - `notes`(结构化对象，见下)
+  - `notesHash`(关键字段子集的 hash，用于等价判定)
   - `summaryUpToMessageId`
   - `lastSourceMessageAt`
   - `lastRefreshedAt`
   - `lastProactiveAt`
   - `cooldownUntil`
   - `lastProactiveDecision`
-- `notes` 结构采用后台结构化记忆，而不是单段长文本：
+  - `openQuestionsState`(见下)
+- `notes` 采用后台结构化记忆，而不是单段长文本：
   - `roomTopic`
   - `currentFocus`
   - `facts`
-  - `openQuestions`
-  - `fileSummaries`
+  - `openQuestions` —— v1 关键字段，驱动主动应答
+  - `fileSummaries` —— 容量受限(见下)
   - `participantSignals`
   - `doNotRepeat`
+
+#### `openQuestions` 单项结构
+
+- `id`：稳定 id，避免每次刷新重建
+- `messageId`：原始疑问消息
+- `askerUserId`
+- `text`：精简后的问题描述
+- `topicRelevant`：bool，是否与本群课程/材料相关(v1 主动应答的硬闸门)
+- `firstSeenAt`
+- `state`：`open | answered_by_human | answered_by_ai | stale`
+- `lastEvaluatedAt`
+
+#### `fileSummaries` 容量约束
+
+- 最多保留 20 项
+- 按 `lastReferencedAt` LRU 淘汰
+- 单项摘要 ≤ 1KB
+- 禁止落入：大段原文、整页 PDF 文本、base64、超长表格原文
 
 ### 2. `GroupChatAiTask`
 
 - 复用现有 `GroupChatAiTask`，新增：
-  - `taskType`
+  - `taskType`：`mention_reply | notes_refresh | proactive_check | proactive_answer`
   - `roomNotesVersion` 或 `roomNotesUpdatedAt`
-  - `triggerReason`
-- `taskType` 允许值：
-  - `mention_reply`
-  - `notes_refresh`
-  - `proactive_nudge`
+  - `triggerReason`：v1 唯一允许 `orphan_question`
+  - `relatedQuestionId`：指向 `openQuestions` 的某一项
 
 ### 3. `GroupChatMessage.aiMeta`
 
 - 扩展字段：
   - `taskType`
   - `initiative: passive | proactive`
+  - `triggerReason`
   - `notesUpdatedAt`
 - 主动消息固定为：
   - `senderKind = "ai"`
   - `initiative = "proactive"`
-  - `taskType = "proactive_nudge"`
+  - `taskType = "proactive_answer"`
+  - `triggerReason = "orphan_question"`(v1)
 
 ## Notes Strategy
 
@@ -146,15 +184,7 @@
 
 - 不持续重扫整个群历史。
 - 每次只处理 `summaryUpToMessageId` 之后的新消息，再和旧 `notes` 合并。
-- 附件只保留：
-  - 文件摘要
-  - 关键结论
-  - 需要追问的点
-- 不保留：
-  - 大段原文
-  - 整页 PDF 文本
-  - base64
-  - 超长表格原始内容
+- 附件只保留摘要、关键结论、需要追问的点；不保留原文。
 
 ### 3. 刷新触发方式
 
@@ -166,60 +196,73 @@
 - 防抖调度必须幂等：
   - 同一房间在同一窗口内最多保留 1 个待执行 `notes_refresh`
   - 新消息只能覆盖到期时间，不能额外堆积重复任务
-- `notes_refresh` 完成后不允许因为“notes 已刷新”就向前台广播 `room_updated`、`presence` 或其他可见事件。
+- `notes_refresh` 完成后不允许向前台广播 `room_updated`、`presence` 或其他可见事件。
 
-## Proactive Participation
+### 4. Notes 等价判定
 
-### 1. 触发场景
+- 不使用整体 JSON 字面比较(LLM 输出有措辞抖动，几乎不会等价)。
+- 用 `notesHash` 比较关键字段子集：
+  - `roomTopic`、`currentFocus`、`openQuestions[].id|state`、`facts` 的稳定 key 集合
+- `summaryUpToMessageId` 必须前进；否则视为无进展，跳过后续步骤。
+- 等价时仅更新 `lastRefreshedAt`，不入队 `proactive_check`。
 
-- 第一版同时支持两类触发：
-  - 空闲后轻提醒
-  - 讨论卡住时介入
+## Proactive Participation (v1)
 
-### 2. 空闲后轻提醒
+### 1. 唯一触发：悬空问题应答 (orphan_question)
 
-- 默认条件建议：
-  - 最近一次人类消息后安静 `10min`
-  - 自上次主动消息后至少新增 `4` 条人类消息
-  - 最近 `2h` 内该群存在真实讨论
-- AI 消息目标：
-  - 轻总结这段讨论
-  - 提 1 个下一步问题
-  - 引导继续回到学习材料或题目
+满足**全部**以下条件时，才创建 `proactive_answer`：
 
-### 3. 讨论卡住时介入
+- 群内最近一条消息为疑问/求助语气，且该消息归属一条 `openQuestions` 项
+  - 该项 `state = open`
+  - 该项 `topicRelevant = true`
+  - 该项 `firstSeenAt` 距今 ≥ `ORPHAN_WAIT_MIN_MS`(默认 `5min`)
+  - 该项 `firstSeenAt` 距今 ≤ `ORPHAN_WAIT_MAX_MS`(默认 `15min`，过久视为已凉)
+- 自该项 `messageId` 之后，群内无任何**有效人类回答**
+  - 简单实现：该项之后无非提问者发的、非疑问语气的、长度 ≥ 8 字的人类消息
+- 自该项 `messageId` 之后，群内无任何 `@AI`
+- 同房间无 `mention_reply` 处于 `pending/running`
+- 同房间无其他 `proactive_*` 任务处于 `pending/running`
+- 当前时间在允许时间窗内(`PROACTIVE_TIME_WINDOW`，例如 07:00–23:00)
+- 同房间距上次任何 `proactive_answer` ≥ `PROACTIVE_COOLDOWN_MS`(默认 `30min`)
 
-- 默认条件建议：
-  - 近 `12min` 内至少 `6` 条文本消息
-  - 至少 `2` 个不同学生参与
-  - 当前没有新的 `@AI`
-  - `notes` 或近期消息判断为：
-    - 问题未解
-    - 观点反复
-    - 讨论缺少推进
-- AI 消息目标：
-  - 点明未解决点
-  - 给一个更具体的问题切口
-  - 把讨论拉回文件、图片或课程任务
+### 2. 话题相关性闸门
 
-### 4. 内容边界
+- `openQuestions[].topicRelevant` 由 `notes_refresh` 时一并判定
+- 判定输入：当前 `roomTopic` + `currentFocus` + 该问题文本
+- 与课程/题目/材料无关的疑问(闲聊、生活、八卦)一律 `topicRelevant = false`，不进入主动应答候选
+- 宁可漏答，不要误答
 
-- 第一版主动消息只允许：
-  - 轻总结 + 下一问
-  - 未解决点提醒
-  - 依据文件内容的推进式提问
-- 第一版禁止：
-  - 连续主动刷屏
-  - 连续追问用户
-  - 离开课程主题自由发散
-  - 和自己前一次主动消息重复表述
+### 3. 内容边界
 
-### 5. 消息形态
+- v1 主动消息只允许：
+  - 直接尝试回答该 `openQuestions` 中的具体问题
+  - 必要时引用群内已有文件/材料
+- v1 禁止：
+  - 拉回学习主题型的"引导发言"
+  - 总结群讨论
+  - 追问用户
+  - 任何不指向具体 `openQuestions` 项的发言
+  - 与该房间上一条主动消息相同/近似表述
+
+### 4. 消息形态
 
 - 主动消息作为普通群消息插入消息流。
-- 不挂在某条学生消息下。
+- 不挂在某条学生消息下，但**必须**通过 `aiMeta.relatedQuestionId` 关联到具体问题项。
 - 前端显示标签：
   - `AI 主动发起 · GPT-5.4`
+
+### 5. v2 候选(本期不实现)
+
+以下场景**不在 v1 范围**，仅作为 v2 评估候选：
+
+- 空闲后轻提醒(idle nudge)
+- 讨论卡住时介入(stuck intervention)
+- 教师配置的定时巡课总结
+
+v2 是否启用，应基于 v1 真实数据：
+- 主动应答的发出量、被点赞/被忽略比例
+- 教师/学生对主动消息的关闭率
+- 误答(主动消息后被人类纠正)率
 
 ## Queueing and Isolation
 
@@ -229,8 +272,8 @@
   - 队列：主 `mention_reply` 队列
   - worker：`group-chat-ai-worker`
   - 容量：沿用当前主 worker 并发配置
-- 后台 `notes_refresh` / `proactive_nudge`：
-  - 队列：独立 proactive 队列
+- 后台 `notes_refresh` / `proactive_check` / `proactive_answer`：
+  - 队列：独立 proactive 队列(可单队列按 `taskType` 分流，也可三个子队列)
   - worker：`group-chat-ai-proactive-worker`
   - 容量：独立 proactive 并发配置
 
@@ -239,22 +282,25 @@
 - proactive worker **不占用** 主 `@AI` worker 槽位。
 - proactive worker 的 Redis 队列与消费循环独立。
 - 即使主动任务堆积，也不能延迟学生 `@AI`。
-- 主动任务仍可复用相同的：
-  - Redis 连接
-  - Mongo 连接
-  - 任务表
-  - GPT-5.4 运行时
+- 主动任务仍可复用相同的 Redis 连接、Mongo 连接、任务表、GPT-5.4 运行时。
 
-### 3. 主动任务频控
+### 3. 任务编排：refresh → check → answer 拆分
 
-- 同一房间任意时刻最多 `1` 个 `proactive_nudge` 处于 `pending/running`。
+- `notes_refresh` 只负责更新 notes 与 `openQuestions`；事务结束**只**在满足条件时入队一个 `proactive_check`，不直接生成 `proactive_answer`。
+- `proactive_check` 拉起时重新读取最新 notes 与最近消息，独立判定；任何判定失败/抛错都**不**回滚 notes。
+- `proactive_check` 通过后才入队 `proactive_answer`，并在房间冷却键上加锁。
+- 拆分目的：主动判定的不确定性不能污染笔记内容；笔记刷新的时延不能被判定绑架。
+
+### 4. 主动任务频控
+
+- 同一房间任意时刻最多 `1` 个 `proactive_*` 任务处于 `pending/running`。
 - 同一房间 `30min` 内最多发送 `1` 条主动消息。
-- 只要同房间存在 `mention_reply` 的 `pending/running`，禁止创建新的 `proactive_nudge`。
+- 只要同房间存在 `mention_reply` 的 `pending/running`，禁止创建新的 `proactive_check` / `proactive_answer`。
 - `notes_refresh` 可以继续排队，但优先级低于学生手动 `@AI`。
 
 ## Realtime Guardrails
 
-### 1. 这条链路默认按“空闲也会长时间挂着”设计
+### 1. 这条链路默认按"空闲也会长时间挂着"设计
 
 - 不能把后台 notes 当成一次性任务链路来写。
 - 必须默认假设：
@@ -265,7 +311,7 @@
 
 ### 2. 所有后台调度默认幂等
 
-- 同一房间重复收到“需要刷新 notes”的信号时，结果必须稳定。
+- 同一房间重复收到"需要刷新 notes"的信号时，结果必须稳定。
 - 同一个 `notes_refresh` 完成后，不允许再反向触发新的同类任务形成闭环。
 - 同一条主动消息判定结果，如果输入上下文没有变化，不能重复建任务。
 - 同一房间的冷却状态、去重键和判定锁必须能阻断重复触发。
@@ -273,27 +319,29 @@
 ### 3. Notes 刷新不能变成实时广播热点
 
 - `notes_refresh` 只写 `GroupChatRoomNotes`，不改群消息流，不更新房间活动时间，不写已读状态。
-- 禁止把“后台 notes 更新时间”映射成前台房间 `updatedAt`。
+- 禁止把"后台 notes 更新时间"映射成前台房间 `updatedAt`。
 - 禁止因为后台 notes 更新而触发房间重排序、房间重订阅或 presence 重算。
-- 只有真正创建 `proactive_nudge` 消息时，才允许走一次正常的 `message_created` 广播。
+- 只有真正创建 `proactive_answer` 消息时，才允许走一次正常的 `message_created` 广播。
 
 ### 4. 前端消费主动消息也要避免 no-op 更新
 
 - 新增 `initiative = "proactive"` 只是一种消息类型，不能引入新的全量房间重刷逻辑。
 - 若同一条主动消息的补丁内容没有变化，前端必须跳过 no-op state write。
 - 禁止收到主动消息后无条件重跑全部房间订阅同步。
-- 禁止把“后台任务状态变化”直接透传成高频前端 state 变化。
+- 禁止把"后台任务状态变化"直接透传成高频前端 state 变化。
 
 ### 5. 不允许出现新的自循环闭环
 
 - 需要明确规避以下链路：
-  - 新消息 -> 防抖任务 -> notes_refresh -> room_updated -> 前端重订阅 -> 新一轮后台信号
-  - 主动消息 -> 再次触发主动判定 -> 连续主动消息
-  - notes 刷新 -> 房间时间变化 -> 前端重排/重订阅 -> 再次产生后台任务
-- 结论是：
+  - 新消息 → 防抖任务 → notes_refresh → room_updated → 前端重订阅 → 新一轮后台信号
+  - 主动消息 → 再次触发主动判定 → 连续主动消息
+  - 主动消息 → 学生回应/追问 → 触发新一轮 orphan 判定 → 又一条主动消息
+  - notes 刷新 → 房间时间变化 → 前端重排/重订阅 → 再次产生后台任务
+- 防线：
   - `notes_refresh` 是纯后台维护
-  - `proactive_nudge` 是低频、单次、可冷却的可见输出
-  - 两者都不能把群聊实时链路变成空闲自循环
+  - `proactive_answer` 发出后必须进入房间冷却(`PROACTIVE_COOLDOWN_MS`)，期间禁止任何 `proactive_check`
+  - 主动消息**自身**永远不进入 `openQuestions`
+  - 同一 `openQuestions` 项一旦被 `proactive_answer` 处理，标记 `state = answered_by_ai`，**不可**再被同一原因二次主动应答
 
 ## Backend Flow
 
@@ -313,24 +361,32 @@
 
 1. proactive worker 拉取 `notes_refresh`。
 2. 读取 `summaryUpToMessageId` 之后的新消息。
-3. 结合旧 `notes` 生成新的结构化群聊笔记。
-4. 写回 `GroupChatRoomNotes`。
-5. 如果新的 `notes` 与当前内容等价，直接结束，不再广播、不再派生主动任务。
-6. 调用主动参与判定器：
-   - 不满足则结束
-   - 满足则创建 `proactive_nudge`
+3. 结合旧 `notes` 生成新的结构化笔记，重点维护 `openQuestions` 与其 `state`、`topicRelevant`。
+4. 写回 `GroupChatRoomNotes`，更新 `notesHash`。
+5. 若 `notesHash` 与 `summaryUpToMessageId` 都无进展，结束。
+6. 若存在 `state = open` 且 `topicRelevant = true` 且超过 `ORPHAN_WAIT_MIN_MS` 的项，入队一个 `proactive_check`。
+7. `notes_refresh` 本身**不**直接生成主动消息。
 
-### 3. `proactive_nudge` 流程
+### 3. `proactive_check` 流程
 
-1. proactive worker 拉取 `proactive_nudge`。
-2. 再次检查：
+1. proactive worker 拉取 `proactive_check`。
+2. 重新读取最新 notes 与最近消息。
+3. 检查"悬空问题应答"全部触发条件(见 Proactive §1)。
+4. 满足条件：入队 `proactive_answer`，写入 `relatedQuestionId`，房间设置短期判定锁。
+5. 不满足：结束，不留任何前台副作用。
+
+### 4. `proactive_answer` 流程
+
+1. proactive worker 拉取 `proactive_answer`。
+2. 再次校验：
    - 冷却时间
    - 是否有主 `@AI` 任务正在跑
    - 是否已存在房间主动消息任务
+   - `relatedQuestionId` 仍处于 `open` 且 `topicRelevant = true`
 3. 满足条件才生成文本。
 4. 生成一条普通 AI 群消息并广播。
-5. 更新 `lastProactiveAt` 与决策记录。
-6. 主动消息发出后必须进入冷却，禁止基于自己刚发出的消息再次立即触发主动判定。
+5. 更新 `openQuestions[id].state = answered_by_ai`、`lastProactiveAt`、`cooldownUntil`、`lastProactiveDecision`。
+6. 主动消息发出后强制进入冷却，禁止基于自己刚发出的消息再次触发判定。
 
 ## Frontend Impact
 
@@ -356,11 +412,22 @@
   - `docker compose up -d --build`
 - 新增的环境变量或服务端常量至少包括：
   - `GROUP_CHAT_PROACTIVE_ENABLED`
-  - `GROUP_CHAT_NOTES_DEBOUNCE_MS`
-  - `GROUP_CHAT_PROACTIVE_IDLE_MS`
-  - `GROUP_CHAT_PROACTIVE_STUCK_WINDOW_MS`
-  - `GROUP_CHAT_PROACTIVE_COOLDOWN_MS`
+  - `GROUP_CHAT_NOTES_DEBOUNCE_MS`(默认 `90_000`)
+  - `GROUP_CHAT_ORPHAN_WAIT_MIN_MS`(默认 `300_000`，5min)
+  - `GROUP_CHAT_ORPHAN_WAIT_MAX_MS`(默认 `900_000`，15min)
+  - `GROUP_CHAT_PROACTIVE_COOLDOWN_MS`(默认 `1_800_000`，30min)
+  - `GROUP_CHAT_PROACTIVE_TIME_WINDOW`(默认 `07:00-23:00`)
   - `GROUP_CHAT_PROACTIVE_WORKER_CONCURRENCY`
+
+### 关停与降级语义
+
+`GROUP_CHAT_PROACTIVE_ENABLED=false` 时的具体行为：
+
+- 不再创建新的 `proactive_check` 与 `proactive_answer` 任务。
+- 已入队但未开始的 `proactive_check` / `proactive_answer`：worker 拉起后立即标记为 `skipped`，不执行 LLM 调用。
+- 已在 running 的 `proactive_answer`：允许跑完(避免半截消息)，但发完后不再后续动作。
+- `notes_refresh` **仍正常运行**(它是纯后台维护，不产生用户可见副作用)。
+- 前端：存量主动消息照常展示标签；只是不再有新的主动消息产生。
 
 ## Test Plan
 
@@ -372,16 +439,30 @@
   - 连续消息只触发一次防抖刷新
   - 只总结增量消息
   - 文件内容只进入摘要，不进入原文堆积
-  - notes 内容等价时不派生额外广播和主动任务
-- `proactive_nudge`：
-  - 空闲达到阈值时可触发
-  - 卡住达到阈值时可触发
-  - `30min` 冷却内不会再次触发
+  - `fileSummaries` 超过 20 项时按 LRU 淘汰
+  - notes 内容等价(hash 一致且 `summaryUpToMessageId` 无进展)时不派生 `proactive_check`
+- `proactive_check`：
+  - 满足条件才入队 `proactive_answer`
+  - 任何子条件不满足都安静结束，不留前台副作用
+  - 判定失败不影响 notes
+- `proactive_answer` 触发(orphan_question)：
+  - 群内出现疑问，5min 无人有效回答 → 触发
+  - 同样问题在 5min 内被人类回答 → 不触发
+  - 同样问题与本群课程无关(`topicRelevant=false`) → 不触发
+  - 触发时间在 23:00 后 → 不触发
+  - 同房间 30min 内已有过主动消息 → 不触发
+  - 触发时房间存在 `mention_reply` 在跑 → 不触发
+  - 同一 `openQuestions` 项被主动应答过后 → 不再二次主动应答
+- 关停语义：
+  - `GROUP_CHAT_PROACTIVE_ENABLED=false` 后，新主动消息不再产生
+  - `notes_refresh` 仍正常跑
+  - 存量主动消息前端展示不变
 - 实时链路防线：
   - 后台 notes 更新不会触发房间 `updatedAt` 变化
   - 后台 notes 更新不会触发 `room_updated` 噪音广播
   - 空闲挂机时不会因为主动参与链路持续产生 WebSocket 往返帧
   - 主动消息和消息补丁在无变化时不会重复写前端 state
+  - 主动消息发出后 30min 内，即使学生追问也不会再次触发新一轮 `proactive_answer`
 - 容量隔离：
   - 主动 worker 堵塞时，学生手动 `@AI` 仍能正常运行
   - 学生手动 `@AI` 高并发时，主动 worker 不会占用主链路槽位
@@ -394,8 +475,9 @@
 - 第一版群聊 AI 仍固定为 `Agent A = packycode / gpt-5.4`。
 - 第一版不做真实 Markdown 文件，不做前台群笔记展示。
 - 第一版全局默认开启主动参与，但仅通过服务端配置控制。
-- 第一版主动消息定位为“受控陪练”，不是持续在线助教。
+- 第一版主动消息**只补位、不引导**：仅在用户已经明确表达需要帮助、且无人响应时介入。
 - 第一版最重要的工程原则是：
-  - **主动参与增强体验**
+  - **主动参与是补位，不是引导**
   - **不能影响正常 `@AI` 主链路**
   - **不能把群聊实时链路重新写成空闲自循环**
+  - **宁可漏答，不要误答**
