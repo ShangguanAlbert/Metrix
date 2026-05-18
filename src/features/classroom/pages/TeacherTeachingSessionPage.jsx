@@ -16,23 +16,13 @@ import {
   updateAdminTeachingSessionPage,
   updateAdminTeachingSessionPdf,
 } from "../../../pages/admin/adminApi.js";
+import { normalizeTeachingCenterConfig } from "../teachingCenterConfig.js";
 import { getAdminToken } from "../../../pages/login/adminSession.js";
 import {
   resolveActiveAuthSlot,
   withAuthSlot,
 } from "../../../app/authStorage.js";
 import "../../../styles/teacher-home.css";
-
-function normalizeTeachingConfig(teachingConfig) {
-  const source =
-    teachingConfig && typeof teachingConfig === "object" ? teachingConfig : {};
-  return {
-    pdfFiles: Array.isArray(source.pdfFiles) ? source.pdfFiles : [],
-    defaultPdfFileId: String(source.defaultPdfFileId || "").trim(),
-    allowQuestions: source.allowQuestions !== false,
-    teacherNotes: String(source.teacherNotes || ""),
-  };
-}
 
 function isPdfFile(file) {
   const fileName = String(file?.name || "").trim().toLowerCase();
@@ -101,7 +91,7 @@ export default function TeacherTeachingSessionPage() {
   }, [activeSlot, adminToken, lessonId, navigate]);
 
   const teachingConfig = useMemo(
-    () => normalizeTeachingConfig(lesson?.teachingConfig),
+    () => normalizeTeachingCenterConfig(lesson?.teachingConfig),
     [lesson?.teachingConfig],
   );
   const pdfFiles = useMemo(() => {

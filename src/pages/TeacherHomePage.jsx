@@ -66,6 +66,10 @@ import {
   markTeacherTaskUploadDraftsUploading,
   removeTeacherTaskUploadDraft,
 } from "../features/classroom/teacherTaskUploadQueue.js";
+import {
+  appendTeachingCenterPdfFiles,
+  normalizeTeachingCenterConfig,
+} from "../features/classroom/teachingCenterConfig.js";
 import { GENDER_OPTIONS, GRADE_OPTIONS } from "./chat/constants.js";
 import {
   DEFAULT_TEACHER_SCOPE_KEY,
@@ -107,6 +111,7 @@ import {
   saveAdminClassroomSeatLayouts,
   startAdminTeachingSession,
   updateAdminUserDirectoryUser,
+  uploadAdminClassroomLessonFiles,
   uploadAdminClassroomTaskFiles,
 } from "./admin/adminApi.js";
 import { clearAdminToken, getAdminToken } from "./login/adminSession.js";
@@ -822,35 +827,6 @@ function normalizeLessonPlans(plans) {
   }));
 }
 
-function normalizeLessonTeachingConfig(teachingConfig) {
-  const source =
-    teachingConfig && typeof teachingConfig === "object" ? teachingConfig : {};
-  const rawPdfFiles = Array.isArray(source.pdfFiles) ? source.pdfFiles : [];
-  const seenIds = new Set();
-  const pdfFiles = rawPdfFiles
-    .map((item, index) => {
-      const fileId = String(item?.fileId || item?.id || "").trim();
-      if (!fileId || seenIds.has(fileId)) return null;
-      seenIds.add(fileId);
-      return {
-        fileId,
-        sortOrder:
-          Number.isFinite(Number(item?.sortOrder)) ? Number(item.sortOrder) : index,
-        enabled: item?.enabled !== false,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-  return {
-    pdfFiles,
-    defaultPdfFileId: String(source.defaultPdfFileId || "").trim(),
-    allowQuestions: source.allowQuestions !== false,
-    teacherNotes: String(source.teacherNotes || ""),
-    welcomeText: String(source.welcomeText || ""),
-    updatedAt: String(source.updatedAt || ""),
-  };
-}
-
 function isLessonPdfFile(file) {
   const fileName = String(file?.name || "").trim().toLowerCase();
   const mimeType = String(file?.mimeType || "").trim().toLowerCase();
@@ -1250,6 +1226,7 @@ export default function TeacherHomePage() {
     [location.search],
   );
   const taskFileInputRef = useRef(null);
+  const teachingPdfInputRef = useRef(null);
   const lessonListScrollRef = useRef(null);
   const deleteConfirmInputRef = useRef(null);
   const disciplineStudentSearchInputRef = useRef(null);
@@ -1261,6 +1238,7 @@ export default function TeacherHomePage() {
   const [teachingConfigSaving, setTeachingConfigSaving] = useState(false);
   const [teachingSessionLaunchingLessonId, setTeachingSessionLaunchingLessonId] =
     useState("");
+  const [teachingPdfUploading, setTeachingPdfUploading] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const uploadAbortControllerRef = useRef(null);
   const [downloadingFileId, setDownloadingFileId] = useState("");
@@ -3205,7 +3183,7 @@ export default function TeacherHomePage() {
   const selectedCourse =
     selectedCourseIndex >= 0 ? teacherCoursePlans[selectedCourseIndex] : null;
   const selectedCourseTeachingConfig = useMemo(
-    () => normalizeLessonTeachingConfig(selectedCourse?.teachingConfig),
+    () => normalizeTeachingCenterConfig(selectedCourse?.teachingConfig),
     [selectedCourse?.teachingConfig],
   );
   const selectedCoursePdfFiles = useMemo(
@@ -3927,7 +3905,7 @@ export default function TeacherHomePage() {
   }
 
   function onUpdateSelectedLessonTeachingConfig(patch) {
-    const currentConfig = normalizeLessonTeachingConfig(
+    const currentConfig = normalizeTeachingCenterConfig(
       selectedCourse?.teachingConfig,
     );
     onUpdateSelectedLesson({
@@ -3941,7 +3919,7 @@ export default function TeacherHomePage() {
   function onToggleSelectedLessonTeachingPdf(fileId) {
     const safeFileId = String(fileId || "").trim();
     if (!safeFileId) return;
-    const currentConfig = normalizeLessonTeachingConfig(
+    const currentConfig = normalizeTeachingCenterConfig(
       selectedCourse?.teachingConfig,
     );
     const exists = currentConfig.pdfFiles.some((item) => item.fileId === safeFileId);
@@ -3978,7 +3956,7 @@ export default function TeacherHomePage() {
       const data = await saveAdminLessonTeachingConfig(
         adminToken,
         selectedCourse.id,
-        normalizeLessonTeachingConfig(selectedCourse.teachingConfig),
+        normalizeTeachingCenterConfig(selectedCourse.teachingConfig),
       );
       const plans = Array.isArray(data?.teacherCoursePlans)
         ? data.teacherCoursePlans
@@ -4019,7 +3997,7 @@ export default function TeacherHomePage() {
       await saveAdminLessonTeachingConfig(
         adminToken,
         lessonId,
-        normalizeLessonTeachingConfig(selectedCourse.teachingConfig),
+        normalizeTeachingCenterConfig(selectedCourse.teachingConfig),
       );
       await startAdminTeachingSession(adminToken, lessonId);
       const teachingUrl = withAuthSlot(
@@ -4034,6 +4012,76 @@ export default function TeacherHomePage() {
       setError(readErrorMessage(rawError));
     } finally {
       setTeachingSessionLaunchingLessonId("");
+    }
+  }
+
+  async function onUploadTeachingPdfFiles(event) {
+    const lessonId = String(selectedCourse?.id || "").trim();
+    const files = Array.from(event?.target?.files || []).filter(Boolean);
+    if (event?.target) {
+      event.target.value = "";
+    }
+    if (!adminToken || !lessonId || files.length === 0 || teachingPdfUploading) {
+      return;
+    }
+    const invalidFile = files.find((file) => !isLessonPdfFile(file));
+    if (invalidFile) {
+      setError("授课中心当前只支持上传 PDF 文件。");
+      return;
+    }
+    setTeachingPdfUploading(true);
+    setError("");
+    try {
+      const beforeFileIds = new Set(
+        (Array.isArray(selectedCourse?.files) ? selectedCourse.files : [])
+          .map((file) => String(file?.id || "").trim())
+          .filter(Boolean),
+      );
+      const uploadData = await uploadAdminClassroomLessonFiles(
+        adminToken,
+        lessonId,
+        files,
+      );
+      const uploadedPlans = Array.isArray(uploadData?.teacherCoursePlans)
+        ? uploadData.teacherCoursePlans
+        : [];
+      const uploadedLesson = uploadedPlans.find(
+        (lesson) => String(lesson?.id || "").trim() === lessonId,
+      );
+      const newPdfFileIds = (Array.isArray(uploadedLesson?.files) ? uploadedLesson.files : [])
+        .filter(isLessonPdfFile)
+        .map((file) => String(file?.id || "").trim())
+        .filter((fileId) => fileId && !beforeFileIds.has(fileId));
+      // Preserve any unsaved teaching-center edits on the page while appending
+      // the newly uploaded lesson PDFs into the teaching config.
+      const nextTeachingConfig = appendTeachingCenterPdfFiles(
+        selectedCourse?.teachingConfig,
+        newPdfFileIds,
+      );
+      const configData = await saveAdminLessonTeachingConfig(
+        adminToken,
+        lessonId,
+        nextTeachingConfig,
+      );
+      const plans = Array.isArray(configData?.teacherCoursePlans)
+        ? configData.teacherCoursePlans
+        : [];
+      const normalizedPlans = normalizeLessonPlans(plans);
+      setTeacherCoursePlans(normalizedPlans);
+      setClassroomUpdatedAt(
+        String(configData?.updatedAt || new Date().toISOString()),
+      );
+      classroomConfigSavedSnapshotRef.current = buildClassroomConfigSnapshot({
+        productTaskEnabled,
+        teacherCoursePlans: normalizedPlans,
+        classroomDisciplineConfig,
+      });
+      setClassroomSaveNotice("授课 PDF 已上传并加入授课列表。");
+    } catch (rawError) {
+      if (handleAuthError(rawError)) return;
+      setError(readErrorMessage(rawError));
+    } finally {
+      setTeachingPdfUploading(false);
     }
   }
 
@@ -6663,7 +6711,7 @@ export default function TeacherHomePage() {
                           const courseId = String(course?.id || "");
                           const active =
                             courseId === String(selectedCourseId || "");
-                          const teachingConfig = normalizeLessonTeachingConfig(
+                          const teachingConfig = normalizeTeachingCenterConfig(
                             course?.teachingConfig,
                           );
                           const teachingStatus =
@@ -6718,13 +6766,38 @@ export default function TeacherHomePage() {
                         <section className="teacher-card">
                           <div className="teacher-task-draft-head">
                             <strong>授课 PDF</strong>
-                            <span className="teacher-panel-save-time">
-                              仅支持从当前课时的课程文件里选择 PDF
-                            </span>
+                            <div className="teacher-task-draft-actions">
+                              <input
+                                ref={teachingPdfInputRef}
+                                type="file"
+                                accept="application/pdf,.pdf"
+                                multiple
+                                className="teacher-hidden-file-input"
+                                onChange={(event) =>
+                                  void onUploadTeachingPdfFiles(event)
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="teacher-ghost-btn"
+                                onClick={() => teachingPdfInputRef.current?.click()}
+                                disabled={teachingPdfUploading}
+                              >
+                                <Upload size={15} />
+                                <span>
+                                  {teachingPdfUploading
+                                    ? "上传中..."
+                                    : "上传授课 PDF"}
+                                </span>
+                              </button>
+                            </div>
                           </div>
+                          <p className="teacher-panel-save-time">
+                            可在授课中心单独上传 PDF，上传后会自动加入授课列表。
+                          </p>
                           {selectedCoursePdfFiles.length === 0 ? (
                             <p className="teacher-empty-text">
-                              当前课时还没有 PDF 课程文件，请先到课时管理上传。
+                              当前还没有授课 PDF，请直接在这里上传。
                             </p>
                           ) : (
                             <div className="teacher-file-chip-list">
