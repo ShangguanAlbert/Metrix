@@ -322,6 +322,7 @@ export async function uploadAdminClassroomTaskFiles(
   lessonId,
   taskId,
   files = [],
+  signal,
 ) {
   const safeLessonId = String(lessonId || "").trim();
   const safeTaskId = String(taskId || "").trim();
@@ -339,6 +340,7 @@ export async function uploadAdminClassroomTaskFiles(
       method: "POST",
       headers: authHeader(adminToken),
       body: formData,
+      signal,
     },
   );
   const data = await readJson(resp);

@@ -1210,6 +1210,7 @@ export default function TeacherHomePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
+  const uploadAbortControllerRef = useRef(null);
   const [downloadingFileId, setDownloadingFileId] = useState("");
   const [deletingFileId, setDeletingFileId] = useState("");
   const [error, setError] = useState("");
@@ -1377,7 +1378,9 @@ export default function TeacherHomePage() {
   const [onlineWindowSeconds, setOnlineWindowSeconds] = useState(300);
   const [onlineHeartbeatStaleSeconds, setOnlineHeartbeatStaleSeconds] =
     useState(70);
-  const [onlineClassFilter, setOnlineClassFilter] = useState("all");
+  const [onlineClassFilter, setOnlineClassFilter] = useState(
+    () => TARGET_CLASS_NAMES[0] || "all",
+  );
   const [exportCenterScopeKey, setExportCenterScopeKey] = useState(
     () =>
       requestedExportCenterContext.teacherScopeKey || DEFAULT_TEACHER_SCOPE_KEY,
@@ -1655,6 +1658,16 @@ export default function TeacherHomePage() {
     },
     [activeSlot, adminToken, handleAuthError, navigate],
   );
+
+  useEffect(() => {
+    if (!uploadingFiles) return;
+    const handler = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [uploadingFiles]);
 
   useEffect(() => {
     setPageRefreshState("idle");
@@ -2560,7 +2573,7 @@ export default function TeacherHomePage() {
     await runExportCenterTask("delete-scope-chats", async () => {
       const data = await deleteAllUserChats(adminToken, exportCenterScopeKey);
       setExportCenterNotice(
-        `已清空“${exportCenterScopeLabel}”授课教师下 ${Number(data?.deletedCount || 0)} 条对话状态数据。`,
+        `已清空"${exportCenterScopeLabel}"授课教师下 ${Number(data?.deletedCount || 0)} 条对话状态数据。`,
       );
       setExportCenterDeleteDialogOpen(false);
     });
@@ -3974,7 +3987,7 @@ export default function TeacherHomePage() {
     if (typed !== "确认删除") {
       setDeleteConfirmDialog((current) => ({
         ...current,
-        error: "请输入“确认删除”以继续删除操作。",
+        error: `请输入"确认删除"以继续删除操作。`,
       }));
       return;
     }
@@ -4128,6 +4141,8 @@ export default function TeacherHomePage() {
     ) {
       return;
     }
+    const abortController = new AbortController();
+    uploadAbortControllerRef.current = abortController;
     setUploadingFiles(true);
     setError("");
     setTaskUploadDraftsByScope((current) => {
@@ -4164,6 +4179,7 @@ export default function TeacherHomePage() {
         safeLessonId,
         safeTaskId,
         selectedTaskUploadDrafts.map((item) => item.file).filter(Boolean),
+        abortController.signal,
       );
       const plans = Array.isArray(data?.teacherCoursePlans)
         ? data.teacherCoursePlans
@@ -4183,7 +4199,8 @@ export default function TeacherHomePage() {
         [selectedTaskUploadScopeKey]: [],
       }));
     } catch (rawError) {
-      const message = readErrorMessage(rawError);
+      const aborted = rawError?.name === "AbortError";
+      const message = aborted ? "上传已取消。" : readErrorMessage(rawError);
       setTaskUploadDraftsByScope((current) => {
         const currentDrafts = Array.isArray(current[selectedTaskUploadScopeKey])
           ? current[selectedTaskUploadScopeKey]
@@ -4196,9 +4213,10 @@ export default function TeacherHomePage() {
           ),
         };
       });
-      if (handleAuthError(rawError)) return;
-      setError(message);
+      if (!aborted && handleAuthError(rawError)) return;
+      if (!aborted) setError(message);
     } finally {
+      uploadAbortControllerRef.current = null;
       setUploadingFiles(false);
     }
   }
@@ -4974,7 +4992,7 @@ export default function TeacherHomePage() {
     if (String(userEditDialog.confirmText || "").trim() !== "确认修改") {
       setUserEditDialog((current) => ({
         ...current,
-        error: "请输入“确认修改”完成二次确认。",
+        error: `请输入"确认修改"完成二次确认。`,
       }));
       return;
     }
@@ -5053,7 +5071,7 @@ export default function TeacherHomePage() {
     if (String(userDeleteDialog.confirmText || "").trim() !== "确认删除") {
       setUserDeleteDialog((current) => ({
         ...current,
-        error: "请输入“确认删除”完成二次确认。",
+        error: `请输入"确认删除"完成二次确认。`,
       }));
       return;
     }
@@ -5179,7 +5197,7 @@ export default function TeacherHomePage() {
     if (String(userMergeDialog.confirmText || "").trim() !== "确认合并") {
       setUserMergeDialog((current) => ({
         ...current,
-        error: "请输入“确认合并”完成二次确认。",
+        error: `请输入"确认合并"完成二次确认。`,
       }));
       return;
     }
@@ -5298,11 +5316,9 @@ export default function TeacherHomePage() {
     setError("");
   }
 
-  function onRegisterDisciplineBehavior(behaviorId) {
+  function onRegisterDisciplineBehavior(studentUserId, behaviorId) {
     const safeLessonId = String(selectedDisciplineLessonId || "").trim();
-    const safeStudentUserId = String(
-      selectedDisciplineStudent?.id || "",
-    ).trim();
+    const safeStudentUserId = String(studentUserId || "").trim();
     if (!safeLessonId) {
       setError("请先选择课时后再登记纪律表现。");
       return;
@@ -6028,24 +6044,32 @@ export default function TeacherHomePage() {
                                       >
                                         <Upload size={14} />
                                       </button>
-                                      <button
-                                        type="button"
-                                        className="teacher-primary-btn"
-                                        onClick={() =>
-                                          void onUploadQueuedTaskFiles()
-                                        }
-                                        disabled={
-                                          uploadingFiles ||
-                                          selectedTaskUploadDrafts.length === 0
-                                        }
-                                      >
-                                        <Upload size={14} />
-                                        <span>
-                                          {uploadingFiles
-                                            ? "上传中..."
-                                            : "上传全部"}
-                                        </span>
-                                      </button>
+                                      {uploadingFiles ? (
+                                        <button
+                                          type="button"
+                                          className="teacher-ghost-btn"
+                                          onClick={() =>
+                                            uploadAbortControllerRef.current?.abort()
+                                          }
+                                        >
+                                          <span>取消上传</span>
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className="teacher-primary-btn"
+                                          onClick={() =>
+                                            void onUploadQueuedTaskFiles()
+                                          }
+                                          disabled={
+                                            selectedTaskUploadDrafts.length ===
+                                            0
+                                          }
+                                        >
+                                          <Upload size={14} />
+                                          <span>上传全部</span>
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
                                   <p className="teacher-task-file-hint">{`单个文件最大 ${formatFileSize(
@@ -6163,18 +6187,7 @@ export default function TeacherHomePage() {
                                                 }
                                                 title="下载附件"
                                               >
-                                                {isDownloading ? (
-                                                  <span className="teacher-file-chip-action-label">
-                                                    下载中...
-                                                  </span>
-                                                ) : (
-                                                  <>
-                                                    <Download size={14} />
-                                                    <span className="teacher-file-chip-action-label">
-                                                      下载
-                                                    </span>
-                                                  </>
-                                                )}
+                                                <Download size={14} />
                                               </button>
                                               <button
                                                 type="button"
@@ -6268,7 +6281,7 @@ export default function TeacherHomePage() {
 
                     {teacherCoursePlans.length === 0 ? (
                       <p className="teacher-empty-text">
-                        暂无课时，请先到“课时管理”中创建课时。
+                        暂无课时，请先到"课时管理"中创建课时。
                       </p>
                     ) : (
                       <div
@@ -6336,63 +6349,41 @@ export default function TeacherHomePage() {
                       </p>
                     ) : (
                       <>
-                        <div className="teacher-discipline-focus-bar">
-                          <div className="teacher-discipline-focus-main">
-                            <span>当前登记对象</span>
-                            <strong>
-                              {selectedDisciplineStudent
-                                ? `${
-                                    selectedDisciplineStudent?.profile?.name ||
-                                    selectedDisciplineStudent?.username ||
-                                    "未命名学生"
-                                  }${
-                                    selectedDisciplineStudent?.profile
-                                      ?.studentId
-                                      ? `（${selectedDisciplineStudent.profile.studentId}）`
-                                      : ""
-                                  }`
-                                : "请先选择一位学生"}
-                            </strong>
-                            <small>{`本节课累计 ${selectedDisciplineStudentTotalCount} 次`}</small>
-                          </div>
-                        </div>
-
-                        <section className="teacher-discipline-behavior-card">
-                          <div className="teacher-discipline-behavior-head">
-                            <div className="teacher-discipline-section-title">
-                              <h3>常见违规行为</h3>
+                        <div className="teacher-discipline-toolbar">
+                          <div className="teacher-image-search-input-wrap teacher-discipline-search-input">
+                            <Search size={14} />
+                            <input
+                              ref={disciplineStudentSearchInputRef}
+                              type="text"
+                              aria-label="纪律学生搜索"
+                              value={disciplineStudentKeyword}
+                              onChange={(event) =>
+                                setDisciplineStudentKeyword(event.target.value)
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key !== "Escape") return;
+                                if (
+                                  !String(
+                                    disciplineStudentKeyword || "",
+                                  ).trim()
+                                )
+                                  return;
+                                event.preventDefault();
+                                clearDisciplineStudentKeyword();
+                              }}
+                              placeholder="按姓名 / 学号搜索学生"
+                              maxLength={80}
+                            />
+                            {String(disciplineStudentKeyword || "").trim() ? (
                               <button
                                 type="button"
-                                className="teacher-user-manage-head-info teacher-discipline-head-info"
-                                aria-label="常见违规行为说明"
+                                className="teacher-discipline-search-clear-btn"
+                                onClick={clearDisciplineStudentKeyword}
+                                aria-label="清除学生搜索"
                               >
-                                <CircleHelp size={13} />
-                                <span
-                                  className="teacher-user-manage-head-tooltip"
-                                  role="tooltip"
-                                >
-                                  点一次记 1 次，可连续点，也可新增自定义行为。
-                                </span>
+                                <X size={12} />
                               </button>
-                            </div>
-                          </div>
-                          <div className="teacher-discipline-behavior-grid">
-                            {selectedDisciplineStudentBehaviorCounts.map(
-                              (behavior) => (
-                                <button
-                                  key={behavior.id}
-                                  type="button"
-                                  className="teacher-discipline-behavior-btn"
-                                  onClick={() =>
-                                    onRegisterDisciplineBehavior(behavior.id)
-                                  }
-                                  disabled={!selectedDisciplineStudent}
-                                >
-                                  <span>{behavior.label}</span>
-                                  <strong>{behavior.count}</strong>
-                                </button>
-                              ),
-                            )}
+                            ) : null}
                           </div>
                           <form
                             className="teacher-discipline-custom-form"
@@ -6404,7 +6395,7 @@ export default function TeacherHomePage() {
                               onChange={(event) =>
                                 setDisciplineDraftBehavior(event.target.value)
                               }
-                              placeholder="输入自定义违规行为，例如：看短视频"
+                              placeholder="新增违规行为，例如：看短视频"
                               maxLength={40}
                             />
                             <button
@@ -6416,36 +6407,7 @@ export default function TeacherHomePage() {
                               <span>新增行为</span>
                             </button>
                           </form>
-                          {selectedDisciplineStudentBehaviorCounts.some(
-                            (item) => item.count > 0,
-                          ) ? (
-                            <div className="teacher-discipline-record-chip-list">
-                              {selectedDisciplineStudentBehaviorCounts
-                                .filter((item) => item.count > 0)
-                                .map((item) => (
-                                  <button
-                                    key={`discipline-record-${item.id}`}
-                                    type="button"
-                                    className="teacher-discipline-record-chip"
-                                    onClick={() =>
-                                      onDecreaseDisciplineBehavior(
-                                        selectedDisciplineStudent?.id,
-                                        item.id,
-                                      )
-                                    }
-                                  >
-                                    <span>{item.label}</span>
-                                    <strong>{item.count}</strong>
-                                    <small>-1</small>
-                                  </button>
-                                ))}
-                            </div>
-                          ) : (
-                            <p className="teacher-empty-text">
-                              当前选中学生在本节课还没有违规记录。
-                            </p>
-                          )}
-                        </section>
+                        </div>
 
                         {userDirectoryLoading &&
                         disciplineAllStudentCards.length === 0 ? (
@@ -6458,127 +6420,99 @@ export default function TeacherHomePage() {
                           <p className="teacher-empty-text">
                             当前班级还没有可登记的学生账号。
                           </p>
+                        ) : disciplineStudentCards.length === 0 ? (
+                          <p className="teacher-empty-text">
+                            未找到匹配的学生，请换个关键词试试。
+                          </p>
                         ) : (
-                          <section className="teacher-discipline-student-card">
-                            <div className="teacher-discipline-student-head">
-                              <div className="teacher-discipline-section-title">
-                                <h3>学生列表</h3>
-                                <button
-                                  type="button"
-                                  className="teacher-user-manage-head-info teacher-discipline-head-info"
-                                  aria-label="学生列表说明"
+                          <div className="teacher-discipline-roster">
+                            {disciplineStudentCards.map((item) => {
+                              const studentName =
+                                String(
+                                  item?.user?.profile?.name || "",
+                                ).trim() ||
+                                String(item?.user?.username || "").trim() ||
+                                "未命名学生";
+                              const studentId = String(
+                                item?.user?.profile?.studentId || "",
+                              ).trim();
+                              const studentUserId = String(
+                                item.userId || "",
+                              ).trim();
+                              return (
+                                <div
+                                  key={item.userId}
+                                  className={`teacher-discipline-row${item.totalCount > 0 ? " has-records" : ""}`}
                                 >
-                                  <CircleHelp size={13} />
-                                  <span
-                                    className="teacher-user-manage-head-tooltip"
-                                    role="tooltip"
-                                  >
-                                    点击学生卡片可切换登记对象，并查看本节课违规明细。
-                                  </span>
-                                </button>
-                              </div>
-                            </div>
-                            <div className="teacher-image-search-input-wrap teacher-discipline-search-input">
-                              <Search size={14} />
-                              <input
-                                ref={disciplineStudentSearchInputRef}
-                                type="text"
-                                aria-label="纪律学生搜索"
-                                value={disciplineStudentKeyword}
-                                onChange={(event) =>
-                                  setDisciplineStudentKeyword(
-                                    event.target.value,
-                                  )
-                                }
-                                onKeyDown={(event) => {
-                                  if (event.key !== "Escape") return;
-                                  if (
-                                    !String(
-                                      disciplineStudentKeyword || "",
-                                    ).trim()
-                                  )
-                                    return;
-                                  event.preventDefault();
-                                  clearDisciplineStudentKeyword();
-                                }}
-                                placeholder="按姓名 / 学号 / 账号搜索学生"
-                                maxLength={80}
-                              />
-                              {String(disciplineStudentKeyword || "").trim() ? (
-                                <button
-                                  type="button"
-                                  className="teacher-discipline-search-clear-btn"
-                                  onClick={clearDisciplineStudentKeyword}
-                                  aria-label="清除学生搜索"
-                                >
-                                  <X size={12} />
-                                </button>
-                              ) : null}
-                            </div>
-                            <div className="teacher-discipline-student-grid">
-                              {disciplineStudentCards.length === 0 ? (
-                                <p className="teacher-empty-text">
-                                  未找到匹配的学生，请换个关键词试试。
-                                </p>
-                              ) : (
-                                disciplineStudentCards.map((item) => {
-                                  const studentName =
-                                    String(
-                                      item?.user?.profile?.name || "",
-                                    ).trim() ||
-                                    String(item?.user?.username || "").trim() ||
-                                    "未命名学生";
-                                  const studentId = String(
-                                    item?.user?.profile?.studentId || "",
-                                  ).trim();
-                                  const selected =
-                                    String(item.userId || "").trim() ===
-                                    String(
-                                      selectedDisciplineStudentId || "",
-                                    ).trim();
-                                  return (
-                                    <button
-                                      key={item.userId}
-                                      type="button"
-                                      className={`teacher-discipline-student-item${
-                                        selected ? " active" : ""
-                                      }`}
-                                      onClick={() =>
-                                        setSelectedDisciplineStudentId(
-                                          item.userId,
-                                        )
-                                      }
-                                    >
-                                      <div className="teacher-discipline-student-item-head">
-                                        <strong>
-                                          {studentId
-                                            ? `${studentName}（${studentId}）`
-                                            : studentName}
-                                        </strong>
-                                        <span>{`共 ${item.totalCount} 次`}</span>
-                                      </div>
-                                      {item.behaviorCounts.length > 0 ? (
-                                        <div className="teacher-discipline-student-item-tags">
-                                          {item.behaviorCounts.map(
-                                            (behavior) => (
-                                              <span
-                                                key={`${item.userId}-${behavior.behaviorId}`}
-                                                className="teacher-discipline-student-tag"
+                                  <div className="teacher-discipline-row-identity">
+                                    <strong className="teacher-discipline-row-name">
+                                      {studentName}
+                                    </strong>
+                                    {studentId ? (
+                                      <span className="teacher-discipline-row-sid">
+                                        {studentId}
+                                      </span>
+                                    ) : null}
+                                    {item.totalCount > 0 ? (
+                                      <span className="teacher-discipline-row-total">
+                                        {`× ${item.totalCount}`}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <div className="teacher-discipline-row-actions">
+                                    {disciplineBehaviorOptions.map(
+                                      (behavior) => {
+                                        const count =
+                                          Number(
+                                            item.behaviorCounts.find(
+                                              (b) =>
+                                                b.behaviorId === behavior.id,
+                                            )?.count,
+                                          ) || 0;
+                                        return (
+                                          <div
+                                            key={behavior.id}
+                                            className="teacher-discipline-cell"
+                                          >
+                                            <button
+                                              type="button"
+                                              className={`teacher-discipline-add-btn${count > 0 ? " active" : ""}`}
+                                              onClick={() =>
+                                                onRegisterDisciplineBehavior(
+                                                  studentUserId,
+                                                  behavior.id,
+                                                )
+                                              }
+                                            >
+                                              <span>{behavior.label}</span>
+                                              {count > 0 ? (
+                                                <strong>{count}</strong>
+                                              ) : null}
+                                            </button>
+                                            {count > 0 ? (
+                                              <button
+                                                type="button"
+                                                className="teacher-discipline-sub-btn"
+                                                onClick={() =>
+                                                  onDecreaseDisciplineBehavior(
+                                                    studentUserId,
+                                                    behavior.id,
+                                                  )
+                                                }
+                                                aria-label={`${studentName} ${behavior.label} 减一`}
                                               >
-                                                {`${behavior.label} × ${behavior.count}`}
-                                              </span>
-                                            ),
-                                          )}
-                                        </div>
-                                      ) : (
-                                        <small>本节课暂无违规登记</small>
-                                      )}
-                                    </button>
-                                  );
-                                })
-                              )}
-                            </div>
-                          </section>
+                                                <Minus size={10} />
+                                              </button>
+                                            ) : null}
+                                          </div>
+                                        );
+                                      },
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         )}
                       </>
                     )}
@@ -7170,7 +7104,7 @@ export default function TeacherHomePage() {
 
                   {randomRollcallResult.length === 0 ? (
                     <p className="teacher-empty-text">
-                      点击“开始抽取”后，在这里显示点名结果。
+                      点击"开始抽取"后，在这里显示点名结果。
                     </p>
                   ) : (
                     <div className="teacher-random-rollcall-result-list">
@@ -7206,7 +7140,7 @@ export default function TeacherHomePage() {
                     <div className="teacher-export-center-filter-head">
                       <h3>统一筛选</h3>
                       <p>
-                        先选择授课教师和日期，再按下方分类执行导出。日期仅作用于“按日期导出”的按钮。
+                        先选择授课教师和日期，再按下方分类执行导出。日期仅作用于"按日期导出"的按钮。
                       </p>
                     </div>
                     <div className="teacher-export-center-filter-fields">
@@ -7244,7 +7178,7 @@ export default function TeacherHomePage() {
                   <div className="teacher-export-center-grid">
                     <div className="teacher-export-center-group">
                       <h3>聊天记录</h3>
-                      <p>{`面向“${exportCenterScopeLabel}”授课教师范围导出聊天内容，支持全量和按日期导出。`}</p>
+                      <p>{`面向"${exportCenterScopeLabel}"授课教师范围导出聊天内容，支持全量和按日期导出。`}</p>
                       <div className="teacher-export-center-actions">
                         <button
                           type="button"
@@ -7360,7 +7294,7 @@ export default function TeacherHomePage() {
 
                   <div className="teacher-export-center-group danger">
                     <h3>数据清理</h3>
-                    <p>{`将删除“${exportCenterScopeLabel}”授课教师范围内的会话与图片历史。`}</p>
+                    <p>{`将删除"${exportCenterScopeLabel}"授课教师范围内的会话与图片历史。`}</p>
                     <div className="teacher-export-center-actions">
                       <button
                         type="button"
@@ -7614,7 +7548,7 @@ export default function TeacherHomePage() {
                           </button>
                         ) : (
                           <span className="teacher-user-manage-limit-hint">
-                            仅“上官福泽”可编辑/删除账号，账号合并仅限学生账号。
+                            仅"上官福泽"可编辑/删除账号，账号合并仅限学生账号。
                           </span>
                         )}
                         <button
@@ -8220,7 +8154,7 @@ export default function TeacherHomePage() {
             ) : null}
 
             {activePanel === "online" ? (
-              <div className="teacher-panel-stack">
+              <div className="teacher-panel-stack teacher-online-stack">
                 <header className="teacher-panel-head">
                   <div>
                     <h2>在线状态</h2>
@@ -8232,9 +8166,9 @@ export default function TeacherHomePage() {
                       className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
                       onClick={() => void loadOnlineSummary()}
                       disabled={onlineLoading}
-                      aria-label={
-                        onlineLoading ? "Refreshing" : "Refresh overview"
-                      }
+                      data-tooltip={onlineLoading ? "刷新中..." : "刷新在线状态"}
+                      title={onlineLoading ? "刷新中..." : "刷新在线状态"}
+                      aria-label={onlineLoading ? "刷新中..." : "刷新在线状态"}
                     >
                       <RefreshCw
                         size={15}
@@ -8244,104 +8178,98 @@ export default function TeacherHomePage() {
                   </div>
                 </header>
 
-                <section className="teacher-card teacher-online-summary">
+                <div className="teacher-online-class-tabs">
                   {classOnlineSummaries.map((item) => (
-                    <div
+                    <button
                       key={item.className}
-                      className="teacher-online-count-card"
+                      type="button"
+                      className={`teacher-online-class-tab${onlineClassFilter === item.className ? " active" : ""}`}
+                      onClick={() => setOnlineClassFilter(item.className)}
                     >
-                      <p className="teacher-online-count-class">
-                        <span>{item.className}</span>
-                        <button
-                          type="button"
-                          className="teacher-online-rule-help"
-                          aria-label={`${item.className}在线判定标准`}
-                          title="查看在线判定标准"
-                        >
-                          <CircleHelp size={15} />
-                          <span className="teacher-online-rule-tooltip">
-                            {item.ruleText}
-                          </span>
-                        </button>
-                      </p>
-                      <strong>{loading ? "--" : item.count}</strong>
-                      <span className="teacher-online-count-label">
-                        在线人数
+                      <span className="teacher-online-tab-name">
+                        {item.className}
                       </span>
-                      <span className="teacher-online-count-note">
-                        {item.count > 0
-                          ? `最近活跃：${formatDisplayTime(item.recent)}`
-                          : "当前暂无在线用户"}
+                      <span className={`teacher-online-tab-badge${item.count > 0 ? " has-users" : ""}`}>
+                        {onlineLoading ? "--" : item.count}
                       </span>
-                    </div>
+                      <span className="teacher-online-tab-rule">
+                        <CircleHelp size={11} />
+                        <span className="teacher-online-rule-tooltip">
+                          {item.ruleText}
+                        </span>
+                      </span>
+                    </button>
                   ))}
-                </section>
+                </div>
 
                 <section className="teacher-card teacher-online-list-card">
-                  <div className="teacher-online-list-head">
-                    <div className="teacher-online-list-head-left">
-                      <h3>在线用户列表</h3>
-                      <span className="teacher-online-total-count">{`${filteredOnlineUsers.length} 人`}</span>
-                    </div>
-                    <div className="teacher-online-list-head-right">
-                      <div className="teacher-online-filter-label">
-                        <span>班级筛选</span>
-                        <PortalSelect
-                          className="teacher-online-filter-select"
-                          value={onlineClassFilter}
-                          ariaLabel="在线用户班级筛选"
-                          compact
-                          options={[
-                            { value: "all", label: "全部" },
-                            ...TARGET_CLASS_NAMES.map((className) => ({
-                              value: className,
-                              label: className,
-                            })),
-                          ]}
-                          onChange={setOnlineClassFilter}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  {filteredOnlineUsers.length === 0 ? (
-                    <p className="teacher-empty-text">当前暂无在线用户。</p>
-                  ) : (
-                    <div className="teacher-online-table-wrap">
-                      <table className="teacher-online-table">
-                        <thead>
-                          <tr>
-                            <th>班级</th>
-                            <th>账号</th>
-                            <th>姓名</th>
-                            <th>学号</th>
-                            <th>年级</th>
-                            <th>最近活跃</th>
-                            <th>浏览器心跳</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredOnlineUsers.map((item) => (
-                            <tr
-                              key={
-                                item.userId ||
-                                `${item.username}-${item.lastSeenAt}`
-                              }
-                            >
-                              <td>{item?.profile?.className || "-"}</td>
-                              <td>{item.username || "-"}</td>
-                              <td>{item?.profile?.name || "-"}</td>
-                              <td>{item?.profile?.studentId || "-"}</td>
-                              <td>{item?.profile?.grade || "-"}</td>
-                              <td>{formatDisplayTime(item.lastSeenAt)}</td>
-                              <td>
-                                {formatDisplayTime(item.browserHeartbeatAt)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                  {(() => {
+                    const currentSummary = classOnlineSummaries.find(
+                      (s) => s.className === onlineClassFilter,
+                    );
+                    return (
+                      <>
+                        <div className="teacher-online-list-head">
+                          <div className="teacher-online-list-head-left">
+                            <h3>{onlineClassFilter}</h3>
+                            <span className="teacher-online-total-count">
+                              {`在线 ${filteredOnlineUsers.length} 人`}
+                            </span>
+                            {currentSummary?.count > 0 ? (
+                              <span className="teacher-online-recent-hint">
+                                {`最近活跃：${formatDisplayTime(currentSummary.recent)}`}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                        {filteredOnlineUsers.length === 0 ? (
+                          <p className="teacher-empty-text">
+                            {onlineLoading
+                              ? "正在加载在线数据…"
+                              : "当前该班暂无在线用户。"}
+                          </p>
+                        ) : (
+                          <div className="teacher-online-table-wrap">
+                            <table className="teacher-online-table">
+                              <thead>
+                                <tr>
+                                  <th>姓名</th>
+                                  <th>学号</th>
+                                  <th>账号</th>
+                                  <th>最近活跃</th>
+                                  <th>浏览器心跳</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {filteredOnlineUsers.map((item) => (
+                                  <tr
+                                    key={
+                                      item.userId ||
+                                      `${item.username}-${item.lastSeenAt}`
+                                    }
+                                  >
+                                    <td>{item?.profile?.name || "-"}</td>
+                                    <td>
+                                      {item?.profile?.studentId || "-"}
+                                    </td>
+                                    <td>{item.username || "-"}</td>
+                                    <td>
+                                      {formatDisplayTime(item.lastSeenAt)}
+                                    </td>
+                                    <td>
+                                      {formatDisplayTime(
+                                        item.browserHeartbeatAt,
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </section>
               </div>
             ) : null}
@@ -8359,7 +8287,7 @@ export default function TeacherHomePage() {
                 aria-label="删除授课教师对话数据"
                 onClick={(event) => event.stopPropagation()}
               >
-                <h3>{`删除“${exportCenterScopeLabel}”授课教师的对话数据`}</h3>
+                <h3>{`删除"${exportCenterScopeLabel}"授课教师的对话数据`}</h3>
                 <p>
                   此操作会清空当前授课教师范围内的用户会话与图片历史，其他范围数据不会被删除。
                 </p>
@@ -9010,7 +8938,7 @@ export default function TeacherHomePage() {
                     </label>
                   </div>
                   <label>
-                    <span>二次确认（输入“确认修改”，加入待保存）</span>
+                    <span>二次确认（输入"确认修改"，加入待保存）</span>
                     <input
                       type="text"
                       value={userEditDialog.confirmText}
@@ -9064,7 +8992,7 @@ export default function TeacherHomePage() {
               >
                 <h3>删除账号</h3>
                 <p>
-                  {`将删除账号「${userDeleteDialog.username || "--"}」。操作会进入待保存，点击右上角“保存”后才会真正执行。请输入“确认删除”继续。`}
+                  {`将删除账号「${userDeleteDialog.username || "--"}」。操作会进入待保存，点击右上角"保存"后才会真正执行。请输入"确认删除"继续。`}
                 </p>
                 <form
                   className="teacher-confirm-form"
@@ -9170,7 +9098,7 @@ export default function TeacherHomePage() {
                     </select>
                   </label>
                   <label>
-                    <span>二次确认（输入“确认合并”）</span>
+                    <span>二次确认（输入"确认合并"）</span>
                     <input
                       type="text"
                       value={userMergeDialog.confirmText}
@@ -9347,8 +9275,8 @@ export default function TeacherHomePage() {
                 <h3>删除课时</h3>
                 <p>
                   {deleteConfirmDialog.mode === "batch"
-                    ? `将删除 ${deleteConfirmDialog.targetIds.length} 节课，删除后无法恢复。请输入“确认删除”继续。`
-                    : "该课时删除后无法恢复。请输入“确认删除”继续。"}
+                    ? `将删除 ${deleteConfirmDialog.targetIds.length} 节课，删除后无法恢复。请输入"确认删除"继续。`
+                    : `该课时删除后无法恢复。请输入"确认删除"继续。`}
                 </p>
                 <form
                   onSubmit={onSubmitDeleteConfirmDialog}
