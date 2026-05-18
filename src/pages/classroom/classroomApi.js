@@ -65,11 +65,17 @@ export async function uploadClassroomHomeworkFiles(lessonId, items = []) {
     : [];
   const formData = new FormData();
   const fileNames = [];
+  const selectionEntries = [];
   safeItems.forEach((item) => {
     formData.append("files", item.file);
     fileNames.push(String(item.fileName || item.file?.name || "").trim());
+    selectionEntries.push({
+      kind: item?.sourceKind === "directory" ? "directory" : "file",
+      name: String(item.file?.name || item.fileName || "").trim(),
+    });
   });
   formData.append("fileNames", JSON.stringify(fileNames));
+  formData.append("selectionEntries", JSON.stringify(selectionEntries));
 
   const resp = await fetch(
     `/api/classroom/homework/submissions/${encodeURIComponent(safeLessonId)}/files`,

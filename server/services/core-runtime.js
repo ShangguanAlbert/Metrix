@@ -29,6 +29,7 @@ import {
   resolveConfiguredBasePath,
   withBasePath,
 } from "../config/base-path.js";
+import { normalizeClassroomHomeworkRequirementText } from "../../shared/classroomHomework.js";
 import { SYSTEM_PROMPT_LEAK_PROTECTION_TOP_PROMPT } from "../prompts/leakProtectionPrompt.js";
 import { PROMPT_LEAK_PROBE_KEYWORDS } from "../prompts/leakProtectionKeywords.js";
 
@@ -1772,6 +1773,7 @@ const adminClassroomCoursePlanSchema = new mongoose.Schema(
     notes: { type: String, default: "" },
     enabled: { type: Boolean, default: true },
     homeworkUploadEnabled: { type: Boolean, default: true },
+    lateSubmissionEnabled: { type: Boolean, default: false },
     tasks: { type: [adminClassroomTaskSchema], default: () => [] },
     files: { type: [adminClassroomCourseFileSchema], default: () => [] },
     createdAt: { type: String, default: "" },
@@ -10226,6 +10228,7 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
 
   const enabled = sanitizeRuntimeBoolean(source.enabled, true);
   const homeworkUploadEnabled = sanitizeRuntimeBoolean(source.homeworkUploadEnabled, true);
+  const lateSubmissionEnabled = sanitizeRuntimeBoolean(source.lateSubmissionEnabled, false);
   const files = sanitizeAdminClassroomCourseFilesPayload(source.files);
   const courseName = sanitizeText(source.courseName || source.name, "", 80);
   const className = sanitizeAdminClassroomClassName(
@@ -10253,12 +10256,18 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
     source.courseTime || source.time,
   );
   const notes = sanitizeText(source.notes || source.note, "", 300);
+  const homeworkRequirementText = normalizeClassroomHomeworkRequirementText(
+    source.homeworkRequirementText ||
+      source.homeworkRequirement ||
+      source.homeworkRequirementDescription,
+  );
   if (
     !courseName &&
     !courseTime &&
     !courseStartAt &&
     !courseEndAt &&
     !notes &&
+    !homeworkRequirementText &&
     tasks.length === 0 &&
     files.length === 0
   ) {
@@ -10273,8 +10282,10 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
     courseStartAt,
     courseEndAt,
     notes,
+    homeworkRequirementText,
     enabled,
     homeworkUploadEnabled,
+    lateSubmissionEnabled,
     tasks,
     files,
     createdAt: sanitizeIsoDate(source.createdAt) || "",

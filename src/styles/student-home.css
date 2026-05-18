@@ -351,6 +351,30 @@
   color: var(--teacher-text-muted);
 }
 
+.student-late-badge {
+  color: #7c4dff;
+  background: #ede7f6;
+}
+
+.student-late-submit-section {
+  border: 1px dashed var(--teacher-border-strong);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--teacher-surface-muted);
+}
+
+.student-late-submit-section h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+
+.student-late-submit-btn {
+  margin-top: 8px;
+  width: 100%;
+  justify-content: center;
+}
+
 .student-lesson-meta-grid {
   margin-top: 0;
 }
@@ -698,6 +722,28 @@
   background: var(--teacher-accent-soft);
 }
 
+.student-homework-modal-requirement {
+  border: 1px solid var(--teacher-border);
+  border-radius: 12px;
+  background: var(--teacher-surface-soft);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.student-homework-modal-requirement strong {
+  font-size: 13px;
+  color: var(--teacher-heading);
+}
+
+.student-homework-requirement-text {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.65;
+  color: var(--teacher-text-soft);
+  font-size: 14px;
+}
+
 .student-home-page .teacher-lesson-row {
   border: 0;
   border-radius: 13px;
@@ -717,7 +763,7 @@
   background: rgba(255, 255, 255, 0.84);
   box-shadow:
     inset 0 0 0 1px rgba(193, 95, 60, 0.1),
-    0 8px 18px rgba(95, 74, 56, 0.08);
+    0 0 18px rgba(95, 74, 56, 0.05);
 }
 
 .student-home-page .teacher-lesson-row-main strong {

@@ -110,6 +110,7 @@ function createClassFilterDeps() {
           className: "810班",
           enabled: true,
           courseStartAt: "2026-05-10T10:00:00.000Z",
+          homeworkRequirementText: "提交实验报告 PDF 和源码压缩包。",
         },
         {
           id: "lesson-810-closed",
@@ -117,6 +118,7 @@ function createClassFilterDeps() {
           className: "810班",
           enabled: false,
           courseStartAt: "2026-05-11T10:00:00.000Z",
+          homeworkRequirementText: "补交课堂观察记录。",
         },
         {
           id: "lesson-811-open",
@@ -233,5 +235,21 @@ test("homework submissions route only reads lessons from the student's own class
   assert.equal(
     Array.isArray(res.payload.submissionsByLesson["lesson-811-open"]),
     false,
+  );
+  assert.deepEqual(
+    res.payload.lessons.map((lesson) => ({
+      id: lesson.id,
+      homeworkRequirementText: lesson.homeworkRequirementText,
+    })),
+    [
+      {
+        id: "lesson-810-open",
+        homeworkRequirementText: "提交实验报告 PDF 和源码压缩包。",
+      },
+      {
+        id: "lesson-810-closed",
+        homeworkRequirementText: "补交课堂观察记录。",
+      },
+    ],
   );
 });

@@ -4,6 +4,10 @@ import {
   getClassroomFileLabel,
   resolveClassroomFileKindByTask,
 } from "../../shared/classroomFileLabels.js";
+import {
+  CLASSROOM_HOMEWORK_DIRECTORY_UPLOAD_ERROR,
+  normalizeClassroomHomeworkRequirementText,
+} from "../../shared/classroomHomework.js";
 
 export function registerAuthUserClassroomRoutes(app, deps) {
   function readSignedUrlExpiryText(url) {
@@ -1270,7 +1274,11 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         courseStartAt: sanitizeIsoDate(lesson?.courseStartAt) || "",
         courseEndAt: sanitizeIsoDate(lesson?.courseEndAt) || "",
         courseTime: sanitizeText(lesson?.courseTime, "", 120),
+        homeworkRequirementText: normalizeClassroomHomeworkRequirementText(
+          lesson?.homeworkRequirementText,
+        ),
         homeworkUploadEnabled: sanitizeRuntimeBoolean(lesson?.homeworkUploadEnabled, true),
+        lateSubmissionEnabled: sanitizeRuntimeBoolean(lesson?.lateSubmissionEnabled, false),
         enabled: sanitizeRuntimeBoolean(lesson?.enabled, true),
       }))
       .filter((lesson) => !userClassName || lesson.className === userClassName)
@@ -1332,6 +1340,27 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         return;
       }
 
+      const selectionEntriesRaw = readJsonLikeField(
+        req.body?.selectionEntries,
+        [],
+      );
+      const selectionEntries = Array.isArray(selectionEntriesRaw)
+        ? selectionEntriesRaw
+        : [];
+      if (
+        selectionEntries.some(
+          (entry) =>
+            String(entry?.kind || "")
+              .trim()
+              .toLowerCase() === "directory",
+        )
+      ) {
+        res
+          .status(400)
+          .json({ error: CLASSROOM_HOMEWORK_DIRECTORY_UPLOAD_ERROR });
+        return;
+      }
+
       const sourceFiles = Array.isArray(req.files) ? req.files : [];
       const normalizedFiles = sourceFiles
         .map((file) => normalizeMultipartUploadFile(file))
@@ -1352,6 +1381,16 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       const lesson = config.teacherCoursePlans[lessonIndex];
       if (!sanitizeRuntimeBoolean(lesson?.enabled, true)) {
         res.status(403).json({ error: "该课时暂未开放，无法上传作业。" });
+        return;
+      }
+      if (!sanitizeRuntimeBoolean(lesson?.homeworkUploadEnabled, true)) {
+        res.status(403).json({ error: "本节课无需交作业。" });
+        return;
+      }
+      const lessonStartMs = Date.parse(lesson?.courseStartAt || "");
+      const isPastLesson = Number.isFinite(lessonStartMs) && lessonStartMs < Date.now();
+      if (isPastLesson && !sanitizeRuntimeBoolean(lesson?.lateSubmissionEnabled, false)) {
+        res.status(403).json({ error: "该课时未开放补交，无法上传作业。" });
         return;
       }
       const studentUserId = sanitizeId(req.authUser?._id, "");
@@ -2421,8 +2460,12 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         courseStartAt: sanitizeIsoDate(lesson?.courseStartAt) || "",
         courseEndAt: sanitizeIsoDate(lesson?.courseEndAt) || "",
         courseTime: sanitizeText(lesson?.courseTime, "", 120),
+        homeworkRequirementText: normalizeClassroomHomeworkRequirementText(
+          lesson?.homeworkRequirementText,
+        ),
         enabled: sanitizeRuntimeBoolean(lesson?.enabled, true),
         homeworkUploadEnabled: sanitizeRuntimeBoolean(lesson?.homeworkUploadEnabled, true),
+        lateSubmissionEnabled: sanitizeRuntimeBoolean(lesson?.lateSubmissionEnabled, false),
         studentTotal: roster.length,
         uploadedStudentCount,
         missingStudentCount: missingStudents.length,

@@ -14,6 +14,7 @@ import {
   CircleHelp,
   ChevronDown,
   ChevronUp,
+  BookCheck,
   ClipboardList,
   Copy,
   Crown,
@@ -25,6 +26,7 @@ import {
   FileText,
   ImageOff,
   LayoutGrid,
+  List,
   Link2,
   Lock,
   LockOpen,
@@ -36,7 +38,6 @@ import {
   RefreshCw,
   Save,
   Search,
-  Settings2,
   Sparkles,
   Trash2,
   Upload,
@@ -51,6 +52,11 @@ import {
   getClassroomFileDownloadErrorText,
   getClassroomFileFallbackName,
 } from "../../shared/classroomFileLabels.js";
+import {
+  CLASSROOM_HOMEWORK_REQUIREMENT_MAX_LENGTH,
+  normalizeClassroomHomeworkRequirementText,
+  resolveClassroomHomeworkRequirementText,
+} from "../../shared/classroomHomework.js";
 import {
   TEACHER_CLASSROOM_FILE_MAX_FILE_SIZE_BYTES,
   TEACHER_TASK_UPLOAD_MAX_FILES,
@@ -805,7 +811,11 @@ function normalizeLessonPlans(plans) {
   return source.map((lesson) => ({
     ...(lesson && typeof lesson === "object" ? lesson : {}),
     className: normalizeLessonClassName(lesson?.className),
+    homeworkRequirementText: normalizeClassroomHomeworkRequirementText(
+      lesson?.homeworkRequirementText,
+    ),
     homeworkUploadEnabled: lesson?.homeworkUploadEnabled !== false,
+    lateSubmissionEnabled: lesson?.lateSubmissionEnabled === true,
   }));
 }
 
@@ -1150,6 +1160,7 @@ function buildLessonDraft(lessonIndex = 1) {
     courseEndAt: "",
     courseTime: "",
     notes: "",
+    homeworkRequirementText: "",
     enabled: false,
     homeworkUploadEnabled: true,
     tasks: [],
@@ -1218,6 +1229,11 @@ export default function TeacherHomePage() {
     () => requestedTeacherPanel || "classroom",
   );
   const [lessonListVisible, setLessonListVisible] = useState(true);
+  const [homeworkReqOpen, setHomeworkReqOpen] = useState(false);
+  const [lessonSearchQuery, setLessonSearchQuery] = useState("");
+  const [lessonClassFilter, setLessonClassFilter] = useState("");
+  const [disciplineSearchQuery, setDisciplineSearchQuery] = useState("");
+  const [homeworkSearchQuery, setHomeworkSearchQuery] = useState("");
   const [pageRefreshState, setPageRefreshState] = useState("idle");
   const [featureTransition, setFeatureTransition] = useState({
     active: false,
@@ -1266,6 +1282,7 @@ export default function TeacherHomePage() {
   const [expandedHomeworkStudentIds, setExpandedHomeworkStudentIds] = useState(
     [],
   );
+  const [homeworkViewMode, setHomeworkViewMode] = useState("card");
   const [homeworkMissingListExpanded, setHomeworkMissingListExpanded] =
     useState(false);
   const [downloadingHomeworkFileId, setDownloadingHomeworkFileId] =
@@ -1403,6 +1420,7 @@ export default function TeacherHomePage() {
   );
   const [disciplineDraftBehavior, setDisciplineDraftBehavior] = useState("");
   const [disciplineStudentKeyword, setDisciplineStudentKeyword] = useState("");
+  const [activeDisciplineStudentId, setActiveDisciplineStudentId] = useState("");
   const [selectedDisciplineStudentId, setSelectedDisciplineStudentId] =
     useState("");
   const [seatManageClassName, setSeatManageClassName] = useState("");
@@ -1479,7 +1497,11 @@ export default function TeacherHomePage() {
         (lesson) => ({
           ...(lesson && typeof lesson === "object" ? lesson : {}),
           className: normalizeLessonClassName(lesson?.className),
+          homeworkRequirementText: normalizeClassroomHomeworkRequirementText(
+            lesson?.homeworkRequirementText,
+          ),
           homeworkUploadEnabled: lesson?.homeworkUploadEnabled !== false,
+          lateSubmissionEnabled: lesson?.lateSubmissionEnabled === true,
         }),
       );
       setHomeworkLessons(lessons);
@@ -3085,6 +3107,40 @@ export default function TeacherHomePage() {
     () => sortLessonPlans(teacherCoursePlans),
     [teacherCoursePlans],
   );
+  const lessonClassNames = useMemo(() => {
+    const seen = new Set();
+    sortedCoursePlans.forEach((c) => {
+      const name = normalizeLessonClassName(c?.className);
+      if (name) seen.add(name);
+    });
+    return Array.from(seen).sort();
+  }, [sortedCoursePlans]);
+  const filteredCoursePlans = useMemo(() => {
+    let result = sortedCoursePlans;
+    if (lessonClassFilter) {
+      result = result.filter(
+        (c) => normalizeLessonClassName(c?.className) === lessonClassFilter,
+      );
+    }
+    const q = lessonSearchQuery.trim().toLowerCase();
+    if (q) {
+      result = result.filter(
+        (c) =>
+          (c?.courseName || "").toLowerCase().includes(q) ||
+          normalizeLessonClassName(c?.className).toLowerCase().includes(q),
+      );
+    }
+    return result;
+  }, [sortedCoursePlans, lessonClassFilter, lessonSearchQuery]);
+  const filteredDisciplinePlans = useMemo(() => {
+    const q = disciplineSearchQuery.trim().toLowerCase();
+    if (!q) return sortedCoursePlans;
+    return sortedCoursePlans.filter(
+      (c) =>
+        (c?.courseName || "").toLowerCase().includes(q) ||
+        normalizeLessonClassName(c?.className).toLowerCase().includes(q),
+    );
+  }, [sortedCoursePlans, disciplineSearchQuery]);
   const sortedCourseIds = useMemo(
     () =>
       sortedCoursePlans
@@ -3161,6 +3217,15 @@ export default function TeacherHomePage() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [classroomConfigHasUnsavedChanges]);
+  const filteredHomeworkLessons = useMemo(() => {
+    const q = homeworkSearchQuery.trim().toLowerCase();
+    if (!q) return homeworkLessons;
+    return homeworkLessons.filter(
+      (l) =>
+        (l?.courseName || "").toLowerCase().includes(q) ||
+        normalizeLessonClassName(l?.className).toLowerCase().includes(q),
+    );
+  }, [homeworkLessons, homeworkSearchQuery]);
   const selectedHomeworkLesson = useMemo(
     () =>
       homeworkLessons.find(
@@ -3658,12 +3723,13 @@ export default function TeacherHomePage() {
     setError("");
   }
 
-  function onOpenRenameLessonDialog() {
-    if (!selectedCourse) return;
+  function onOpenRenameLessonDialog(course) {
+    const target = course || selectedCourse;
+    if (!target) return;
     setRenameLessonDialog({
       open: true,
-      lessonId: String(selectedCourse.id || ""),
-      value: String(selectedCourse.courseName || "").trim(),
+      lessonId: String(target.id || ""),
+      value: String(target.courseName || "").trim(),
       error: "",
     });
   }
@@ -5525,7 +5591,9 @@ export default function TeacherHomePage() {
                     <div className="teacher-lesson-list-head">
                       <h3>课时列表</h3>
                       <div className="teacher-lesson-list-head-right">
-                        <span>{`${teacherCoursePlans.length} 节课`}</span>
+                        {!lessonBatchDeleteMode && (
+                          <span>{`${filteredCoursePlans.length}${filteredCoursePlans.length !== teacherCoursePlans.length ? `/${teacherCoursePlans.length}` : ""} 节课`}</span>
+                        )}
                         <button
                           type="button"
                           className={`teacher-ghost-btn teacher-lesson-batch-toggle${
@@ -5561,7 +5629,55 @@ export default function TeacherHomePage() {
                           <Trash2 size={14} />
                         </button>
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="teacher-lesson-filter-bar">
+                        <div className="teacher-image-search-input-wrap teacher-lesson-search-input">
+                          <Search size={13} />
+                          <input
+                            type="text"
+                            placeholder="搜索课时"
+                            value={lessonSearchQuery}
+                            onChange={(e) => setLessonSearchQuery(e.target.value)}
+                            aria-label="搜索课时"
+                          />
+                          {lessonSearchQuery && (
+                            <button
+                              type="button"
+                              className="teacher-search-clear-btn"
+                              onClick={() => setLessonSearchQuery("")}
+                              aria-label="清除搜索"
+                            >
+                              <X size={12} />
+                            </button>
+                          )}
+                        </div>
+                        {lessonClassNames.length > 1 && (
+                          <div className="teacher-lesson-class-chips">
+                            <button
+                              type="button"
+                              className={`teacher-lesson-class-chip${lessonClassFilter === "" ? " active" : ""}`}
+                              onClick={() => setLessonClassFilter("")}
+                            >
+                              全部
+                            </button>
+                            {lessonClassNames.map((name) => (
+                              <button
+                                key={name}
+                                type="button"
+                                className={`teacher-lesson-class-chip${lessonClassFilter === name ? " active" : ""}`}
+                                onClick={() =>
+                                  setLessonClassFilter(
+                                    lessonClassFilter === name ? "" : name,
+                                  )
+                                }
+                              >
+                                {name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {teacherCoursePlans.length === 0 ? (
                       <p className="teacher-empty-text">
@@ -5573,7 +5689,11 @@ export default function TeacherHomePage() {
                         ref={lessonListScrollRef}
                         onWheel={onLessonListWheel}
                       >
-                        {sortedCoursePlans.map((course, index) => {
+                        {filteredCoursePlans.length === 0 ? (
+                          <p className="teacher-empty-text teacher-lesson-filter-empty">
+                            没有符合条件的课时。
+                          </p>
+                        ) : filteredCoursePlans.map((course, index) => {
                           const courseId = String(course?.id || "");
                           const active =
                             courseId === String(selectedCourseId || "");
@@ -5612,38 +5732,54 @@ export default function TeacherHomePage() {
                               <button
                                 type="button"
                                 className="teacher-lesson-row-main"
-                                onClick={() => setSelectedCourseId(courseId)}
+                                onClick={() => { setSelectedCourseId(courseId); setHomeworkReqOpen(false); }}
                               >
                                 <strong>
                                   {course?.courseName || `第${index + 1}节课`}
                                 </strong>
                                 <p>
-                                  {buildLessonTimeLabel(
-                                    course?.courseStartAt,
-                                    course?.courseEndAt,
-                                    course?.courseTime,
-                                  ) || "未设置课时时间"}
+                                  <span className="teacher-lesson-row-time">
+                                    {buildLessonTimeLabel(
+                                      course?.courseStartAt,
+                                      course?.courseEndAt,
+                                      course?.courseTime,
+                                    ) || "未设置课时时间"}
+                                  </span>
+                                  <span className="teacher-lesson-row-meta">{`${lessonClassName} · ${tasks.length} 个任务`}</span>
                                 </p>
-                                <span>{`${lessonClassName} · ${tasks.length} 个任务`}</span>
                               </button>
                               <div className="teacher-lesson-row-actions">
                                 <span
                                   className={`teacher-lesson-status${course?.enabled === false ? " closed" : ""}`}
                                 >
-                                  {course?.enabled === false
-                                    ? "未开放"
-                                    : "已开放"}
+                                  {course?.enabled === false ? "未开放" : "已开放"}
                                 </span>
-                                <button
-                                  type="button"
-                                  className="teacher-row-setting-btn teacher-tooltip-btn"
-                                  onClick={() => setSelectedCourseId(courseId)}
-                                  data-tooltip="设置"
-                                  title="设置"
-                                  aria-label="设置"
-                                >
-                                  <Settings2 size={14} />
-                                </button>
+                                <div className="teacher-lesson-row-btns">
+                                  <button
+                                    type="button"
+                                    className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onOpenRenameLessonDialog(course);
+                                    }}
+                                    title="重命名课时"
+                                    aria-label="重命名课时"
+                                  >
+                                    <Pencil size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="teacher-delete-btn teacher-tooltip-btn teacher-action-icon-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onDeleteCourseAction(courseId);
+                                    }}
+                                    title="删除课时"
+                                    aria-label="删除课时"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
                               </div>
                             </article>
                           );
@@ -5689,6 +5825,22 @@ export default function TeacherHomePage() {
                                 </span>
                               </span>
                             </div>
+                            {selectedCourse.homeworkUploadEnabled !== false && (
+                              <div
+                                className="teacher-lesson-switch-row"
+                                role="switch"
+                                aria-checked={selectedCourse.lateSubmissionEnabled === true}
+                                title={selectedCourse.lateSubmissionEnabled ? "已允许补交，点击关闭" : "未允许补交，点击开启"}
+                                onClick={() => onUpdateSelectedLesson({ lateSubmissionEnabled: !selectedCourse.lateSubmissionEnabled })}
+                              >
+                                <BookCheck size={14} className={`teacher-lesson-switch-icon${selectedCourse.lateSubmissionEnabled ? " active" : ""}`} />
+                                <span className="teacher-ios-switch" aria-hidden="true">
+                                  <span className={`teacher-ios-switch-track${selectedCourse.lateSubmissionEnabled ? " checked" : ""}`}>
+                                    <span className="teacher-ios-switch-thumb" />
+                                  </span>
+                                </span>
+                              </div>
+                            )}
                             <PortalSelect
                               className="teacher-lesson-class-select"
                               value={normalizeLessonClassName(
@@ -5714,27 +5866,6 @@ export default function TeacherHomePage() {
                                 )}
                               </span>
                             </button>
-                            <button
-                              type="button"
-                              className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
-                              onClick={onOpenRenameLessonDialog}
-                              title="重命名课时"
-                              aria-label="重命名课时"
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              className="teacher-delete-btn teacher-tooltip-btn"
-                              onClick={() =>
-                                onDeleteCourseAction(selectedCourse.id)
-                              }
-                              data-tooltip="删除课时"
-                              title="删除课时"
-                              aria-label="删除课时"
-                            >
-                              <Trash2 size={14} />
-                            </button>
                           </div>
                         ) : null}
                       </div>
@@ -5746,6 +5877,33 @@ export default function TeacherHomePage() {
                       </p>
                     ) : (
                       <div className="teacher-lesson-detail-scroll">
+                        <section className="teacher-homework-requirement-editor">
+                          <button
+                            type="button"
+                            className="teacher-req-editor-toggle"
+                            onClick={() => setHomeworkReqOpen((v) => !v)}
+                          >
+                            <strong>作业要求说明</strong>
+                            <ChevronDown
+                              size={14}
+                              className={`teacher-req-editor-chevron${homeworkReqOpen ? " open" : ""}`}
+                            />
+                          </button>
+                          {homeworkReqOpen && (
+                            <textarea
+                              className="teacher-req-editor-textarea"
+                              value={selectedCourse.homeworkRequirementText || ""}
+                              onChange={(event) =>
+                                onUpdateSelectedLesson({
+                                  homeworkRequirementText: event.target.value,
+                                })
+                              }
+                              maxLength={CLASSROOM_HOMEWORK_REQUIREMENT_MAX_LENGTH}
+                              placeholder="例如：提交实验报告 PDF 和源码压缩包。若包含多个文件夹，请先压缩后再上传。"
+                            />
+                          )}
+                        </section>
+
                         <div className="teacher-task-draft-head">
                           <div className="teacher-task-draft-title">
                             <strong>课程任务</strong>
@@ -6275,7 +6433,29 @@ export default function TeacherHomePage() {
                     <div className="teacher-lesson-list-head">
                       <h3>课时列表</h3>
                       <div className="teacher-lesson-list-head-right">
-                        <span>{`${teacherCoursePlans.length} 节课`}</span>
+                        <span>{`${filteredDisciplinePlans.length}${filteredDisciplinePlans.length !== teacherCoursePlans.length ? `/${teacherCoursePlans.length}` : ""} 节课`}</span>
+                      </div>
+                    </div>
+                    <div className="teacher-lesson-filter-bar">
+                      <div className="teacher-image-search-input-wrap teacher-lesson-search-input">
+                        <Search size={13} />
+                        <input
+                          type="text"
+                          placeholder="搜索课时"
+                          value={disciplineSearchQuery}
+                          onChange={(e) => setDisciplineSearchQuery(e.target.value)}
+                          aria-label="搜索课时"
+                        />
+                        {disciplineSearchQuery && (
+                          <button
+                            type="button"
+                            className="teacher-search-clear-btn"
+                            onClick={() => setDisciplineSearchQuery("")}
+                            aria-label="清除搜索"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -6289,7 +6469,11 @@ export default function TeacherHomePage() {
                         ref={lessonListScrollRef}
                         onWheel={onLessonListWheel}
                       >
-                        {sortedCoursePlans.map((course, index) => {
+                        {filteredDisciplinePlans.length === 0 ? (
+                          <p className="teacher-empty-text teacher-lesson-filter-empty">
+                            没有符合条件的课时。
+                          </p>
+                        ) : filteredDisciplinePlans.map((course, index) => {
                           const courseId = String(course?.id || "");
                           const active =
                             courseId === String(selectedCourseId || "");
@@ -6310,19 +6494,21 @@ export default function TeacherHomePage() {
                               <button
                                 type="button"
                                 className="teacher-lesson-row-main"
-                                onClick={() => setSelectedCourseId(courseId)}
+                                onClick={() => { setSelectedCourseId(courseId); setHomeworkReqOpen(false); }}
                               >
                                 <strong>
                                   {course?.courseName || `第${index + 1}节课`}
                                 </strong>
                                 <p>
-                                  {buildLessonTimeLabel(
-                                    course?.courseStartAt,
-                                    course?.courseEndAt,
-                                    course?.courseTime,
-                                  ) || "未设置课时时间"}
+                                  <span className="teacher-lesson-row-time">
+                                    {buildLessonTimeLabel(
+                                      course?.courseStartAt,
+                                      course?.courseEndAt,
+                                      course?.courseTime,
+                                    ) || "未设置课时时间"}
+                                  </span>
+                                  <span className="teacher-lesson-row-meta">{`${lessonClassName} · 违纪 ${summary.totalCount} 次 / ${summary.studentCount} 人`}</span>
                                 </p>
-                                <span>{`${lessonClassName} · 违纪 ${summary.totalCount} 次 / ${summary.studentCount} 人`}</span>
                               </button>
                               <div className="teacher-lesson-row-actions">
                                 <span
@@ -6330,10 +6516,6 @@ export default function TeacherHomePage() {
                                 >
                                   {summary.totalCount > 0 ? "已登记" : "未登记"}
                                 </span>
-                                <span
-                                  className="teacher-row-setting-btn teacher-row-setting-btn-placeholder"
-                                  aria-hidden="true"
-                                />
                               </div>
                             </article>
                           );
@@ -6409,6 +6591,41 @@ export default function TeacherHomePage() {
                           </form>
                         </div>
 
+                        {activeDisciplineStudentId ? (
+                          <div className="teacher-discipline-behavior-bar">
+                            <span className="teacher-discipline-behavior-bar-label">
+                              {`${
+                                String(
+                                  disciplineStudentCards.find(
+                                    (c) => String(c.userId) === activeDisciplineStudentId,
+                                  )?.user?.profile?.name ||
+                                  disciplineStudentCards.find(
+                                    (c) => String(c.userId) === activeDisciplineStudentId,
+                                  )?.user?.username ||
+                                  ""
+                                ).trim() || "该学生"
+                              } 违规了：`}
+                            </span>
+                            {disciplineBehaviorOptions.map((behavior) => (
+                              <button
+                                key={behavior.id}
+                                type="button"
+                                className="teacher-discipline-behavior-tab"
+                                onClick={() => {
+                                  onRegisterDisciplineBehavior(activeDisciplineStudentId, behavior.id);
+                                  setActiveDisciplineStudentId("");
+                                }}
+                              >
+                                {behavior.label}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="teacher-discipline-behavior-bar">
+                            <span className="teacher-discipline-behavior-bar-label">点击学生卡片选择学生</span>
+                          </div>
+                        )}
+
                         {userDirectoryLoading &&
                         disciplineAllStudentCards.length === 0 ? (
                           <p className="teacher-empty-text">
@@ -6425,7 +6642,7 @@ export default function TeacherHomePage() {
                             未找到匹配的学生，请换个关键词试试。
                           </p>
                         ) : (
-                          <div className="teacher-discipline-roster">
+                          <div className="teacher-discipline-card-grid">
                             {disciplineStudentCards.map((item) => {
                               const studentName =
                                 String(
@@ -6433,83 +6650,58 @@ export default function TeacherHomePage() {
                                 ).trim() ||
                                 String(item?.user?.username || "").trim() ||
                                 "未命名学生";
-                              const studentId = String(
-                                item?.user?.profile?.studentId || "",
-                              ).trim();
-                              const studentUserId = String(
-                                item.userId || "",
-                              ).trim();
+                              const studentUserId = String(item.userId || "").trim();
+                              const isSelected = activeDisciplineStudentId === studentUserId;
                               return (
-                                <div
+                                <button
                                   key={item.userId}
-                                  className={`teacher-discipline-row${item.totalCount > 0 ? " has-records" : ""}`}
+                                  type="button"
+                                  className={`teacher-discipline-card tappable${item.totalCount > 0 ? " has-records" : ""}${isSelected ? " selected" : ""}`}
+                                  onClick={() =>
+                                    setActiveDisciplineStudentId((cur) =>
+                                      cur === studentUserId ? "" : studentUserId,
+                                    )
+                                  }
                                 >
-                                  <div className="teacher-discipline-row-identity">
-                                    <strong className="teacher-discipline-row-name">
-                                      {studentName}
-                                    </strong>
-                                    {studentId ? (
-                                      <span className="teacher-discipline-row-sid">
-                                        {studentId}
-                                      </span>
-                                    ) : null}
+                                  <div className="teacher-discipline-card-name">
+                                    <span>{studentName}</span>
                                     {item.totalCount > 0 ? (
                                       <span className="teacher-discipline-row-total">
                                         {`× ${item.totalCount}`}
                                       </span>
                                     ) : null}
                                   </div>
-                                  <div className="teacher-discipline-row-actions">
-                                    {disciplineBehaviorOptions.map(
-                                      (behavior) => {
+                                  {item.totalCount > 0 ? (
+                                    <div className="teacher-discipline-card-counts">
+                                      {disciplineBehaviorOptions.map((behavior) => {
                                         const count =
                                           Number(
                                             item.behaviorCounts.find(
-                                              (b) =>
-                                                b.behaviorId === behavior.id,
+                                              (b) => b.behaviorId === behavior.id,
                                             )?.count,
                                           ) || 0;
+                                        if (!count) return null;
                                         return (
-                                          <div
-                                            key={behavior.id}
-                                            className="teacher-discipline-cell"
-                                          >
+                                          <div key={behavior.id} className="teacher-discipline-count-item">
+                                            <span className="teacher-discipline-count-label">{behavior.label}</span>
+                                            <span className="teacher-discipline-count-badge">{count}</span>
                                             <button
                                               type="button"
-                                              className={`teacher-discipline-add-btn${count > 0 ? " active" : ""}`}
-                                              onClick={() =>
-                                                onRegisterDisciplineBehavior(
-                                                  studentUserId,
-                                                  behavior.id,
-                                                )
-                                              }
+                                              className="teacher-discipline-sub-btn"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                onDecreaseDisciplineBehavior(studentUserId, behavior.id);
+                                              }}
+                                              aria-label={`${studentName} ${behavior.label} 减一`}
                                             >
-                                              <span>{behavior.label}</span>
-                                              {count > 0 ? (
-                                                <strong>{count}</strong>
-                                              ) : null}
+                                              <Minus size={10} />
                                             </button>
-                                            {count > 0 ? (
-                                              <button
-                                                type="button"
-                                                className="teacher-discipline-sub-btn"
-                                                onClick={() =>
-                                                  onDecreaseDisciplineBehavior(
-                                                    studentUserId,
-                                                    behavior.id,
-                                                  )
-                                                }
-                                                aria-label={`${studentName} ${behavior.label} 减一`}
-                                              >
-                                                <Minus size={10} />
-                                              </button>
-                                            ) : null}
                                           </div>
                                         );
-                                      },
-                                    )}
-                                  </div>
-                                </div>
+                                      })}
+                                    </div>
+                                  ) : null}
+                                </button>
                               );
                             })}
                           </div>
@@ -6531,6 +6723,26 @@ export default function TeacherHomePage() {
                     </p>
                   </div>
                   <div className="teacher-panel-actions">
+                    {selectedHomeworkLesson ? (
+                      <button
+                        type="button"
+                        className="teacher-ghost-btn teacher-homework-export-btn"
+                        onClick={() => void onExportHomeworkLessonFiles()}
+                        disabled={
+                          !selectedHomeworkLesson?.id ||
+                          exportingHomeworkLessonId ===
+                            String(selectedHomeworkLesson.id || "")
+                        }
+                      >
+                        {exportingHomeworkLessonId ===
+                        String(selectedHomeworkLesson.id || "") ? (
+                          <RefreshCw size={14} className="is-spinning" />
+                        ) : (
+                          <Download size={14} />
+                        )}
+                        <span>批量导出本节作业</span>
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
@@ -6555,7 +6767,29 @@ export default function TeacherHomePage() {
                     <div className="teacher-lesson-list-head">
                       <h3>课时列表</h3>
                       <div className="teacher-lesson-list-head-right">
-                        <span>{`${homeworkLessons.length} 节课`}</span>
+                        <span>{`${filteredHomeworkLessons.length}${filteredHomeworkLessons.length !== homeworkLessons.length ? `/${homeworkLessons.length}` : ""} 节课`}</span>
+                      </div>
+                    </div>
+                    <div className="teacher-lesson-filter-bar">
+                      <div className="teacher-image-search-input-wrap teacher-lesson-search-input">
+                        <Search size={13} />
+                        <input
+                          type="text"
+                          placeholder="搜索课时"
+                          value={homeworkSearchQuery}
+                          onChange={(e) => setHomeworkSearchQuery(e.target.value)}
+                          aria-label="搜索课时"
+                        />
+                        {homeworkSearchQuery && (
+                          <button
+                            type="button"
+                            className="teacher-search-clear-btn"
+                            onClick={() => setHomeworkSearchQuery("")}
+                            aria-label="清除搜索"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
                       </div>
                     </div>
                     {homeworkLessons.length === 0 ? (
@@ -6564,7 +6798,11 @@ export default function TeacherHomePage() {
                       </p>
                     ) : (
                       <div className="teacher-lesson-list">
-                        {homeworkLessons.map((lesson, index) => {
+                        {filteredHomeworkLessons.length === 0 ? (
+                          <p className="teacher-empty-text teacher-lesson-filter-empty">
+                            没有符合条件的课时。
+                          </p>
+                        ) : filteredHomeworkLessons.map((lesson, index) => {
                           const lessonId = String(lesson?.id || "");
                           const active =
                             lessonId === String(selectedHomeworkLessonId || "");
@@ -6588,15 +6826,18 @@ export default function TeacherHomePage() {
                               <button
                                 type="button"
                                 className="teacher-lesson-row-main"
-                                onClick={() =>
-                                  setSelectedHomeworkLessonId(lessonId)
-                                }
+                                onClick={() => {
+                                  setSelectedHomeworkLessonId(lessonId);
+                                  setHomeworkViewMode("card");
+                                }}
                               >
                                 <strong>
                                   {lesson?.courseName || `第${index + 1}节课`}
                                 </strong>
-                                <p>{`已交 ${uploadedStudentCount}/${studentTotal}`}</p>
-                                <span>{`${lessonClassName} · 漏交 ${missingStudentCount} 人`}</span>
+                                <p>
+                                  <span className="teacher-lesson-row-time">{`已交 ${uploadedStudentCount}/${studentTotal}`}</span>
+                                  <span className="teacher-lesson-row-meta">{`${lessonClassName} · 漏交 ${missingStudentCount} 人`}</span>
+                                </p>
                               </button>
                               <div className="teacher-lesson-row-actions">
                                 <span
@@ -6610,10 +6851,6 @@ export default function TeacherHomePage() {
                                     ? "可交作业"
                                     : "未开放上传"}
                                 </span>
-                                <span
-                                  className="teacher-row-setting-btn teacher-row-setting-btn-placeholder"
-                                  aria-hidden="true"
-                                />
                               </div>
                             </article>
                           );
@@ -6632,123 +6869,64 @@ export default function TeacherHomePage() {
                         <p className="teacher-homework-class-hint">{`授课班级：${normalizeLessonClassName(
                           selectedHomeworkLesson?.className,
                         )}`}</p>
-                        <div className="teacher-homework-summary-grid">
-                          <article className="teacher-homework-summary-card">
-                            <span>应交人数</span>
-                            <strong>
-                              {selectedHomeworkLesson.studentTotal || 0}
-                            </strong>
-                          </article>
-                          <article className="teacher-homework-summary-card">
-                            <span>已交人数</span>
-                            <strong>
-                              {selectedHomeworkLesson.uploadedStudentCount || 0}
-                            </strong>
-                          </article>
-                          <article className="teacher-homework-summary-card danger">
-                            <span>漏交人数</span>
-                            <strong>
-                              {selectedHomeworkLesson.missingStudentCount || 0}
-                            </strong>
-                          </article>
-                        </div>
-                        <div className="teacher-homework-detail-tools">
-                          <button
-                            type="button"
-                            className="teacher-ghost-btn teacher-homework-export-btn"
-                            onClick={() => void onExportHomeworkLessonFiles()}
-                            disabled={
-                              !selectedHomeworkLesson?.id ||
-                              exportingHomeworkLessonId ===
-                                String(selectedHomeworkLesson.id || "")
-                            }
-                          >
-                            {exportingHomeworkLessonId ===
-                            String(selectedHomeworkLesson.id || "") ? (
-                              <RefreshCw size={14} className="is-spinning" />
-                            ) : (
-                              <Download size={14} />
-                            )}
-                            <span>批量导出本节作业</span>
-                          </button>
-                          <span className="teacher-homework-detail-tools-hint">
-                            {`将下载本节课所有已提交文件，并附带未交统计（${selectedHomeworkMissingStudents.length} 人）。`}
-                          </span>
-                        </div>
                         <div className="teacher-homework-detail-scroll-area">
-                          <div className="teacher-homework-missing-block">
-                            <div className="teacher-homework-missing-head">
-                              <strong>{`未交名单（${selectedHomeworkMissingStudents.length}）`}</strong>
-                              {selectedHomeworkMissingStudents.length > 0 ? (
-                                <button
-                                  type="button"
-                                  className={`teacher-homework-missing-toggle-btn${
-                                    homeworkMissingListExpanded
-                                      ? " expanded"
-                                      : ""
-                                  }`}
-                                  onClick={() => {
-                                    setHomeworkMissingListExpanded(
-                                      (current) => !current,
-                                    );
-                                  }}
-                                  aria-expanded={homeworkMissingListExpanded}
-                                  aria-label={
-                                    homeworkMissingListExpanded
-                                      ? "收起未交名单"
-                                      : "展开未交名单"
-                                  }
-                                >
-                                  <ChevronDown size={16} />
-                                </button>
-                              ) : null}
-                            </div>
-                            {selectedHomeworkMissingStudents.length === 0 ? (
-                              <p>本节课作业已全部提交。</p>
-                            ) : (
-                              <div
-                                className={`teacher-homework-missing-list-collapse${
-                                  homeworkMissingListExpanded ? " expanded" : ""
-                                }`}
+                          <section className="teacher-homework-requirement-card">
+                            <strong>本节课作业要求</strong>
+                            <p>
+                              {resolveClassroomHomeworkRequirementText(
+                                selectedHomeworkLesson?.homeworkRequirementText,
+                              )}
+                            </p>
+                          </section>
+
+                          <div className="teacher-homework-list-head">
+                            <strong className="teacher-homework-list-title">
+                              {`全班名单（已交 ${selectedHomeworkLesson.uploadedStudentCount || 0} / ${selectedHomeworkLesson.studentTotal || 0}）`}
+                            </strong>
+                            <div className="teacher-homework-view-toggle">
+                              <button
+                                type="button"
+                                className={`teacher-homework-view-btn${homeworkViewMode === "card" ? " active" : ""}`}
+                                onClick={() => setHomeworkViewMode("card")}
+                                title="卡片视图"
                               >
-                                <div className="teacher-homework-missing-list-inner">
-                                  <div className="teacher-homework-missing-chip-list">
-                                    {selectedHomeworkMissingStudents.map(
-                                      (student, studentIndex) => {
-                                        const studentKey =
-                                          resolveHomeworkStudentRowKey(
-                                            student,
-                                            studentIndex,
-                                          );
-                                        const studentName =
-                                          String(
-                                            student?.studentName || "",
-                                          ).trim() ||
-                                          String(
-                                            student?.username || "",
-                                          ).trim() ||
-                                          "未命名学生";
-                                        const studentId = String(
-                                          student?.studentId || "",
-                                        ).trim();
-                                        return (
-                                          <span
-                                            key={`${studentKey}-${studentIndex + 1}`}
-                                            className="teacher-homework-missing-chip"
-                                          >
-                                            {studentId
-                                              ? `${studentName}（${studentId}）`
-                                              : studentName}
-                                          </span>
-                                        );
-                                      },
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
+                                <LayoutGrid size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className={`teacher-homework-view-btn${homeworkViewMode === "table" ? " active" : ""}`}
+                                onClick={() => setHomeworkViewMode("table")}
+                                title="表格视图"
+                              >
+                                <List size={14} />
+                              </button>
+                            </div>
                           </div>
-                          <div className="teacher-homework-table-wrap">
+
+                          {homeworkViewMode === "card" ? (
+                            <div className="teacher-homework-card-grid">
+                              {selectedHomeworkStudents.length === 0 ? (
+                                <p className="teacher-empty-text">暂无学生数据。</p>
+                              ) : (
+                                selectedHomeworkStudents.map((student, studentIndex) => {
+                                  const rowKey = resolveHomeworkStudentRowKey(student, studentIndex);
+                                  const submitted = !!student?.submitted;
+                                  const studentName = String(student?.studentName || student?.username || "").trim() || "未命名";
+                                  return (
+                                    <div
+                                      key={rowKey}
+                                      className={`teacher-homework-student-card${submitted ? " submitted" : " missing"}`}
+                                    >
+                                      <span className="teacher-homework-student-card-name">{studentName}</span>
+                                      <span className="teacher-homework-student-card-status">{submitted ? "已交" : "未交"}</span>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          ) : null}
+
+                          <div className={`teacher-homework-table-wrap${homeworkViewMode === "table" ? "" : " hidden"}`}>
                             <table className="teacher-homework-table">
                               <thead>
                                 <tr>
@@ -6930,6 +7108,7 @@ export default function TeacherHomePage() {
                               {`另有 ${selectedHomeworkLesson.unlistedStudents.length} 位未在花名册内的学生提交了作业。`}
                             </p>
                           ) : null}
+
                         </div>
                       </>
                     )}

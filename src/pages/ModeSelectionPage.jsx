@@ -21,6 +21,10 @@ import {
   getClassroomFileFallbackName,
 } from "../../shared/classroomFileLabels.js";
 import {
+  CLASSROOM_HOMEWORK_DIRECTORY_UPLOAD_ERROR,
+  resolveClassroomHomeworkRequirementText,
+} from "../../shared/classroomHomework.js";
+import {
   clearUserAuthSession,
   getStoredAuthUser,
   resolveActiveAuthSlot,
@@ -37,6 +41,7 @@ import {
   updateClassroomSeatAssignment,
   uploadClassroomHomeworkFiles,
 } from "./classroom/classroomApi.js";
+import { analyzeHomeworkFileSelection } from "../features/classroom/homeworkUploadValidation.js";
 import { getStudentHomeworkHistoryLessons } from "../features/classroom/studentHomeworkHistory.js";
 import "../styles/teacher-home.css";
 import "../styles/mode-selection.css";
@@ -312,6 +317,7 @@ export default function ModeSelectionPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const homeworkFileInputRef = useRef(null);
+  const lateSubmitFileInputRef = useRef(null);
   const seatSelectedIndexRef = useRef("");
   const activeSlot = resolveActiveAuthSlot(location.search);
   const storedUser = getStoredAuthUser(activeSlot);
@@ -330,6 +336,8 @@ export default function ModeSelectionPage() {
   const [homeworkRefreshed, setHomeworkRefreshed] = useState(false);
   const [homeworkError, setHomeworkError] = useState("");
   const [homeworkUploadingLessonId, setHomeworkUploadingLessonId] = useState("");
+  const [lateSubmitUploadingLessonId, setLateSubmitUploadingLessonId] = useState("");
+  const [lateSubmitError, setLateSubmitError] = useState("");
   const [deletingHomeworkFileId, setDeletingHomeworkFileId] = useState("");
   const [homeworkDraftFilesByLesson, setHomeworkDraftFilesByLesson] = useState({});
   const [homeworkSubmissionsByLesson, setHomeworkSubmissionsByLesson] = useState({});
@@ -578,12 +586,19 @@ export default function ModeSelectionPage() {
     navigate(withAuthSlot(`/party?${params.toString()}`, activeSlot));
   }
 
-  function appendHomeworkDraftFiles(lessonId, fileList) {
+  function appendHomeworkDraftFiles(lessonId, fileList, options = {}) {
     const safeLessonId = String(lessonId || "").trim();
     if (!safeLessonId) return;
-    const files = Array.from(fileList || []).filter(
-      (file) => file && typeof file === "object" && typeof file.name === "string" && file.size > 0,
-    );
+    const { items = [], onError } = options;
+    const result = analyzeHomeworkFileSelection({
+      files: fileList,
+      items,
+    });
+    if (result.error) {
+      if (typeof onError === "function") onError(result.error);
+      return;
+    }
+    const files = result.files;
     if (files.length === 0) return;
     setHomeworkDraftFilesByLesson((current) => {
       const existing = Array.isArray(current[safeLessonId]) ? current[safeLessonId] : [];
@@ -594,6 +609,7 @@ export default function ModeSelectionPage() {
           file,
           fileName: base || file.name || `作业文件-${fileIndex + 1}`,
           originalName: file.name || `作业文件-${fileIndex + 1}`,
+          sourceKind: "file",
         };
       });
       return {
@@ -601,7 +617,7 @@ export default function ModeSelectionPage() {
         [safeLessonId]: [...existing, ...nextItems].slice(0, 30),
       };
     });
-    setHomeworkError("");
+    if (typeof onError === "function") onError("");
   }
 
   function onOpenHomeworkSubmit() {
@@ -627,7 +643,9 @@ export default function ModeSelectionPage() {
 
   function onHomeworkInputChange(event) {
     const safeLessonId = String(selectedCourse?.id || "").trim();
-    appendHomeworkDraftFiles(safeLessonId, event?.target?.files || []);
+    appendHomeworkDraftFiles(safeLessonId, event?.target?.files || [], {
+      onError: setHomeworkError,
+    });
     if (event?.target) {
       event.target.value = "";
     }
@@ -673,7 +691,10 @@ export default function ModeSelectionPage() {
     event.stopPropagation();
     setHomeworkDropActive(false);
     const safeLessonId = String(selectedCourse?.id || "").trim();
-    appendHomeworkDraftFiles(safeLessonId, event?.dataTransfer?.files || []);
+    appendHomeworkDraftFiles(safeLessonId, event?.dataTransfer?.files || [], {
+      items: event?.dataTransfer?.items || [],
+      onError: setHomeworkError,
+    });
   }
 
   async function onUploadHomeworkFiles() {
@@ -697,6 +718,7 @@ export default function ModeSelectionPage() {
           return {
             file,
             fileName: normalizeHomeworkFileName(item?.fileName, item?.originalName || file.name),
+            sourceKind: item?.sourceKind || "file",
           };
         })
         .filter(Boolean);
@@ -718,6 +740,66 @@ export default function ModeSelectionPage() {
       setHomeworkError(error?.message || "作业上传失败，请稍后重试。");
     } finally {
       setHomeworkUploadingLessonId("");
+    }
+  }
+
+  function onLateSubmitInputChange(lessonId, event) {
+    const safeLessonId = String(lessonId || "").trim();
+    appendHomeworkDraftFiles(safeLessonId, event?.target?.files || [], {
+      onError: setLateSubmitError,
+    });
+    if (event?.target) event.target.value = "";
+  }
+
+  function onRemoveLateSubmitDraft(lessonId, itemId) {
+    const safeLessonId = String(lessonId || "").trim();
+    const safeItemId = String(itemId || "").trim();
+    if (!safeLessonId || !safeItemId) return;
+    setHomeworkDraftFilesByLesson((current) => {
+      const list = Array.isArray(current[safeLessonId]) ? current[safeLessonId] : [];
+      return { ...current, [safeLessonId]: list.filter((i) => String(i?.id || "") !== safeItemId) };
+    });
+  }
+
+  async function onUploadLateSubmitFiles(lessonId) {
+    const safeLessonId = String(lessonId || "").trim();
+    if (!safeLessonId || lateSubmitUploadingLessonId) return;
+    const draftList = Array.isArray(homeworkDraftFilesByLesson[safeLessonId])
+      ? homeworkDraftFilesByLesson[safeLessonId]
+      : [];
+    if (draftList.length === 0) {
+      setLateSubmitError("请先添加文件，再点击上传。");
+      return;
+    }
+    setLateSubmitError("");
+    setLateSubmitUploadingLessonId(safeLessonId);
+    try {
+      const payload = draftList
+        .map((item) => {
+          const file = item?.file;
+          if (!file || typeof file.name !== "string") return null;
+          return {
+            file,
+            fileName: normalizeHomeworkFileName(
+              item?.fileName,
+              item?.originalName || file.name,
+            ),
+            sourceKind: item?.sourceKind || "file",
+          };
+        })
+        .filter(Boolean);
+      if (payload.length === 0) {
+        setLateSubmitError("当前没有可上传的作业文件。");
+        return;
+      }
+      const data = await uploadClassroomHomeworkFiles(safeLessonId, payload);
+      const submissions = Array.isArray(data?.submissions) ? data.submissions : [];
+      setHomeworkSubmissionsByLesson((current) => ({ ...current, [safeLessonId]: submissions }));
+      setHomeworkDraftFilesByLesson((current) => ({ ...current, [safeLessonId]: [] }));
+    } catch (error) {
+      setLateSubmitError(error?.message || "补交上传失败，请稍后重试。");
+    } finally {
+      setLateSubmitUploadingLessonId("");
     }
   }
 
@@ -1279,6 +1361,15 @@ export default function ModeSelectionPage() {
                         </div>
 
                         <section className="student-lesson-section">
+                          <h3>作业要求</h3>
+                          <p className="student-homework-requirement-text">
+                            {resolveClassroomHomeworkRequirementText(
+                              selectedCourse?.homeworkRequirementText,
+                            )}
+                          </p>
+                        </section>
+
+                        <section className="student-lesson-section">
                           <h3>课堂任务</h3>
                           {selectedTasks.length === 0 ? (
                             <p className="teacher-empty-text">本节课暂无任务内容。</p>
@@ -1428,6 +1519,14 @@ export default function ModeSelectionPage() {
                         <X size={16} />
                       </button>
                     </div>
+                    <section className="student-homework-modal-requirement">
+                      <strong>本节课需要提交</strong>
+                      <p className="student-homework-requirement-text">
+                        {resolveClassroomHomeworkRequirementText(
+                          selectedCourse?.homeworkRequirementText,
+                        )}
+                      </p>
+                    </section>
                     <input
                       ref={homeworkFileInputRef}
                       type="file"
@@ -1456,6 +1555,9 @@ export default function ModeSelectionPage() {
                     >
                       <p>拖拽作业文件到这里，或点击下方按钮添加</p>
                       <p className="task-status-tip">单个文件最大 50MB，每次最多可上传 6 个文件。</p>
+                      <p className="task-status-tip">
+                        {CLASSROOM_HOMEWORK_DIRECTORY_UPLOAD_ERROR}
+                      </p>
                       <button
                         type="button"
                         className="task-homework-upload-btn"
@@ -1631,6 +1733,11 @@ export default function ModeSelectionPage() {
                               >
                                 {lesson?.submitted ? "已提交" : "未提交"}
                               </span>
+                              {lesson?.lateSubmissionEnabled && !lesson?.submitted && (
+                                <span className="teacher-lesson-status student-late-badge">
+                                  可补交
+                                </span>
+                              )}
                             </div>
                           </article>
                         );
@@ -1664,9 +1771,104 @@ export default function ModeSelectionPage() {
                         </div>
 
                         <section className="student-lesson-section">
+                          <h3>作业要求</h3>
+                          <p className="student-homework-requirement-text">
+                            {resolveClassroomHomeworkRequirementText(
+                              selectedHistoryLesson?.homeworkRequirementText,
+                            )}
+                          </p>
+                        </section>
+
+                        {selectedHistoryLesson?.lateSubmissionEnabled && (
+                          <section className="student-lesson-section student-late-submit-section">
+                            <h3>补交作业</h3>
+                            {lateSubmitError ? (
+                              <p className="task-status-tip error">{lateSubmitError}</p>
+                            ) : null}
+                            <p className="task-status-tip">
+                              {CLASSROOM_HOMEWORK_DIRECTORY_UPLOAD_ERROR}
+                            </p>
+                            <input
+                              ref={lateSubmitFileInputRef}
+                              type="file"
+                              multiple
+                              className="task-hidden-file-input"
+                              onChange={(e) => onLateSubmitInputChange(selectedHistoryLesson.id, e)}
+                            />
+                            {(() => {
+                              const lessonId = selectedHistoryLesson.id;
+                              const drafts = Array.isArray(homeworkDraftFilesByLesson[lessonId])
+                                ? homeworkDraftFilesByLesson[lessonId]
+                                : [];
+                              const isUploading = lateSubmitUploadingLessonId === lessonId;
+                              return (
+                                <>
+                                  {drafts.length > 0 ? (
+                                    <div className="task-homework-draft-list">
+                                      {drafts.map((item) => (
+                                        <div key={item?.id} className="task-homework-draft-item">
+                                          <input
+                                            type="text"
+                                            value={item?.fileName || ""}
+                                            onChange={(e) => {
+                                              const safeItemId = String(item?.id || "").trim();
+                                              setHomeworkDraftFilesByLesson((cur) => {
+                                                const list = Array.isArray(cur[lessonId]) ? cur[lessonId] : [];
+                                                return {
+                                                  ...cur,
+                                                  [lessonId]: list.map((i) =>
+                                                    String(i?.id || "") === safeItemId
+                                                      ? { ...i, fileName: e.target.value }
+                                                      : i,
+                                                  ),
+                                                };
+                                              });
+                                            }}
+                                            placeholder="输入文件名称"
+                                          />
+                                          <span>{formatFileSize(item?.file?.size)}</span>
+                                          <button
+                                            type="button"
+                                            className="task-homework-remove-btn"
+                                            onClick={() => onRemoveLateSubmitDraft(lessonId, item?.id)}
+                                          >
+                                            <X size={14} />
+                                          </button>
+                                        </div>
+                                      ))}
+                                      <button
+                                        type="button"
+                                        className="task-homework-submit-btn"
+                                        onClick={() => void onUploadLateSubmitFiles(lessonId)}
+                                        disabled={isUploading}
+                                      >
+                                        {isUploading ? "正在上传..." : "上传补交作业"}
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="task-homework-upload-btn student-late-submit-btn"
+                                    onClick={() => lateSubmitFileInputRef.current?.click()}
+                                    disabled={isUploading}
+                                  >
+                                    <Upload size={14} />
+                                    <span>选择补交文件</span>
+                                  </button>
+                                </>
+                              );
+                            })()}
+                          </section>
+                        )}
+
+                        <section className="student-lesson-section">
                           <h3>我的历史作业</h3>
                           {selectedHistoryLessonFiles.length === 0 ? (
-                            <p className="teacher-empty-text">这节课你还没有提交作业。</p>
+                            <p className="teacher-empty-text">
+                              {selectedHistoryLesson?.lateSubmissionEnabled
+                                ? "这节课你还没有提交作业，可以在上方补交。"
+                                : "这节课你还没有提交作业。"}
+                            </p>
                           ) : (
                             <div className="task-lesson-file-list">
                               {selectedHistoryLessonFiles.map((file, index) => {
