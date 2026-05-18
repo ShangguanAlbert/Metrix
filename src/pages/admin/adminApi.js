@@ -251,6 +251,84 @@ export function saveAdminClassroomPlans(adminToken, payload) {
   });
 }
 
+export function saveAdminLessonTeachingConfig(
+  adminToken,
+  lessonId,
+  teachingConfig = {},
+) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/auth/admin/classroom-plans/${encodeURIComponent(safeLessonId)}/teaching-config`,
+    adminToken,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        teachingConfig:
+          teachingConfig && typeof teachingConfig === "object"
+            ? teachingConfig
+            : {},
+      }),
+    },
+  );
+}
+
+export function startAdminTeachingSession(adminToken, lessonId) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/auth/admin/classroom-plans/${encodeURIComponent(safeLessonId)}/teaching-session/start`,
+    adminToken,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function endAdminTeachingSession(adminToken, lessonId) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/auth/admin/classroom-plans/${encodeURIComponent(safeLessonId)}/teaching-session/end`,
+    adminToken,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function restoreAdminTeachingSession(adminToken, lessonId) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/auth/admin/classroom-plans/${encodeURIComponent(safeLessonId)}/teaching-session/restore`,
+    adminToken,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function updateAdminTeachingSessionPage(adminToken, lessonId, page) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/auth/admin/classroom-plans/${encodeURIComponent(safeLessonId)}/teaching-session/page`,
+    adminToken,
+    {
+      method: "POST",
+      body: JSON.stringify({ page }),
+    },
+  );
+}
+
+export function updateAdminTeachingSessionPdf(adminToken, lessonId, fileId, page = 1) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/auth/admin/classroom-plans/${encodeURIComponent(safeLessonId)}/teaching-session/pdf`,
+    adminToken,
+    {
+      method: "POST",
+      body: JSON.stringify({ fileId, page }),
+    },
+  );
+}
+
 export function fetchAdminClassroomSeatLayouts(adminToken) {
   return request("/api/auth/admin/classroom-seat-layouts", adminToken);
 }

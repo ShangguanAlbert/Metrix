@@ -242,6 +242,10 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     AdminClassroomLessonFile,
     classroomHomeworkFileSchema,
     ClassroomHomeworkFile,
+    teachingSessionSchema,
+    TeachingSession,
+    classroomTeachingQuestionSchema,
+    ClassroomTeachingQuestion,
     getDefaultRuntimeConfigByAgent,
     createDefaultAgentRuntimeConfigMap,
     normalizeMessages,
@@ -411,6 +415,8 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     sanitizeAdminClassroomTaskPayload,
     sanitizeAdminClassroomCourseFilePayload,
     sanitizeAdminClassroomCourseFilesPayload,
+    sanitizeAdminClassroomTeachingConfigPayload,
+    sanitizeStudentClassroomTeachingConfigPayload,
     normalizeAdminClassroomLessonDateTimeInput,
     parseAdminClassroomLegacyCourseTimeRange,
     buildAdminClassroomCourseTimeText,
@@ -422,8 +428,12 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     sanitizeAdminClassroomSeatLayoutsByClassPayload,
     createAdminClassroomLessonFileId,
     createClassroomHomeworkFileId,
+    createClassroomTeachingSessionId,
+    createClassroomTeachingQuestionId,
     normalizeAdminClassroomLessonFileDoc,
     normalizeClassroomHomeworkFileDoc,
+    normalizeClassroomTeachingSessionDoc,
+    normalizeClassroomTeachingQuestionDoc,
     compareClassroomRosterStudent,
     iterateAdminClassroomTaskFiles,
     collectAdminClassroomFileIdsFromLesson,
@@ -457,6 +467,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     sanitizeRuntimeBoolean,
     sanitizeReasoningEffort,
     sanitizeSmartContextMode,
+    ADMIN_CLASSROOM_TEACHING_QUESTION_MAX_LENGTH,
     buildAdminAgentSettingsResponse,
     buildAgentProviderDefaults,
     buildAgentModelDefaults,
@@ -731,6 +742,131 @@ export function registerAuthUserClassroomRoutes(app, deps) {
   function normalizeSeatLayoutsByClassFromConfig(config) {
     return sanitizeAdminClassroomSeatLayoutsByClassPayload(config?.seatLayoutsByClass);
   }
+
+  function findClassroomLessonById(plans, lessonId) {
+    const safeLessonId = sanitizeId(lessonId, "");
+    if (!safeLessonId) return null;
+    const source = Array.isArray(plans) ? plans : [];
+    const lessonIndex = source.findIndex(
+      (lesson) => sanitizeId(lesson?.id, "") === safeLessonId,
+    );
+    if (lessonIndex < 0) return null;
+    return {
+      lesson: source[lessonIndex],
+      lessonIndex,
+    };
+  }
+
+  function buildTeachingPdfFileMap(lesson) {
+    const files = Array.isArray(lesson?.files) ? lesson.files : [];
+    return new Map(
+      files.map((file) => [sanitizeId(file?.id, ""), file]).filter(([fileId]) => fileId),
+    );
+  }
+
+  function buildTeacherLessonTeachingConfigResponse(lesson) {
+    const teachingConfig =
+      typeof sanitizeAdminClassroomTeachingConfigPayload === "function"
+        ? sanitizeAdminClassroomTeachingConfigPayload(lesson?.teachingConfig)
+        : {
+            pdfFiles: Array.isArray(lesson?.teachingConfig?.pdfFiles)
+              ? lesson.teachingConfig.pdfFiles
+              : [],
+            defaultPdfFileId: sanitizeId(
+              lesson?.teachingConfig?.defaultPdfFileId,
+              "",
+            ),
+            allowQuestions:
+              sanitizeRuntimeBoolean?.(
+                lesson?.teachingConfig?.allowQuestions,
+                true,
+              ) ?? true,
+            teacherNotes: sanitizeText(
+              lesson?.teachingConfig?.teacherNotes,
+              "",
+              12000,
+            ),
+            welcomeText: sanitizeText(
+              lesson?.teachingConfig?.welcomeText,
+              "",
+              200,
+            ),
+            updatedAt: sanitizeIsoDate(lesson?.teachingConfig?.updatedAt) || "",
+          };
+    return {
+      ...teachingConfig,
+      pdfFiles: teachingConfig.pdfFiles
+        .map((item) => ({
+          ...item,
+          file: buildTeachingPdfFileMap(lesson).get(item.fileId) || null,
+        }))
+        .filter((item) => item.file),
+    };
+  }
+
+  function buildStudentLessonTeachingConfigResponse(lesson) {
+    const teachingConfig =
+      typeof sanitizeStudentClassroomTeachingConfigPayload === "function"
+        ? sanitizeStudentClassroomTeachingConfigPayload(lesson?.teachingConfig)
+        : {
+            pdfFiles: Array.isArray(lesson?.teachingConfig?.pdfFiles)
+              ? lesson.teachingConfig.pdfFiles
+              : [],
+            defaultPdfFileId: sanitizeId(
+              lesson?.teachingConfig?.defaultPdfFileId,
+              "",
+            ),
+            allowQuestions:
+              sanitizeRuntimeBoolean?.(
+                lesson?.teachingConfig?.allowQuestions,
+                true,
+              ) ?? true,
+            welcomeText: sanitizeText(
+              lesson?.teachingConfig?.welcomeText,
+              "",
+              200,
+            ),
+            updatedAt: sanitizeIsoDate(lesson?.teachingConfig?.updatedAt) || "",
+          };
+    return {
+      ...teachingConfig,
+      pdfFiles: teachingConfig.pdfFiles
+        .map((item) => ({
+          ...item,
+          file: buildTeachingPdfFileMap(lesson).get(item.fileId) || null,
+        }))
+        .filter((item) => item.file),
+    };
+  }
+
+  function resolveDefaultTeachingPdfFileId(lesson) {
+    const teachingConfig = sanitizeAdminClassroomTeachingConfigPayload(
+      lesson?.teachingConfig,
+    );
+    const pdfFiles = teachingConfig.pdfFiles.filter((item) => item.enabled !== false);
+    const fileMap = buildTeachingPdfFileMap(lesson);
+    const configuredDefault = sanitizeId(teachingConfig.defaultPdfFileId, "");
+    if (configuredDefault && fileMap.has(configuredDefault)) {
+      return configuredDefault;
+    }
+    return sanitizeId(pdfFiles[0]?.fileId, "");
+  }
+
+  async function readTeachingSessionByLessonId(lessonId) {
+    const safeLessonId = sanitizeId(lessonId, "");
+    if (!safeLessonId) return null;
+    const doc = await TeachingSession.findOne({ lessonId: safeLessonId }).lean();
+    return doc ? normalizeClassroomTeachingSessionDoc(doc) : null;
+  }
+
+  function buildTeachingRaisedHandSessionKey(lessonId, sessionId) {
+    const safeLessonId = sanitizeId(lessonId, "");
+    const safeSessionId = sanitizeId(sessionId, "");
+    if (!safeLessonId || !safeSessionId) return "";
+    return `${safeLessonId}::${safeSessionId}`;
+  }
+
+  const teachingRaisedHandsBySessionKey = new Map();
 
   function normalizeSeatValueToken(value) {
     return String(value || "")
@@ -1127,6 +1263,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           .map((lesson) => ({
             ...lesson,
             className: resolveClassroomLessonClassName(lesson),
+            teachingConfig: buildStudentLessonTeachingConfigResponse(lesson),
           }))
           .filter(
             (lesson) =>
@@ -1140,6 +1277,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           .map((lesson) => ({
             ...lesson,
             className: resolveClassroomLessonClassName(lesson),
+            teachingConfig: buildStudentLessonTeachingConfigResponse(lesson),
           }))
           .filter(
             (lesson) =>
@@ -1168,6 +1306,179 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       seatLayout,
     });
   });
+
+  app.get(
+    "/api/classroom/teaching-session/:lessonId",
+    requireChatAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+
+      const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+      if (teacherScopeKey !== SHANGGUAN_FUZE_TEACHER_SCOPE_KEY) {
+        res.status(403).json({ error: "当前账号未开通授课会话。" });
+        return;
+      }
+
+      const userProfile = sanitizeUserProfile(req.authUser?.profile);
+      const userClassName = sanitizeClassroomUserClassName(userProfile.className);
+      const config = await readAdminAgentConfig();
+      const lessonMatch = findClassroomLessonById(config.teacherCoursePlans, lessonId);
+      if (!lessonMatch) {
+        res.status(404).json({ error: "未找到对应课时。" });
+        return;
+      }
+
+      const lessonClassName = resolveClassroomLessonClassName(lessonMatch.lesson);
+      if (userClassName && lessonClassName !== userClassName) {
+        res.status(403).json({ error: "你不能查看其他班级的授课会话。" });
+        return;
+      }
+
+      const session = await readTeachingSessionByLessonId(lessonId);
+      const teachingConfig = buildStudentLessonTeachingConfigResponse(
+        lessonMatch.lesson,
+      );
+      const questionDocs = await ClassroomTeachingQuestion.find({
+        lessonId,
+        sessionId: sanitizeId(session?.sessionId, ""),
+      })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+      const sessionKey = buildTeachingRaisedHandSessionKey(
+        lessonId,
+        session?.sessionId,
+      );
+      const raisedHands = Array.isArray(teachingRaisedHandsBySessionKey.get(sessionKey))
+        ? teachingRaisedHandsBySessionKey.get(sessionKey)
+        : [];
+
+      res.json({
+        ok: true,
+        lesson: {
+          id: sanitizeId(lessonMatch.lesson?.id, ""),
+          courseName: sanitizeText(lessonMatch.lesson?.courseName, "", 80),
+          className: lessonClassName,
+          courseStartAt: sanitizeIsoDate(lessonMatch.lesson?.courseStartAt) || "",
+          courseEndAt: sanitizeIsoDate(lessonMatch.lesson?.courseEndAt) || "",
+          teachingConfig,
+        },
+        session,
+        raisedHands,
+        questions: questionDocs.map((doc) =>
+          normalizeClassroomTeachingQuestionDoc(doc),
+        ),
+        mode: session?.status === "live" ? "live" : "readonly",
+      });
+    },
+  );
+
+  app.post(
+    "/api/classroom/teaching-session/:lessonId/raise-hand",
+    requireChatAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+      const session = await readTeachingSessionByLessonId(lessonId);
+      if (!session || session.status !== "live") {
+        res.status(400).json({ error: "当前课时未在授课中，暂不能举手。" });
+        return;
+      }
+      const sessionKey = buildTeachingRaisedHandSessionKey(lessonId, session.sessionId);
+      const previous = Array.isArray(teachingRaisedHandsBySessionKey.get(sessionKey))
+        ? teachingRaisedHandsBySessionKey.get(sessionKey)
+        : [];
+      const studentUserId = sanitizeId(req.authUser?._id, "");
+      const safeProfile = sanitizeUserProfile(req.authUser?.profile);
+      const nextEntry = {
+        studentUserId,
+        studentUsername: sanitizeText(req.authUser?.username, "", 80),
+        studentName: sanitizeText(
+          safeProfile.name || req.authUser?.username,
+          "",
+          80,
+        ),
+        raisedAt: new Date().toISOString(),
+      };
+      const nextRaisedHands = [
+        nextEntry,
+        ...previous.filter((item) => sanitizeId(item?.studentUserId, "") !== studentUserId),
+      ].slice(0, 50);
+      teachingRaisedHandsBySessionKey.set(sessionKey, nextRaisedHands);
+      res.json({
+        ok: true,
+        lessonId,
+        raisedHands: nextRaisedHands,
+      });
+    },
+  );
+
+  app.post(
+    "/api/classroom/teaching-session/:lessonId/questions",
+    requireChatAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      const content = sanitizeText(
+        req.body?.content,
+        "",
+        ADMIN_CLASSROOM_TEACHING_QUESTION_MAX_LENGTH,
+      );
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+      if (!content) {
+        res.status(400).json({ error: "请输入问题内容后再提交。" });
+        return;
+      }
+      const config = await readAdminAgentConfig();
+      const lessonMatch = findClassroomLessonById(config.teacherCoursePlans, lessonId);
+      if (!lessonMatch) {
+        res.status(404).json({ error: "未找到对应课时。" });
+        return;
+      }
+      const teachingConfig = sanitizeStudentClassroomTeachingConfigPayload(
+        lessonMatch.lesson?.teachingConfig,
+      );
+      if (!teachingConfig.allowQuestions) {
+        res.status(403).json({ error: "教师暂未开放课堂提问。" });
+        return;
+      }
+      const session = await readTeachingSessionByLessonId(lessonId);
+      if (!session || session.status !== "live") {
+        res.status(400).json({ error: "当前课时未在授课中，暂不能提问。" });
+        return;
+      }
+      const safeProfile = sanitizeUserProfile(req.authUser?.profile);
+      const questionDoc = await ClassroomTeachingQuestion.create({
+        questionId: createClassroomTeachingQuestionId(),
+        lessonId,
+        sessionId: session.sessionId,
+        teacherScopeKey: SHANGGUAN_FUZE_TEACHER_SCOPE_KEY,
+        studentUserId: sanitizeId(req.authUser?._id, ""),
+        studentUsername: sanitizeText(req.authUser?.username, "", 80),
+        studentName: sanitizeText(
+          safeProfile.name || req.authUser?.username,
+          "",
+          80,
+        ),
+        content,
+        createdAt: new Date().toISOString(),
+      });
+      res.json({
+        ok: true,
+        lessonId,
+        question: normalizeClassroomTeachingQuestionDoc(questionDoc),
+      });
+    },
+  );
 
   app.put("/api/classroom/seat-layout/assignment", requireChatAuth, async (req, res) => {
     const profile = sanitizeUserProfile(req.authUser?.profile);
@@ -2297,6 +2608,338 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       updatedAt: config.updatedAt,
     });
   });
+
+  app.put(
+    "/api/auth/admin/classroom-plans/:lessonId/teaching-config",
+    requireAdminAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+
+      const previous = await readAdminAgentConfig();
+      const lessonMatch = findClassroomLessonById(previous.teacherCoursePlans, lessonId);
+      if (!lessonMatch) {
+        res.status(404).json({ error: "未找到对应课时，请刷新后重试。" });
+        return;
+      }
+
+      const nextTeachingConfig = sanitizeAdminClassroomTeachingConfigPayload(
+        req.body?.teachingConfig,
+      );
+      const lessonFileMap = buildTeachingPdfFileMap(lessonMatch.lesson);
+      const invalidPdfRef = nextTeachingConfig.pdfFiles.find(
+        (item) => !lessonFileMap.has(item.fileId),
+      );
+      if (invalidPdfRef) {
+        res.status(400).json({ error: "授课 PDF 引用了不存在的课程文件。" });
+        return;
+      }
+
+      const nonPdfRef = nextTeachingConfig.pdfFiles.find((item) => {
+        const file = lessonFileMap.get(item.fileId);
+        const fileName = String(file?.name || "").trim().toLowerCase();
+        const mimeType = String(file?.mimeType || "").trim().toLowerCase();
+        return !fileName.endsWith(".pdf") && !mimeType.includes("pdf");
+      });
+      if (nonPdfRef) {
+        res.status(400).json({ error: "授课中心当前只允许选择 PDF 课程文件。" });
+        return;
+      }
+
+      if (
+        nextTeachingConfig.defaultPdfFileId &&
+        !lessonFileMap.has(nextTeachingConfig.defaultPdfFileId)
+      ) {
+        res.status(400).json({ error: "默认授课 PDF 不存在，请重新选择。" });
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const teacherCoursePlans = previous.teacherCoursePlans.map((lesson, index) => {
+        if (index !== lessonMatch.lessonIndex) return lesson;
+        return {
+          ...lesson,
+          teachingConfig: {
+            ...nextTeachingConfig,
+            updatedAt: nowIso,
+          },
+          updatedAt: nowIso,
+        };
+      });
+
+      const doc = await AdminConfig.findOneAndUpdate(
+        { key: ADMIN_CONFIG_KEY },
+        {
+          $set: {
+            key: ADMIN_CONFIG_KEY,
+            teacherCoursePlans,
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+        },
+      ).lean();
+      const config = normalizeAdminConfigDoc(doc);
+
+      res.json({
+        ok: true,
+        lessonId,
+        teachingConfig:
+          buildTeacherLessonTeachingConfigResponse(
+            config.teacherCoursePlans[lessonMatch.lessonIndex],
+          ) || sanitizeAdminClassroomTeachingConfigPayload(null),
+        teacherCoursePlans: config.teacherCoursePlans,
+        updatedAt: config.updatedAt,
+      });
+    },
+  );
+
+  app.post(
+    "/api/auth/admin/classroom-plans/:lessonId/teaching-session/start",
+    requireAdminAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+      const config = await readAdminAgentConfig();
+      const lessonMatch = findClassroomLessonById(config.teacherCoursePlans, lessonId);
+      if (!lessonMatch) {
+        res.status(404).json({ error: "未找到对应课时，请刷新后重试。" });
+        return;
+      }
+
+      const activePdfFileId = resolveDefaultTeachingPdfFileId(lessonMatch.lesson);
+      if (!activePdfFileId) {
+        res.status(400).json({ error: "请先在授课中心配置至少一个 PDF 后再开始授课。" });
+        return;
+      }
+
+      const previousSession = await readTeachingSessionByLessonId(lessonId);
+      if (previousSession?.status === "live") {
+        res.json({
+          ok: true,
+          lessonId,
+          session: previousSession,
+        });
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const nextSessionPayload = {
+        sessionId:
+          previousSession?.sessionId || createClassroomTeachingSessionId(),
+        lessonId,
+        teacherScopeKey: SHANGGUAN_FUZE_TEACHER_SCOPE_KEY,
+        className: resolveClassroomLessonClassName(lessonMatch.lesson),
+        status: "live",
+        activePdfFileId,
+        activePage: 1,
+        pageCount: 0,
+        startedAt: nowIso,
+        endedAt: "",
+        lastCheckpoint: previousSession?.lastCheckpoint || {
+          pdfFileId: "",
+          page: 1,
+          savedAt: "",
+        },
+      };
+      const sessionDoc = await TeachingSession.findOneAndUpdate(
+        { lessonId },
+        { $set: nextSessionPayload },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+        },
+      ).lean();
+      res.json({
+        ok: true,
+        lessonId,
+        session: normalizeClassroomTeachingSessionDoc(sessionDoc),
+      });
+    },
+  );
+
+  app.post(
+    "/api/auth/admin/classroom-plans/:lessonId/teaching-session/end",
+    requireAdminAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+      const previousSession = await readTeachingSessionByLessonId(lessonId);
+      if (!previousSession) {
+        res.status(404).json({ error: "当前课时还没有授课会话。" });
+        return;
+      }
+      const nowIso = new Date().toISOString();
+      const sessionDoc = await TeachingSession.findOneAndUpdate(
+        { lessonId },
+        {
+          $set: {
+            ...previousSession,
+            status: "ended",
+            endedAt: nowIso,
+            lastCheckpoint: {
+              pdfFileId: previousSession.activePdfFileId,
+              page: previousSession.activePage,
+              savedAt: nowIso,
+            },
+          },
+        },
+        {
+          new: true,
+        },
+      ).lean();
+      res.json({
+        ok: true,
+        lessonId,
+        session: normalizeClassroomTeachingSessionDoc(sessionDoc),
+      });
+    },
+  );
+
+  app.post(
+    "/api/auth/admin/classroom-plans/:lessonId/teaching-session/restore",
+    requireAdminAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+      const config = await readAdminAgentConfig();
+      const lessonMatch = findClassroomLessonById(config.teacherCoursePlans, lessonId);
+      if (!lessonMatch) {
+        res.status(404).json({ error: "未找到对应课时，请刷新后重试。" });
+        return;
+      }
+      const previousSession = await readTeachingSessionByLessonId(lessonId);
+      if (!previousSession?.lastCheckpoint?.pdfFileId) {
+        res.status(400).json({ error: "当前课时没有可恢复的上次进度。" });
+        return;
+      }
+      const nowIso = new Date().toISOString();
+      const sessionDoc = await TeachingSession.findOneAndUpdate(
+        { lessonId },
+        {
+          $set: {
+            sessionId:
+              previousSession.sessionId || createClassroomTeachingSessionId(),
+            lessonId,
+            teacherScopeKey: SHANGGUAN_FUZE_TEACHER_SCOPE_KEY,
+            className: resolveClassroomLessonClassName(lessonMatch.lesson),
+            status: "live",
+            activePdfFileId: previousSession.lastCheckpoint.pdfFileId,
+            activePage: previousSession.lastCheckpoint.page || 1,
+            pageCount: previousSession.pageCount || 0,
+            startedAt: nowIso,
+            endedAt: "",
+            lastCheckpoint: previousSession.lastCheckpoint,
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+        },
+      ).lean();
+      res.json({
+        ok: true,
+        lessonId,
+        session: normalizeClassroomTeachingSessionDoc(sessionDoc),
+      });
+    },
+  );
+
+  app.post(
+    "/api/auth/admin/classroom-plans/:lessonId/teaching-session/page",
+    requireAdminAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      const activePage = sanitizeRuntimeInteger(req.body?.page, 1, 1, 100000);
+      if (!lessonId) {
+        res.status(400).json({ error: "课时标识无效。" });
+        return;
+      }
+      const previousSession = await readTeachingSessionByLessonId(lessonId);
+      if (!previousSession || previousSession.status !== "live") {
+        res.status(404).json({ error: "当前课时没有正在进行的授课会话。" });
+        return;
+      }
+      const sessionDoc = await TeachingSession.findOneAndUpdate(
+        { lessonId },
+        {
+          $set: {
+            activePage,
+          },
+        },
+        {
+          new: true,
+        },
+      ).lean();
+      res.json({
+        ok: true,
+        lessonId,
+        session: normalizeClassroomTeachingSessionDoc(sessionDoc),
+      });
+    },
+  );
+
+  app.post(
+    "/api/auth/admin/classroom-plans/:lessonId/teaching-session/pdf",
+    requireAdminAuth,
+    async (req, res) => {
+      const lessonId = sanitizeId(req.params.lessonId, "");
+      const activePdfFileId = sanitizeId(req.body?.fileId, "");
+      if (!lessonId || !activePdfFileId) {
+        res.status(400).json({ error: "授课 PDF 标识无效。" });
+        return;
+      }
+      const config = await readAdminAgentConfig();
+      const lessonMatch = findClassroomLessonById(config.teacherCoursePlans, lessonId);
+      if (!lessonMatch) {
+        res.status(404).json({ error: "未找到对应课时，请刷新后重试。" });
+        return;
+      }
+      const lessonFileMap = buildTeachingPdfFileMap(lessonMatch.lesson);
+      if (!lessonFileMap.has(activePdfFileId)) {
+        res.status(404).json({ error: "授课 PDF 不存在，请刷新后重试。" });
+        return;
+      }
+      const previousSession = await readTeachingSessionByLessonId(lessonId);
+      if (!previousSession || previousSession.status !== "live") {
+        res.status(404).json({ error: "当前课时没有正在进行的授课会话。" });
+        return;
+      }
+      const sessionDoc = await TeachingSession.findOneAndUpdate(
+        { lessonId },
+        {
+          $set: {
+            activePdfFileId,
+            activePage: sanitizeRuntimeInteger(req.body?.page, 1, 1, 100000),
+          },
+        },
+        {
+          new: true,
+        },
+      ).lean();
+      res.json({
+        ok: true,
+        lessonId,
+        session: normalizeClassroomTeachingSessionDoc(sessionDoc),
+      });
+    },
+  );
 
   app.get("/api/auth/admin/classroom-seat-layouts", requireAdminAuth, async (_req, res) => {
     const config = await readAdminAgentConfig();

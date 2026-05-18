@@ -102,8 +102,10 @@ import {
   fetchAdminOnlinePresence,
   fetchAdminUserDirectory,
   mergeAdminUserDirectoryUsers,
+  saveAdminLessonTeachingConfig,
   saveAdminClassroomPlans,
   saveAdminClassroomSeatLayouts,
+  startAdminTeachingSession,
   updateAdminUserDirectoryUser,
   uploadAdminClassroomTaskFiles,
 } from "./admin/adminApi.js";
@@ -130,6 +132,7 @@ const COURSE_DEFAULT_CLASS_NAME = COURSE_TARGET_CLASS_OPTIONS[0].value;
 const TEACHER_HOME_PANEL_KEYS = Object.freeze(
   new Set([
     "classroom",
+    "teaching-center",
     "discipline",
     "homework",
     "seat-fixed",
@@ -819,6 +822,41 @@ function normalizeLessonPlans(plans) {
   }));
 }
 
+function normalizeLessonTeachingConfig(teachingConfig) {
+  const source =
+    teachingConfig && typeof teachingConfig === "object" ? teachingConfig : {};
+  const rawPdfFiles = Array.isArray(source.pdfFiles) ? source.pdfFiles : [];
+  const seenIds = new Set();
+  const pdfFiles = rawPdfFiles
+    .map((item, index) => {
+      const fileId = String(item?.fileId || item?.id || "").trim();
+      if (!fileId || seenIds.has(fileId)) return null;
+      seenIds.add(fileId);
+      return {
+        fileId,
+        sortOrder:
+          Number.isFinite(Number(item?.sortOrder)) ? Number(item.sortOrder) : index,
+        enabled: item?.enabled !== false,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  return {
+    pdfFiles,
+    defaultPdfFileId: String(source.defaultPdfFileId || "").trim(),
+    allowQuestions: source.allowQuestions !== false,
+    teacherNotes: String(source.teacherNotes || ""),
+    welcomeText: String(source.welcomeText || ""),
+    updatedAt: String(source.updatedAt || ""),
+  };
+}
+
+function isLessonPdfFile(file) {
+  const fileName = String(file?.name || "").trim().toLowerCase();
+  const mimeType = String(file?.mimeType || "").trim().toLowerCase();
+  return fileName.endsWith(".pdf") || mimeType.includes("pdf");
+}
+
 function buildClassroomConfigSnapshot({
   productTaskEnabled = false,
   teacherCoursePlans = [],
@@ -1220,6 +1258,9 @@ export default function TeacherHomePage() {
   const [adminToken, setAdminToken] = useState(() => getAdminToken());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [teachingConfigSaving, setTeachingConfigSaving] = useState(false);
+  const [teachingSessionLaunchingLessonId, setTeachingSessionLaunchingLessonId] =
+    useState("");
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const uploadAbortControllerRef = useRef(null);
   const [downloadingFileId, setDownloadingFileId] = useState("");
@@ -2122,6 +2163,7 @@ export default function TeacherHomePage() {
         label: "课堂管理",
         items: [
           { key: "classroom", label: "课时管理", icon: ClipboardList },
+          { key: "teaching-center", label: "授课中心", icon: FileText },
           { key: "discipline", label: "纪律管理", icon: CircleHelp },
           { key: "homework", label: "作业管理", icon: FileText },
           { key: "seat-fixed", label: "座位管理", icon: LayoutGrid },
@@ -3162,6 +3204,36 @@ export default function TeacherHomePage() {
 
   const selectedCourse =
     selectedCourseIndex >= 0 ? teacherCoursePlans[selectedCourseIndex] : null;
+  const selectedCourseTeachingConfig = useMemo(
+    () => normalizeLessonTeachingConfig(selectedCourse?.teachingConfig),
+    [selectedCourse?.teachingConfig],
+  );
+  const selectedCoursePdfFiles = useMemo(
+    () =>
+      (Array.isArray(selectedCourse?.files) ? selectedCourse.files : []).filter(
+        isLessonPdfFile,
+      ),
+    [selectedCourse?.files],
+  );
+  const selectedCourseTeachingPdfItems = useMemo(() => {
+    const fileMap = new Map(
+      selectedCoursePdfFiles.map((file) => [String(file?.id || "").trim(), file]),
+    );
+    return selectedCourseTeachingConfig.pdfFiles
+      .map((item) => ({
+        ...item,
+        file: fileMap.get(String(item?.fileId || "").trim()) || null,
+      }))
+      .filter((item) => item.file);
+  }, [selectedCoursePdfFiles, selectedCourseTeachingConfig.pdfFiles]);
+  const selectedCourseTeachingPdfOptions = useMemo(
+    () =>
+      selectedCourseTeachingPdfItems.map((item) => ({
+        value: item.fileId,
+        label: String(item?.file?.name || item.fileId).trim(),
+      })),
+    [selectedCourseTeachingPdfItems],
+  );
 
   const selectedCourseTasks = useMemo(
     () => (Array.isArray(selectedCourse?.tasks) ? selectedCourse.tasks : []),
@@ -3852,6 +3924,117 @@ export default function TeacherHomePage() {
           : item,
       ),
     );
+  }
+
+  function onUpdateSelectedLessonTeachingConfig(patch) {
+    const currentConfig = normalizeLessonTeachingConfig(
+      selectedCourse?.teachingConfig,
+    );
+    onUpdateSelectedLesson({
+      teachingConfig: {
+        ...currentConfig,
+        ...(patch && typeof patch === "object" ? patch : {}),
+      },
+    });
+  }
+
+  function onToggleSelectedLessonTeachingPdf(fileId) {
+    const safeFileId = String(fileId || "").trim();
+    if (!safeFileId) return;
+    const currentConfig = normalizeLessonTeachingConfig(
+      selectedCourse?.teachingConfig,
+    );
+    const exists = currentConfig.pdfFiles.some((item) => item.fileId === safeFileId);
+    const nextPdfFiles = exists
+      ? currentConfig.pdfFiles.filter((item) => item.fileId !== safeFileId)
+      : [
+          ...currentConfig.pdfFiles,
+          {
+            fileId: safeFileId,
+            sortOrder: currentConfig.pdfFiles.length,
+            enabled: true,
+          },
+        ];
+    const normalizedNextPdfFiles = nextPdfFiles.map((item, index) => ({
+      ...item,
+      sortOrder: index,
+    }));
+    const nextDefaultPdfFileId =
+      currentConfig.defaultPdfFileId === safeFileId && exists
+        ? String(normalizedNextPdfFiles[0]?.fileId || "")
+        : currentConfig.defaultPdfFileId ||
+          String(normalizedNextPdfFiles[0]?.fileId || "");
+    onUpdateSelectedLessonTeachingConfig({
+      pdfFiles: normalizedNextPdfFiles,
+      defaultPdfFileId: nextDefaultPdfFileId,
+    });
+  }
+
+  async function onSaveSelectedLessonTeachingConfig() {
+    if (!adminToken || !selectedCourse || teachingConfigSaving) return;
+    setTeachingConfigSaving(true);
+    setError("");
+    try {
+      const data = await saveAdminLessonTeachingConfig(
+        adminToken,
+        selectedCourse.id,
+        normalizeLessonTeachingConfig(selectedCourse.teachingConfig),
+      );
+      const plans = Array.isArray(data?.teacherCoursePlans)
+        ? data.teacherCoursePlans
+        : [];
+      const normalizedPlans = normalizeLessonPlans(plans);
+      setTeacherCoursePlans(normalizedPlans);
+      setClassroomUpdatedAt(
+        String(data?.updatedAt || new Date().toISOString()),
+      );
+      classroomConfigSavedSnapshotRef.current = buildClassroomConfigSnapshot({
+        productTaskEnabled,
+        teacherCoursePlans: normalizedPlans,
+        classroomDisciplineConfig,
+      });
+      setClassroomSaveNotice("授课配置已保存。");
+    } catch (rawError) {
+      if (handleAuthError(rawError)) return;
+      setError(readErrorMessage(rawError));
+    } finally {
+      setTeachingConfigSaving(false);
+    }
+  }
+
+  async function onStartSelectedTeachingSession() {
+    if (
+      !adminToken ||
+      !selectedCourse ||
+      teachingConfigSaving ||
+      teachingSessionLaunchingLessonId
+    ) {
+      return;
+    }
+    const lessonId = String(selectedCourse.id || "").trim();
+    if (!lessonId) return;
+    setTeachingSessionLaunchingLessonId(lessonId);
+    setError("");
+    try {
+      await saveAdminLessonTeachingConfig(
+        adminToken,
+        lessonId,
+        normalizeLessonTeachingConfig(selectedCourse.teachingConfig),
+      );
+      await startAdminTeachingSession(adminToken, lessonId);
+      const teachingUrl = withAuthSlot(
+        `/admin/classroom/teaching/${encodeURIComponent(lessonId)}`,
+        activeSlot,
+      );
+      if (typeof window !== "undefined") {
+        window.open(teachingUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (rawError) {
+      if (handleAuthError(rawError)) return;
+      setError(readErrorMessage(rawError));
+    } finally {
+      setTeachingSessionLaunchingLessonId("");
+    }
   }
 
   function onUpdateSelectedLessonSchedule(nextStartAt, nextEndAt) {
@@ -6368,6 +6551,271 @@ export default function TeacherHomePage() {
                               </div>
                             )}
                           </div>
+                        </section>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              </div>
+            ) : null}
+
+            {activePanel === "teaching-center" ? (
+              <div className="teacher-panel-stack teacher-classroom-stack">
+                <header className="teacher-panel-head">
+                  <div>
+                    <h2>授课中心</h2>
+                    <p className="teacher-panel-save-time">
+                      课时来自课时管理，授课中心只负责 PDF 授课配置与开始授课
+                    </p>
+                  </div>
+                  <div className="teacher-panel-actions">
+                    <button
+                      type="button"
+                      className="teacher-primary-btn"
+                      onClick={() => void onSaveSelectedLessonTeachingConfig()}
+                      disabled={!selectedCourse || teachingConfigSaving}
+                    >
+                      <Save size={15} />
+                      <span>{teachingConfigSaving ? "保存中..." : "保存授课配置"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="teacher-ghost-btn"
+                      onClick={() => void onStartSelectedTeachingSession()}
+                      disabled={!selectedCourse || !!teachingSessionLaunchingLessonId}
+                    >
+                      <ExternalLink size={15} />
+                      <span>
+                        {teachingSessionLaunchingLessonId
+                          ? "正在进入授课页..."
+                          : "开始授课"}
+                      </span>
+                    </button>
+                  </div>
+                </header>
+
+                <section className="teacher-card teacher-lesson-workbench">
+                  <div className="teacher-lesson-list-panel">
+                    <div className="teacher-lesson-list-head">
+                      <h3>课时列表</h3>
+                      <div className="teacher-lesson-list-head-right">
+                        <span>{`${filteredCoursePlans.length}${filteredCoursePlans.length !== teacherCoursePlans.length ? `/${teacherCoursePlans.length}` : ""} 节课`}</span>
+                      </div>
+                    </div>
+                    <div className="teacher-lesson-filter-bar">
+                      <div className="teacher-image-search-input-wrap teacher-lesson-search-input">
+                        <Search size={13} />
+                        <input
+                          type="text"
+                          placeholder="搜索课时"
+                          value={lessonSearchQuery}
+                          onChange={(e) => setLessonSearchQuery(e.target.value)}
+                          aria-label="搜索课时"
+                        />
+                        {lessonSearchQuery && (
+                          <button
+                            type="button"
+                            className="teacher-search-clear-btn"
+                            onClick={() => setLessonSearchQuery("")}
+                            aria-label="清除搜索"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                      </div>
+                      {lessonClassNames.length > 1 && (
+                        <div className="teacher-lesson-class-chips">
+                          <button
+                            type="button"
+                            className={`teacher-lesson-class-chip${lessonClassFilter === "" ? " active" : ""}`}
+                            onClick={() => setLessonClassFilter("")}
+                          >
+                            全部
+                          </button>
+                          {lessonClassNames.map((name) => (
+                            <button
+                              key={name}
+                              type="button"
+                              className={`teacher-lesson-class-chip${lessonClassFilter === name ? " active" : ""}`}
+                              onClick={() =>
+                                setLessonClassFilter(
+                                  lessonClassFilter === name ? "" : name,
+                                )
+                              }
+                            >
+                              {name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {teacherCoursePlans.length === 0 ? (
+                      <p className="teacher-empty-text">
+                        暂无课时，请先到课时管理中新建课时。
+                      </p>
+                    ) : (
+                      <div className="teacher-lesson-list">
+                        {filteredCoursePlans.length === 0 ? (
+                          <p className="teacher-empty-text teacher-lesson-filter-empty">
+                            没有符合条件的课时。
+                          </p>
+                        ) : filteredCoursePlans.map((course, index) => {
+                          const courseId = String(course?.id || "");
+                          const active =
+                            courseId === String(selectedCourseId || "");
+                          const teachingConfig = normalizeLessonTeachingConfig(
+                            course?.teachingConfig,
+                          );
+                          const teachingStatus =
+                            teachingConfig.pdfFiles.length === 0
+                              ? "未配置"
+                              : "已配置";
+                          return (
+                            <article
+                              key={courseId || `teaching-lesson-${index + 1}`}
+                              className={`teacher-lesson-row${active ? " active" : ""}`}
+                            >
+                              <button
+                                type="button"
+                                className="teacher-lesson-row-main"
+                                onClick={() => setSelectedCourseId(courseId)}
+                              >
+                                <strong>
+                                  {course?.courseName || `第${index + 1}节课`}
+                                </strong>
+                                <p>
+                                  <span className="teacher-lesson-row-time">
+                                    {buildLessonTimeLabel(
+                                      course?.courseStartAt,
+                                      course?.courseEndAt,
+                                      course?.courseTime,
+                                    ) || "未设置课时时间"}
+                                  </span>
+                                  <span className="teacher-lesson-row-meta">{`${normalizeLessonClassName(
+                                    course?.className,
+                                  )} · ${teachingConfig.pdfFiles.length} 份授课 PDF`}</span>
+                                </p>
+                              </button>
+                              <div className="teacher-lesson-row-actions">
+                                <span className="teacher-lesson-status">
+                                  {teachingStatus}
+                                </span>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="teacher-lesson-detail-panel">
+                    {!selectedCourse ? (
+                      <p className="teacher-empty-text">
+                        请选择左侧一节课后再配置授课内容。
+                      </p>
+                    ) : (
+                      <div className="teacher-lesson-detail-scroll">
+                        <section className="teacher-card">
+                          <div className="teacher-task-draft-head">
+                            <strong>授课 PDF</strong>
+                            <span className="teacher-panel-save-time">
+                              仅支持从当前课时的课程文件里选择 PDF
+                            </span>
+                          </div>
+                          {selectedCoursePdfFiles.length === 0 ? (
+                            <p className="teacher-empty-text">
+                              当前课时还没有 PDF 课程文件，请先到课时管理上传。
+                            </p>
+                          ) : (
+                            <div className="teacher-file-chip-list">
+                              {selectedCoursePdfFiles.map((file) => {
+                                const fileId = String(file?.id || "").trim();
+                                const checked = selectedCourseTeachingConfig.pdfFiles.some(
+                                  (item) => item.fileId === fileId,
+                                );
+                                return (
+                                  <label
+                                    key={fileId}
+                                    className="teacher-file-chip"
+                                    style={{ cursor: "pointer" }}
+                                  >
+                                    <div className="teacher-file-chip-info">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() =>
+                                          onToggleSelectedLessonTeachingPdf(fileId)
+                                        }
+                                      />
+                                      <div className="teacher-file-chip-meta">
+                                        <div className="teacher-file-chip-headline">
+                                          <strong>{file?.name || "课件 PDF"}</strong>
+                                        </div>
+                                        <div className="teacher-file-chip-subline">
+                                          <span>{formatFileSize(file?.size)}</span>
+                                          <span>{`上传于 ${formatDisplayTime(file?.uploadedAt)}`}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </section>
+
+                        <section className="teacher-card">
+                          <div className="teacher-task-draft-head">
+                            <strong>授课设置</strong>
+                          </div>
+                          <div className="teacher-form-grid">
+                            <label>
+                              <span>默认授课 PDF</span>
+                              <PortalSelect
+                                value={
+                                  selectedCourseTeachingConfig.defaultPdfFileId ||
+                                  String(selectedCourseTeachingPdfOptions[0]?.value || "")
+                                }
+                                options={
+                                  selectedCourseTeachingPdfOptions.length > 0
+                                    ? selectedCourseTeachingPdfOptions
+                                    : [{ value: "", label: "请先勾选 PDF" }]
+                                }
+                                compact
+                                ariaLabel="选择默认授课 PDF"
+                                onChange={(value) =>
+                                  onUpdateSelectedLessonTeachingConfig({
+                                    defaultPdfFileId: value,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="teacher-lesson-switch-row" style={{ justifyContent: "space-between" }}>
+                              <span>允许学生文字提问</span>
+                              <input
+                                type="checkbox"
+                                checked={selectedCourseTeachingConfig.allowQuestions !== false}
+                                onChange={(event) =>
+                                  onUpdateSelectedLessonTeachingConfig({
+                                    allowQuestions: event.target.checked,
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
+                          <label style={{ display: "grid", gap: 8, marginTop: 16 }}>
+                            <span>教师私有讲稿</span>
+                            <textarea
+                              className="teacher-req-editor-textarea"
+                              value={selectedCourseTeachingConfig.teacherNotes || ""}
+                              onChange={(event) =>
+                                onUpdateSelectedLessonTeachingConfig({
+                                  teacherNotes: event.target.value,
+                                })
+                              }
+                              placeholder="这里写授课讲稿、提醒点、课堂节奏，不会下发给学生。"
+                            />
+                          </label>
                         </section>
                       </div>
                     )}

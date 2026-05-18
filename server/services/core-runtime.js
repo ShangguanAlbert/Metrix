@@ -127,6 +127,10 @@ const ADMIN_CLASSROOM_COURSE_PLAN_MAX_ITEMS = 40;
 const ADMIN_CLASSROOM_COURSE_TASK_MAX_ITEMS = 12;
 const ADMIN_CLASSROOM_COURSE_FILE_MAX_ITEMS = 20;
 const ADMIN_CLASSROOM_COURSE_FILE_UPLOAD_MAX_FILES = 6;
+const ADMIN_CLASSROOM_TEACHING_MAX_PDF_FILES = 20;
+const ADMIN_CLASSROOM_TEACHING_NOTES_MAX_LENGTH = 12000;
+const ADMIN_CLASSROOM_TEACHING_WELCOME_TEXT_MAX_LENGTH = 200;
+const ADMIN_CLASSROOM_TEACHING_QUESTION_MAX_LENGTH = 300;
 const ADMIN_CLASSROOM_SEAT_LAYOUT_MIN_ROWS = 3;
 const ADMIN_CLASSROOM_SEAT_LAYOUT_MAX_ROWS = 10;
 const ADMIN_CLASSROOM_SEAT_LAYOUT_MIN_COLUMNS = 3;
@@ -1776,6 +1780,39 @@ const adminClassroomCoursePlanSchema = new mongoose.Schema(
     lateSubmissionEnabled: { type: Boolean, default: false },
     tasks: { type: [adminClassroomTaskSchema], default: () => [] },
     files: { type: [adminClassroomCourseFileSchema], default: () => [] },
+    teachingConfig: {
+      type: new mongoose.Schema(
+        {
+          pdfFiles: {
+            type: [
+              new mongoose.Schema(
+                {
+                  fileId: { type: String, default: "" },
+                  sortOrder: { type: Number, default: 0 },
+                  enabled: { type: Boolean, default: true },
+                },
+                { _id: false },
+              ),
+            ],
+            default: () => [],
+          },
+          defaultPdfFileId: { type: String, default: "" },
+          allowQuestions: { type: Boolean, default: true },
+          teacherNotes: { type: String, default: "" },
+          welcomeText: { type: String, default: "" },
+          updatedAt: { type: String, default: "" },
+        },
+        { _id: false },
+      ),
+      default: () => ({
+        pdfFiles: [],
+        defaultPdfFileId: "",
+        allowQuestions: true,
+        teacherNotes: "",
+        welcomeText: "",
+        updatedAt: "",
+      }),
+    },
     createdAt: { type: String, default: "" },
     updatedAt: { type: String, default: "" },
   },
@@ -1911,6 +1948,62 @@ const classroomHomeworkFileSchema = new mongoose.Schema(
 const ClassroomHomeworkFile =
   mongoose.models.ClassroomHomeworkFile ||
   mongoose.model("ClassroomHomeworkFile", classroomHomeworkFileSchema);
+const teachingSessionSchema = new mongoose.Schema(
+  {
+    sessionId: { type: String, required: true, unique: true, index: true },
+    lessonId: { type: String, default: "", index: true },
+    teacherScopeKey: { type: String, default: "", index: true },
+    className: { type: String, default: "", index: true },
+    status: { type: String, default: "idle", index: true },
+    activePdfFileId: { type: String, default: "" },
+    activePage: { type: Number, default: 1 },
+    pageCount: { type: Number, default: 0 },
+    startedAt: { type: String, default: "" },
+    endedAt: { type: String, default: "" },
+    lastCheckpoint: {
+      type: new mongoose.Schema(
+        {
+          pdfFileId: { type: String, default: "" },
+          page: { type: Number, default: 1 },
+          savedAt: { type: String, default: "" },
+        },
+        { _id: false },
+      ),
+      default: () => ({
+        pdfFileId: "",
+        page: 1,
+        savedAt: "",
+      }),
+    },
+  },
+  {
+    timestamps: true,
+    collection: "classroom_teaching_sessions",
+  },
+);
+const TeachingSession =
+  mongoose.models.TeachingSession ||
+  mongoose.model("TeachingSession", teachingSessionSchema);
+const classroomTeachingQuestionSchema = new mongoose.Schema(
+  {
+    questionId: { type: String, required: true, unique: true, index: true },
+    lessonId: { type: String, default: "", index: true },
+    sessionId: { type: String, default: "", index: true },
+    teacherScopeKey: { type: String, default: "", index: true },
+    studentUserId: { type: String, default: "", index: true },
+    studentUsername: { type: String, default: "" },
+    studentName: { type: String, default: "" },
+    content: { type: String, default: "" },
+    createdAt: { type: String, default: "" },
+  },
+  {
+    timestamps: true,
+    collection: "classroom_teaching_questions",
+  },
+);
+const ClassroomTeachingQuestion =
+  mongoose.models.ClassroomTeachingQuestion ||
+  mongoose.model("ClassroomTeachingQuestion", classroomTeachingQuestionSchema);
 function normalizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
 
@@ -9916,6 +10009,71 @@ function sanitizeAdminClassroomCourseFilesPayload(input) {
   return files;
 }
 
+function sanitizeAdminClassroomTeachingPdfRefPayload(input, index = 0) {
+  const source = input && typeof input === "object" ? input : {};
+  const fileId = sanitizeId(source.fileId || source.id, "");
+  if (!fileId) return null;
+  return {
+    fileId,
+    sortOrder: sanitizeRuntimeInteger(
+      source.sortOrder,
+      index,
+      0,
+      ADMIN_CLASSROOM_TEACHING_MAX_PDF_FILES,
+    ),
+    enabled: sanitizeRuntimeBoolean(source.enabled, true),
+  };
+}
+
+function sanitizeAdminClassroomTeachingPdfRefsPayload(input) {
+  const source = Array.isArray(input) ? input : [];
+  const refs = [];
+  const seenIds = new Set();
+  for (
+    let index = 0;
+    index < source.length &&
+    refs.length < ADMIN_CLASSROOM_TEACHING_MAX_PDF_FILES;
+    index += 1
+  ) {
+    const ref = sanitizeAdminClassroomTeachingPdfRefPayload(source[index], index);
+    if (!ref || seenIds.has(ref.fileId)) continue;
+    seenIds.add(ref.fileId);
+    refs.push(ref);
+  }
+  return refs.sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+function sanitizeAdminClassroomTeachingConfigPayload(input) {
+  const source = input && typeof input === "object" ? input : {};
+  return {
+    pdfFiles: sanitizeAdminClassroomTeachingPdfRefsPayload(source.pdfFiles),
+    defaultPdfFileId: sanitizeId(source.defaultPdfFileId, ""),
+    allowQuestions: sanitizeRuntimeBoolean(source.allowQuestions, true),
+    teacherNotes: sanitizeText(
+      source.teacherNotes,
+      "",
+      ADMIN_CLASSROOM_TEACHING_NOTES_MAX_LENGTH,
+    ),
+    welcomeText: sanitizeText(
+      source.welcomeText,
+      "",
+      ADMIN_CLASSROOM_TEACHING_WELCOME_TEXT_MAX_LENGTH,
+    ),
+    updatedAt: sanitizeIsoDate(source.updatedAt) || "",
+  };
+}
+
+function sanitizeStudentClassroomTeachingConfigPayload(input) {
+  const config = sanitizeAdminClassroomTeachingConfigPayload(input);
+  return {
+    pdfFiles: config.pdfFiles,
+    defaultPdfFileId: config.defaultPdfFileId,
+    allowQuestions: config.allowQuestions,
+    welcomeText: config.welcomeText,
+    updatedAt: config.updatedAt,
+  };
+}
+
 function normalizeAdminClassroomLessonDateTimeInput(value) {
   const iso = sanitizeIsoDate(value);
   if (iso) return iso;
@@ -10288,6 +10446,9 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
     lateSubmissionEnabled,
     tasks,
     files,
+    teachingConfig: sanitizeAdminClassroomTeachingConfigPayload(
+      source.teachingConfig,
+    ),
     createdAt: sanitizeIsoDate(source.createdAt) || "",
     updatedAt: sanitizeIsoDate(source.updatedAt) || "",
   };
@@ -10317,6 +10478,14 @@ function createClassroomHomeworkFileId() {
   return `homework-file-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("hex")}`;
 }
 
+function createClassroomTeachingSessionId() {
+  return `teaching-session-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("hex")}`;
+}
+
+function createClassroomTeachingQuestionId() {
+  return `teaching-question-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("hex")}`;
+}
+
 function normalizeAdminClassroomLessonFileDoc(doc) {
   return {
     id: sanitizeId(doc?.fileId || doc?.id, ""),
@@ -10331,6 +10500,51 @@ function normalizeAdminClassroomLessonFileDoc(doc) {
       TEACHER_CLASSROOM_FILE_MAX_FILE_SIZE_BYTES,
     ),
     uploadedAt: sanitizeIsoDate(doc?.uploadedAt) || "",
+  };
+}
+
+function normalizeClassroomTeachingSessionDoc(doc) {
+  const source = doc && typeof doc === "object" ? doc : {};
+  return {
+    sessionId: sanitizeId(source.sessionId, ""),
+    lessonId: sanitizeId(source.lessonId, ""),
+    teacherScopeKey: sanitizeTeacherScopeKey(source.teacherScopeKey),
+    className: sanitizeAdminClassroomClassName(
+      source.className,
+      ADMIN_CLASSROOM_DEFAULT_CLASS_NAME,
+    ),
+    status: ["idle", "live", "ended"].includes(String(source.status || ""))
+      ? String(source.status)
+      : "idle",
+    activePdfFileId: sanitizeId(source.activePdfFileId, ""),
+    activePage: sanitizeRuntimeInteger(source.activePage, 1, 1, 100000),
+    pageCount: sanitizeRuntimeInteger(source.pageCount, 0, 0, 100000),
+    startedAt: sanitizeIsoDate(source.startedAt) || "",
+    endedAt: sanitizeIsoDate(source.endedAt) || "",
+    lastCheckpoint: {
+      pdfFileId: sanitizeId(source.lastCheckpoint?.pdfFileId, ""),
+      page: sanitizeRuntimeInteger(source.lastCheckpoint?.page, 1, 1, 100000),
+      savedAt: sanitizeIsoDate(source.lastCheckpoint?.savedAt) || "",
+    },
+  };
+}
+
+function normalizeClassroomTeachingQuestionDoc(doc) {
+  const source = doc && typeof doc === "object" ? doc : {};
+  return {
+    questionId: sanitizeId(source.questionId, ""),
+    lessonId: sanitizeId(source.lessonId, ""),
+    sessionId: sanitizeId(source.sessionId, ""),
+    teacherScopeKey: sanitizeTeacherScopeKey(source.teacherScopeKey),
+    studentUserId: sanitizeId(source.studentUserId, ""),
+    studentUsername: sanitizeText(source.studentUsername, "", 80),
+    studentName: sanitizeText(source.studentName, "", 80),
+    content: sanitizeText(
+      source.content,
+      "",
+      ADMIN_CLASSROOM_TEACHING_QUESTION_MAX_LENGTH,
+    ),
+    createdAt: sanitizeIsoDate(source.createdAt) || "",
   };
 }
 
@@ -17971,6 +18185,10 @@ export {
   ADMIN_CLASSROOM_COURSE_TASK_MAX_ITEMS,
   ADMIN_CLASSROOM_COURSE_FILE_MAX_ITEMS,
   ADMIN_CLASSROOM_COURSE_FILE_UPLOAD_MAX_FILES,
+  ADMIN_CLASSROOM_TEACHING_MAX_PDF_FILES,
+  ADMIN_CLASSROOM_TEACHING_NOTES_MAX_LENGTH,
+  ADMIN_CLASSROOM_TEACHING_WELCOME_TEXT_MAX_LENGTH,
+  ADMIN_CLASSROOM_TEACHING_QUESTION_MAX_LENGTH,
   VOLCENGINE_IMAGE_GENERATION_MODEL_ID_45,
   VOLCENGINE_IMAGE_GENERATION_MODEL_ID_50,
   DEFAULT_VOLCENGINE_IMAGE_GENERATION_MODEL,
@@ -18103,6 +18321,10 @@ export {
   AdminClassroomLessonFile,
   classroomHomeworkFileSchema,
   ClassroomHomeworkFile,
+  teachingSessionSchema,
+  TeachingSession,
+  classroomTeachingQuestionSchema,
+  ClassroomTeachingQuestion,
   getDefaultRuntimeConfigByAgent,
   createDefaultAgentRuntimeConfigMap,
   normalizeMessages,
@@ -18298,6 +18520,10 @@ export {
   sanitizeAdminClassroomTaskPayload,
   sanitizeAdminClassroomCourseFilePayload,
   sanitizeAdminClassroomCourseFilesPayload,
+  sanitizeAdminClassroomTeachingPdfRefPayload,
+  sanitizeAdminClassroomTeachingPdfRefsPayload,
+  sanitizeAdminClassroomTeachingConfigPayload,
+  sanitizeStudentClassroomTeachingConfigPayload,
   normalizeAdminClassroomLessonDateTimeInput,
   parseAdminClassroomLegacyCourseTimeRange,
   buildAdminClassroomCourseTimeText,
@@ -18309,8 +18535,12 @@ export {
   sanitizeAdminClassroomSeatLayoutsByClassPayload,
   createAdminClassroomLessonFileId,
   createClassroomHomeworkFileId,
+  createClassroomTeachingSessionId,
+  createClassroomTeachingQuestionId,
   normalizeAdminClassroomLessonFileDoc,
   normalizeClassroomHomeworkFileDoc,
+  normalizeClassroomTeachingSessionDoc,
+  normalizeClassroomTeachingQuestionDoc,
   repairAdminClassroomCoursePlansFileMetadata,
   compareClassroomRosterStudent,
   iterateAdminClassroomTaskFiles,

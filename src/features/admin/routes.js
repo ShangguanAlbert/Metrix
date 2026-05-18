@@ -3,6 +3,7 @@ import AdminClassroomSettingsPage from "./pages/AdminClassroomSettingsPage.jsx";
 import AdminOnlineUsersPage from "./pages/AdminOnlineUsersPage.jsx";
 import AdminSettingsPage from "./pages/AdminSettingsPage.jsx";
 import TeacherHomePage from "./pages/TeacherHomePage.jsx";
+import TeacherTeachingSessionPage from "../classroom/pages/TeacherTeachingSessionPage.jsx";
 
 export const adminRoutes = [
   {
@@ -29,5 +30,10 @@ export const adminRoutes = [
     path: "/admin/agent-lab",
     auth: "admin",
     redirectTo: ({ activeSlot }) => buildAdminHomeRedirect(activeSlot),
+  },
+  {
+    path: "/admin/classroom/teaching/:lessonId",
+    component: TeacherTeachingSessionPage,
+    auth: "admin",
   },
 ];

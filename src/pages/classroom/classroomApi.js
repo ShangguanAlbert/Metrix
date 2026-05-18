@@ -38,6 +38,34 @@ export function fetchClassroomTaskSettings() {
   return request("/api/classroom/tasks/settings");
 }
 
+export function fetchClassroomTeachingSessionSnapshot(lessonId) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/classroom/teaching-session/${encodeURIComponent(safeLessonId)}`,
+  );
+}
+
+export function raiseClassroomTeachingHand(lessonId) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/classroom/teaching-session/${encodeURIComponent(safeLessonId)}/raise-hand`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function createClassroomTeachingQuestion(lessonId, content) {
+  const safeLessonId = String(lessonId || "").trim();
+  return request(
+    `/api/classroom/teaching-session/${encodeURIComponent(safeLessonId)}/questions`,
+    {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    },
+  );
+}
+
 export function updateClassroomSeatAssignment(seatIndex) {
   const hasSeatIndex = seatIndex !== null && seatIndex !== undefined && String(seatIndex).trim() !== "";
   const payload = hasSeatIndex ? { seatIndex: Number(seatIndex) } : { seatIndex: null };
