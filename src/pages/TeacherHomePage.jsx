@@ -115,6 +115,7 @@ import {
   setUserToken,
   withAuthSlot,
 } from "../app/authStorage.js";
+import { withAppBasePath } from "../app/basePath.js";
 import { appendReturnUrlParam, buildAbsoluteAppUrl } from "../app/returnNavigation.js";
 import "../styles/teacher-home.css";
 
@@ -1732,7 +1733,9 @@ export default function TeacherHomePage() {
     const currentSearch = String(location.search || "").replace(/^\?/, "");
     const nextSearch = nextParams.toString();
     if (nextSearch === currentSearch) return;
-    const nextUrl = `${location.pathname}${nextSearch ? `?${nextSearch}` : ""}${location.hash || ""}`;
+    const nextUrl = withAppBasePath(
+      `${location.pathname}${nextSearch ? `?${nextSearch}` : ""}${location.hash || ""}`,
+    );
     window.history.replaceState(window.history.state, "", nextUrl);
   }, [
     activePanel,

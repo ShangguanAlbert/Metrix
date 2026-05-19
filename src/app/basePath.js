@@ -77,15 +77,25 @@ export function stripAppBasePath(value = "") {
   return text;
 }
 
-export function withAppBasePath(value = "") {
+export function withBasePath(value = "", basePath = APP_BASE_PATH) {
+  const normalizedBasePath = normalizeBasePath(basePath || "/");
+  const normalizedBasePrefix =
+    normalizedBasePath === "/" ? "" : normalizedBasePath.slice(0, -1);
   const text = String(value || "").trim();
-  if (!text || APP_BASE_PATH === "/") return text;
+  if (!text || normalizedBasePath === "/") return text;
   if (isExternalUrl(text)) return text;
   if (!text.startsWith("/")) return text;
-  if (text === APP_BASE_PREFIX || text.startsWith(`${APP_BASE_PREFIX}/`)) {
+  if (
+    text === normalizedBasePrefix ||
+    text.startsWith(`${normalizedBasePrefix}/`)
+  ) {
     return text;
   }
-  return `${APP_BASE_PREFIX}${text}`;
+  return `${normalizedBasePrefix}${text}`;
+}
+
+export function withAppBasePath(value = "") {
+  return withBasePath(value, APP_BASE_PATH);
 }
 
 export function resolveWebSocketUrl(path = "") {
