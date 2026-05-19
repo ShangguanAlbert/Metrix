@@ -82,6 +82,8 @@ const app = express();
 const groupChatWsRoomSockets = new Map();
 const groupChatWsMetaBySocket = new Map();
 const groupChatWsOnlineCountsByRoom = new Map();
+const teachingSessionWsLessonSockets = new Map();
+const teachingSessionWsMetaBySocket = new Map();
 const userOnlinePresenceByUserId = new Map();
 const chatPreparedAttachmentCache = new Map();
 const chatStagedAttachmentCache = new Map();
@@ -131,6 +133,14 @@ const ADMIN_CLASSROOM_TEACHING_MAX_PDF_FILES = 20;
 const ADMIN_CLASSROOM_TEACHING_NOTES_MAX_LENGTH = 12000;
 const ADMIN_CLASSROOM_TEACHING_WELCOME_TEXT_MAX_LENGTH = 200;
 const ADMIN_CLASSROOM_TEACHING_QUESTION_MAX_LENGTH = 300;
+const TEACHING_SESSION_WS_PATH = "/ws/teaching-session";
+const TEACHING_SESSION_WS_AUTH_TIMEOUT_MS = sanitizeRuntimeInteger(
+  process.env.TEACHING_SESSION_WS_AUTH_TIMEOUT_MS,
+  12000,
+  3000,
+  30000,
+);
+const TEACHING_SESSION_WS_MAX_PAYLOAD_BYTES = 64 * 1024;
 const ADMIN_CLASSROOM_SEAT_LAYOUT_MIN_ROWS = 3;
 const ADMIN_CLASSROOM_SEAT_LAYOUT_MAX_ROWS = 10;
 const ADMIN_CLASSROOM_SEAT_LAYOUT_MIN_COLUMNS = 3;
@@ -10706,6 +10716,27 @@ function findAdminClassroomLessonByFileId(plans, fileId) {
   return null;
 }
 
+function resolveAdminClassroomLessonClassName(lesson) {
+  return sanitizeAdminClassroomClassName(
+    lesson?.className,
+    ADMIN_CLASSROOM_DEFAULT_CLASS_NAME,
+  );
+}
+
+function findAdminClassroomLessonById(plans, lessonId) {
+  const safeLessonId = sanitizeId(lessonId, "");
+  if (!safeLessonId) return null;
+  const source = Array.isArray(plans) ? plans : [];
+  const lessonIndex = source.findIndex(
+    (lesson) => sanitizeId(lesson?.id, "") === safeLessonId,
+  );
+  if (lessonIndex < 0) return null;
+  return {
+    lesson: source[lessonIndex],
+    lessonIndex,
+  };
+}
+
 function normalizeAdminConfigDoc(doc) {
   return {
     prompts: sanitizeAgentPromptPayload(doc?.agentSystemPrompts),
@@ -16371,6 +16402,371 @@ function isMongoObjectIdLike(value) {
   return mongoose.Types.ObjectId.isValid(String(value || ""));
 }
 
+function initTeachingSessionWebSocketServer(server) {
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: TEACHING_SESSION_WS_MAX_PAYLOAD_BYTES,
+  });
+  const acceptedPaths = new Set(
+    resolveBasePathAwareWebSocketPaths(TEACHING_SESSION_WS_PATH, APP_BASE_PATH),
+  );
+
+  server.on("upgrade", (request, socket, head) => {
+    let pathname = "";
+    try {
+      pathname = new URL(request.url || "/", "http://localhost").pathname || "/";
+    } catch {
+      pathname = String(request.url || "").trim().split("?")[0] || "/";
+    }
+    if (!acceptedPaths.has(pathname)) return;
+
+    wss.handleUpgrade(request, socket, head, (upgradedSocket) => {
+      wss.emit("connection", upgradedSocket, request);
+    });
+  });
+
+  wss.on("connection", (socket) => {
+    const meta = {
+      authed: false,
+      authTimer: 0,
+      role: "",
+      userId: "",
+      userName: "",
+      teacherScopeKey: "",
+      className: "",
+      joinedLessonIds: new Set(),
+    };
+    teachingSessionWsMetaBySocket.set(socket, meta);
+
+    meta.authTimer = setTimeout(() => {
+      sendTeachingSessionWsError(socket, "连接超时，请先完成鉴权。", "auth_timeout");
+      closeTeachingSessionSocket(socket, 4001, "auth_timeout");
+    }, TEACHING_SESSION_WS_AUTH_TIMEOUT_MS);
+
+    socket.on("message", (rawData) => {
+      void handleTeachingSessionWsMessage(socket, rawData);
+    });
+
+    socket.on("close", () => {
+      const currentMeta = teachingSessionWsMetaBySocket.get(socket);
+      if (currentMeta?.authTimer) {
+        clearTimeout(currentMeta.authTimer);
+      }
+      detachSocketFromAllTeachingLessons(socket);
+      teachingSessionWsMetaBySocket.delete(socket);
+    });
+  });
+}
+
+async function handleTeachingSessionWsMessage(socket, rawData) {
+  let payload = null;
+  try {
+    payload = JSON.parse(String(rawData || ""));
+  } catch {
+    sendTeachingSessionWsError(socket, "消息格式错误，必须为 JSON。", "bad_payload");
+    return;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    sendTeachingSessionWsError(socket, "消息格式错误。", "bad_payload");
+    return;
+  }
+
+  const type = String(payload?.type || "").trim().toLowerCase();
+  if (!type) {
+    sendTeachingSessionWsError(socket, "缺少消息类型。", "missing_type");
+    return;
+  }
+
+  try {
+    if (type === "auth") {
+      await handleTeachingSessionWsAuth(socket, payload);
+      return;
+    }
+    if (type === "join_lesson") {
+      await handleTeachingSessionWsJoinLesson(socket, payload);
+      return;
+    }
+    if (type === "leave_lesson") {
+      handleTeachingSessionWsLeaveLesson(socket, payload);
+      return;
+    }
+    if (type === "ping") {
+      sendTeachingSessionWsPayload(socket, {
+        type: "pong",
+        at: new Date().toISOString(),
+      });
+      return;
+    }
+    sendTeachingSessionWsError(socket, "不支持的消息类型。", "unsupported_type");
+  } catch (error) {
+    sendTeachingSessionWsError(
+      socket,
+      error?.message || "课堂会话推送失败，请稍后重试。",
+      "teaching_ws_error",
+    );
+  }
+}
+
+async function handleTeachingSessionWsAuth(socket, payload) {
+  const meta = teachingSessionWsMetaBySocket.get(socket);
+  if (!meta) return;
+
+  const token = String(payload?.token || "").trim();
+  const verified = verifyToken(token);
+  if (!verified || !verified.uid) {
+    sendTeachingSessionWsError(
+      socket,
+      "登录状态无效或已过期，请重新登录。",
+      "unauthorized",
+    );
+    closeTeachingSessionSocket(socket, 4003, "unauthorized");
+    return;
+  }
+
+  if (verified.scope === "admin" && verified.role === "admin") {
+    const admin = await AuthUser.findById(verified.uid).lean();
+    if (!isFixedAdminUser(admin)) {
+      sendTeachingSessionWsError(socket, "仅管理员可进入授课推送。", "admin_only");
+      closeTeachingSessionSocket(socket, 4003, "admin_only");
+      return;
+    }
+    meta.authed = true;
+    meta.role = "admin";
+    meta.userId = sanitizeId(admin?._id, "");
+    meta.userName = sanitizeText(admin?.profile?.name || admin?.username, "", 80);
+    if (meta.authTimer) {
+      clearTimeout(meta.authTimer);
+      meta.authTimer = 0;
+    }
+    sendTeachingSessionWsPayload(socket, {
+      type: "authed",
+      role: meta.role,
+      user: {
+        id: meta.userId,
+        name: meta.userName,
+      },
+    });
+    return;
+  }
+
+  if (verified.scope !== "chat") {
+    sendTeachingSessionWsError(
+      socket,
+      "登录状态无效或已过期，请重新登录。",
+      "unauthorized",
+    );
+    closeTeachingSessionSocket(socket, 4003, "unauthorized");
+    return;
+  }
+
+  const user = await AuthUser.findById(verified.uid).lean();
+  if (!user) {
+    sendTeachingSessionWsError(socket, "账号不存在，请重新登录。", "account_not_found");
+    closeTeachingSessionSocket(socket, 4003, "account_not_found");
+    return;
+  }
+
+  const nextUserId = sanitizeId(user?._id, "");
+  if (!nextUserId) {
+    sendTeachingSessionWsError(socket, "账号状态异常，请重新登录。", "invalid_user");
+    closeTeachingSessionSocket(socket, 4003, "invalid_user");
+    return;
+  }
+
+  const safeProfile = sanitizeUserProfile(user?.profile);
+  meta.authed = true;
+  meta.role = "student";
+  meta.userId = nextUserId;
+  meta.userName = sanitizeText(
+    safeProfile.name || user?.username,
+    "",
+    80,
+  );
+  meta.teacherScopeKey = sanitizeTeacherScopeKey(verified.tkey);
+  meta.className = sanitizeAdminClassroomClassName(
+    safeProfile.className,
+    ADMIN_CLASSROOM_DEFAULT_CLASS_NAME,
+  );
+  markUserOnlinePresence(user);
+  if (meta.authTimer) {
+    clearTimeout(meta.authTimer);
+    meta.authTimer = 0;
+  }
+
+  sendTeachingSessionWsPayload(socket, {
+    type: "authed",
+    role: meta.role,
+    user: {
+      id: meta.userId,
+      name: meta.userName,
+      className: meta.className,
+    },
+  });
+}
+
+async function handleTeachingSessionWsJoinLesson(socket, payload) {
+  const meta = teachingSessionWsMetaBySocket.get(socket);
+  if (!meta?.authed || !meta.userId) {
+    sendTeachingSessionWsError(socket, "尚未鉴权，无法加入课堂。", "not_authed");
+    return;
+  }
+
+  const lessonId = sanitizeId(payload?.lessonId, "");
+  if (!lessonId) {
+    sendTeachingSessionWsError(socket, "课时标识无效。", "invalid_lesson_id");
+    return;
+  }
+
+  if (meta.role !== "admin") {
+    if (meta.teacherScopeKey !== SHANGGUAN_FUZE_TEACHER_SCOPE_KEY) {
+      sendTeachingSessionWsError(socket, "当前账号未开通课堂推送。", "teacher_scope_forbidden");
+      return;
+    }
+
+    const config = await readAdminAgentConfig();
+    const lessonMatch = findAdminClassroomLessonById(
+      config.teacherCoursePlans,
+      lessonId,
+    );
+    if (!lessonMatch) {
+      sendTeachingSessionWsError(socket, "未找到对应课时。", "lesson_not_found");
+      return;
+    }
+
+    const lessonClassName = resolveAdminClassroomLessonClassName(lessonMatch.lesson);
+    if (meta.className && lessonClassName !== meta.className) {
+      sendTeachingSessionWsError(
+        socket,
+        "你不能订阅其他班级的授课会话。",
+        "classroom_forbidden",
+      );
+      return;
+    }
+  }
+
+  attachSocketToTeachingLesson(socket, lessonId);
+  sendTeachingSessionWsPayload(socket, {
+    type: "joined",
+    lessonId,
+  });
+}
+
+function handleTeachingSessionWsLeaveLesson(socket, payload) {
+  detachSocketFromTeachingLesson(socket, payload?.lessonId);
+}
+
+function sendTeachingSessionWsPayload(socket, payload) {
+  if (!socket || socket.readyState !== 1) return false;
+  try {
+    socket.send(JSON.stringify(payload || {}));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sendTeachingSessionWsError(socket, message, code = "ws_error") {
+  sendTeachingSessionWsPayload(socket, {
+    type: "error",
+    code,
+    message: sanitizeText(message, "课堂推送错误。", 240),
+  });
+}
+
+function closeTeachingSessionSocket(socket, code = 1008, reason = "") {
+  if (!socket || socket.readyState === 3) return;
+  try {
+    socket.close(code, sanitizeText(reason, "", 120));
+  } catch {
+    // ignore
+  }
+}
+
+function attachSocketToTeachingLesson(socket, lessonId) {
+  const safeLessonId = sanitizeId(lessonId, "");
+  if (!safeLessonId) return;
+  const meta = teachingSessionWsMetaBySocket.get(socket);
+  if (!meta) return;
+
+  let sockets = teachingSessionWsLessonSockets.get(safeLessonId);
+  if (!sockets) {
+    sockets = new Set();
+    teachingSessionWsLessonSockets.set(safeLessonId, sockets);
+  }
+  sockets.add(socket);
+  meta.joinedLessonIds.add(safeLessonId);
+}
+
+function detachSocketFromTeachingLesson(socket, lessonId) {
+  const safeLessonId = sanitizeId(lessonId, "");
+  if (!safeLessonId) return;
+  const meta = teachingSessionWsMetaBySocket.get(socket);
+  if (meta?.joinedLessonIds) {
+    meta.joinedLessonIds.delete(safeLessonId);
+  }
+
+  const sockets = teachingSessionWsLessonSockets.get(safeLessonId);
+  if (sockets) {
+    sockets.delete(socket);
+    if (sockets.size === 0) {
+      teachingSessionWsLessonSockets.delete(safeLessonId);
+    }
+  }
+}
+
+function detachSocketFromAllTeachingLessons(socket) {
+  const meta = teachingSessionWsMetaBySocket.get(socket);
+  const lessonIds = meta?.joinedLessonIds ? Array.from(meta.joinedLessonIds) : [];
+  lessonIds.forEach((lessonId) => {
+    detachSocketFromTeachingLesson(socket, lessonId);
+  });
+}
+
+function broadcastTeachingSessionPayload(lessonId, payload = {}) {
+  const safeLessonId = sanitizeId(lessonId, "");
+  if (!safeLessonId) return;
+  const sockets = teachingSessionWsLessonSockets.get(safeLessonId);
+  if (!sockets || sockets.size === 0) return;
+
+  const data = JSON.stringify({
+    lessonId: safeLessonId,
+    ...payload,
+  });
+  Array.from(sockets).forEach((socket) => {
+    if (!socket || socket.readyState !== 1) {
+      detachSocketFromTeachingLesson(socket, safeLessonId);
+      return;
+    }
+    try {
+      socket.send(data);
+    } catch {
+      detachSocketFromTeachingLesson(socket, safeLessonId);
+    }
+  });
+}
+
+function broadcastTeachingSessionUpdated(lessonId, session, mode = "readonly") {
+  broadcastTeachingSessionPayload(lessonId, {
+    type: "session_updated",
+    session: normalizeClassroomTeachingSessionDoc(session),
+    mode: String(mode || "").trim().toLowerCase() === "live" ? "live" : "readonly",
+  });
+}
+
+function broadcastTeachingRaisedHandsUpdated(lessonId, raisedHands = []) {
+  broadcastTeachingSessionPayload(lessonId, {
+    type: "raised_hands_updated",
+    raisedHands: Array.isArray(raisedHands) ? raisedHands : [],
+  });
+}
+
+function broadcastTeachingQuestionCreated(lessonId, question) {
+  broadcastTeachingSessionPayload(lessonId, {
+    type: "question_created",
+    question: normalizeClassroomTeachingQuestionDoc(question),
+  });
+}
+
 function initGroupChatWebSocketServer(server) {
   const wss = new WebSocketServer({
     noServer: true,
@@ -18149,6 +18545,8 @@ export {
   groupChatWsRoomSockets,
   groupChatWsMetaBySocket,
   groupChatWsOnlineCountsByRoom,
+  teachingSessionWsLessonSockets,
+  teachingSessionWsMetaBySocket,
   userOnlinePresenceByUserId,
   chatPreparedAttachmentCache,
   chatStagedAttachmentCache,
@@ -18189,6 +18587,9 @@ export {
   ADMIN_CLASSROOM_TEACHING_NOTES_MAX_LENGTH,
   ADMIN_CLASSROOM_TEACHING_WELCOME_TEXT_MAX_LENGTH,
   ADMIN_CLASSROOM_TEACHING_QUESTION_MAX_LENGTH,
+  TEACHING_SESSION_WS_PATH,
+  TEACHING_SESSION_WS_AUTH_TIMEOUT_MS,
+  TEACHING_SESSION_WS_MAX_PAYLOAD_BYTES,
   VOLCENGINE_IMAGE_GENERATION_MODEL_ID_45,
   VOLCENGINE_IMAGE_GENERATION_MODEL_ID_50,
   DEFAULT_VOLCENGINE_IMAGE_GENERATION_MODEL,
@@ -18546,7 +18947,9 @@ export {
   iterateAdminClassroomTaskFiles,
   collectAdminClassroomFileIdsFromLesson,
   findAdminClassroomLessonTaskById,
+  findAdminClassroomLessonById,
   findAdminClassroomLessonByFileId,
+  resolveAdminClassroomLessonClassName,
   normalizeAdminConfigDoc,
   sanitizeAgentPromptPayload,
   resolveAgentSystemPrompts,
@@ -18656,6 +19059,10 @@ export {
   normalizeGroupChatReadStates,
   getGroupChatOnlineUserIdsByRoom,
   getGroupChatRoomSocketCount,
+  initTeachingSessionWebSocketServer,
+  broadcastTeachingSessionUpdated,
+  broadcastTeachingRaisedHandsUpdated,
+  broadcastTeachingQuestionCreated,
   normalizeGroupChatRoomDoc,
   isGroupChatMemberMuted,
   normalizeGroupChatFilesApiInputType,

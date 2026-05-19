@@ -82,6 +82,7 @@ async function startServer() {
 
   const server = http.createServer(app);
   groupChatRealtimeHub.initWebSocketServer(server);
+  deps.initTeachingSessionWebSocketServer(server);
   const unsubscribeGroupChatAiEvents = subscribeGroupChatAiEvents({
     env: process.env,
     logger: console,
@@ -101,6 +102,9 @@ async function startServer() {
     console.log(`API server listening on http://localhost:${deps.port}`);
     console.log(
       `Group chat websocket listening on ws://localhost:${deps.port}${deps.GROUP_CHAT_WS_PATH}`,
+    );
+    console.log(
+      `Teaching session websocket listening on ws://localhost:${deps.port}${deps.TEACHING_SESSION_WS_PATH}`,
     );
     console.log(`Configured app base path: ${APP_BASE_PATH}`);
   });

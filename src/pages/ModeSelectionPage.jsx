@@ -4,6 +4,7 @@ import {
   BookOpenCheck,
   Download,
   ExternalLink,
+  FileText,
   Image,
   LayoutGrid,
   Lock,
@@ -43,6 +44,7 @@ import {
 } from "./classroom/classroomApi.js";
 import { analyzeHomeworkFileSelection } from "../features/classroom/homeworkUploadValidation.js";
 import { getStudentHomeworkHistoryLessons } from "../features/classroom/studentHomeworkHistory.js";
+import StudentTeachingPanel from "../features/classroom/components/StudentTeachingPanel.jsx";
 import "../styles/teacher-home.css";
 import "../styles/mode-selection.css";
 import "../styles/student-home.css";
@@ -921,6 +923,13 @@ export default function ModeSelectionPage() {
       hint: "按节次查看教师发布的课堂任务",
     },
     {
+      key: "teaching-session",
+      label: "授课阅读",
+      icon: FileText,
+      hint: "阅读教师授课 PDF，并在课堂中弱同步跟随",
+      disabled: true,
+    },
+    {
       key: "history-homework",
       label: "历史作业",
       icon: Download,
@@ -1196,6 +1205,7 @@ export default function ModeSelectionPage() {
                   key={item.key}
                   type="button"
                   className={`teacher-home-nav-item${activePanel === item.key ? " active" : ""}`}
+                  disabled={!!item.disabled}
                   onClick={() => {
                     setActivePanel(item.key);
                     if (item.key === "workshop") {
@@ -1638,6 +1648,8 @@ export default function ModeSelectionPage() {
                 </div>
               ) : null}
             </div>
+          ) : activePanel === "teaching-session" ? (
+            <StudentTeachingPanel lessons={sortedLessons} />
           ) : activePanel === "history-homework" ? (
             <div className="teacher-panel-stack student-panel-stack">
               <header className="teacher-panel-head">

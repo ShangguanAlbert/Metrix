@@ -460,10 +460,15 @@ export function deleteAdminClassroomTaskFile(
   );
 }
 
-export async function downloadAdminClassroomLessonFile(adminToken, fileId) {
+export async function downloadAdminClassroomLessonFile(
+  adminToken,
+  fileId,
+  { inline = false } = {},
+) {
   const safeFileId = String(fileId || "").trim();
+  const query = inline ? "?inline=1" : "";
   const resp = await fetch(
-    `/api/auth/admin/classroom-plans/files/${encodeURIComponent(safeFileId)}/download`,
+    `/api/auth/admin/classroom-plans/files/${encodeURIComponent(safeFileId)}/download${query}`,
     {
       method: "GET",
       headers: authHeader(adminToken),

@@ -434,6 +434,9 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     normalizeClassroomHomeworkFileDoc,
     normalizeClassroomTeachingSessionDoc,
     normalizeClassroomTeachingQuestionDoc,
+    broadcastTeachingSessionUpdated,
+    broadcastTeachingRaisedHandsUpdated,
+    broadcastTeachingQuestionCreated,
     compareClassroomRosterStudent,
     iterateAdminClassroomTaskFiles,
     collectAdminClassroomFileIdsFromLesson,
@@ -712,6 +715,18 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     createCrc32Table,
     toPublicUser,
   } = deps;
+  const emitTeachingSessionUpdated =
+    typeof broadcastTeachingSessionUpdated === "function"
+      ? broadcastTeachingSessionUpdated
+      : () => {};
+  const emitTeachingRaisedHandsUpdated =
+    typeof broadcastTeachingRaisedHandsUpdated === "function"
+      ? broadcastTeachingRaisedHandsUpdated
+      : () => {};
+  const emitTeachingQuestionCreated =
+    typeof broadcastTeachingQuestionCreated === "function"
+      ? broadcastTeachingQuestionCreated
+      : () => {};
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -857,6 +872,31 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     if (!safeLessonId) return null;
     const doc = await TeachingSession.findOne({ lessonId: safeLessonId }).lean();
     return doc ? normalizeClassroomTeachingSessionDoc(doc) : null;
+  }
+
+  async function readTeachingSessionInteractions(lessonId, sessionId) {
+    const safeLessonId = sanitizeId(lessonId, "");
+    const safeSessionId = sanitizeId(sessionId, "");
+    const questionDocs = await ClassroomTeachingQuestion.find({
+      lessonId: safeLessonId,
+      sessionId: safeSessionId,
+    })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+    const sessionKey = buildTeachingRaisedHandSessionKey(
+      safeLessonId,
+      safeSessionId,
+    );
+    const raisedHands = Array.isArray(teachingRaisedHandsBySessionKey.get(sessionKey))
+      ? teachingRaisedHandsBySessionKey.get(sessionKey)
+      : [];
+    return {
+      raisedHands,
+      questions: questionDocs.map((doc) =>
+        normalizeClassroomTeachingQuestionDoc(doc),
+      ),
+    };
   }
 
   function buildTeachingRaisedHandSessionKey(lessonId, sessionId) {
@@ -1342,20 +1382,10 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       const teachingConfig = buildStudentLessonTeachingConfigResponse(
         lessonMatch.lesson,
       );
-      const questionDocs = await ClassroomTeachingQuestion.find({
-        lessonId,
-        sessionId: sanitizeId(session?.sessionId, ""),
-      })
-        .sort({ createdAt: -1 })
-        .limit(20)
-        .lean();
-      const sessionKey = buildTeachingRaisedHandSessionKey(
+      const interactions = await readTeachingSessionInteractions(
         lessonId,
         session?.sessionId,
       );
-      const raisedHands = Array.isArray(teachingRaisedHandsBySessionKey.get(sessionKey))
-        ? teachingRaisedHandsBySessionKey.get(sessionKey)
-        : [];
 
       res.json({
         ok: true,
@@ -1368,10 +1398,8 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           teachingConfig,
         },
         session,
-        raisedHands,
-        questions: questionDocs.map((doc) =>
-          normalizeClassroomTeachingQuestionDoc(doc),
-        ),
+        raisedHands: interactions.raisedHands,
+        questions: interactions.questions,
         mode: session?.status === "live" ? "live" : "readonly",
       });
     },
@@ -1412,6 +1440,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         ...previous.filter((item) => sanitizeId(item?.studentUserId, "") !== studentUserId),
       ].slice(0, 50);
       teachingRaisedHandsBySessionKey.set(sessionKey, nextRaisedHands);
+      emitTeachingRaisedHandsUpdated(lessonId, nextRaisedHands);
       res.json({
         ok: true,
         lessonId,
@@ -1472,6 +1501,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         content,
         createdAt: new Date().toISOString(),
       });
+      emitTeachingQuestionCreated(lessonId, questionDoc);
       res.json({
         ok: true,
         lessonId,
@@ -2723,10 +2753,16 @@ export function registerAuthUserClassroomRoutes(app, deps) {
 
       const previousSession = await readTeachingSessionByLessonId(lessonId);
       if (previousSession?.status === "live") {
+        const interactions = await readTeachingSessionInteractions(
+          lessonId,
+          previousSession.sessionId,
+        );
         res.json({
           ok: true,
           lessonId,
           session: previousSession,
+          raisedHands: interactions.raisedHands,
+          questions: interactions.questions,
         });
         return;
       }
@@ -2759,10 +2795,18 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           setDefaultsOnInsert: true,
         },
       ).lean();
+      const normalizedSession = normalizeClassroomTeachingSessionDoc(sessionDoc);
+      const interactions = await readTeachingSessionInteractions(
+        lessonId,
+        normalizedSession.sessionId,
+      );
+      emitTeachingSessionUpdated(lessonId, sessionDoc, "live");
       res.json({
         ok: true,
         lessonId,
-        session: normalizeClassroomTeachingSessionDoc(sessionDoc),
+        session: normalizedSession,
+        raisedHands: interactions.raisedHands,
+        questions: interactions.questions,
       });
     },
   );
@@ -2800,6 +2844,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           new: true,
         },
       ).lean();
+      emitTeachingSessionUpdated(lessonId, sessionDoc, "readonly");
       res.json({
         ok: true,
         lessonId,
@@ -2853,6 +2898,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           setDefaultsOnInsert: true,
         },
       ).lean();
+      emitTeachingSessionUpdated(lessonId, sessionDoc, "live");
       res.json({
         ok: true,
         lessonId,
@@ -2887,6 +2933,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           new: true,
         },
       ).lean();
+      emitTeachingSessionUpdated(lessonId, sessionDoc, "live");
       res.json({
         ok: true,
         lessonId,
@@ -2933,6 +2980,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           new: true,
         },
       ).lean();
+      emitTeachingSessionUpdated(lessonId, sessionDoc, "live");
       res.json({
         ok: true,
         lessonId,
@@ -4082,6 +4130,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     requireAdminAuth,
     async (req, res) => {
       const fileId = sanitizeId(req.params.fileId, "");
+      const forceInline = String(req.query?.inline || "").trim() === "1";
       if (!fileId) {
         res.status(400).json({ error: "文件标识无效。" });
         return;
@@ -4122,6 +4171,29 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           fileName,
         });
         if (downloadUrl) {
+          if (forceInline) {
+            const response = await fetch(downloadUrl, { method: "GET" });
+            if (!response.ok) {
+              res
+                .status(502)
+                .json({ error: `远端${fileLabel}拉取失败（${response.status}）。` });
+              return;
+            }
+            const fileArrayBuffer = await response.arrayBuffer();
+            const fileBuffer = Buffer.from(fileArrayBuffer);
+            if (fileBuffer.length === 0) {
+              res.status(404).json({ error: "文件数据不存在，请重新上传。" });
+              return;
+            }
+            res.setHeader("Content-Type", mimeType);
+            res.setHeader(
+              "Content-Disposition",
+              buildAttachmentContentDisposition(fileName),
+            );
+            res.setHeader("Content-Length", String(fileBuffer.length));
+            res.send(fileBuffer);
+            return;
+          }
           res.json({
             ok: true,
             downloadUrl,
@@ -4149,6 +4221,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
 
   app.get("/api/classroom/lessons/files/:fileId/download", requireChatAuth, async (req, res) => {
     const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
+    const forceInline = String(req.query?.inline || "").trim() === "1";
     if (teacherScopeKey !== SHANGGUAN_FUZE_TEACHER_SCOPE_KEY) {
       res.status(403).json({ error: "当前班级暂不支持下载该课程文件。" });
       return;
@@ -4197,6 +4270,26 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         res.status(404).json({
           error: `${fileLabel}下载链接不可用，请稍后重试。`,
         });
+        return;
+      }
+      if (forceInline) {
+        const response = await fetch(downloadUrl, { method: "GET" });
+        if (!response.ok) {
+          res
+            .status(502)
+            .json({ error: `远端${fileLabel}拉取失败（${response.status}）。` });
+          return;
+        }
+        const fileArrayBuffer = await response.arrayBuffer();
+        const fileBuffer = Buffer.from(fileArrayBuffer);
+        if (fileBuffer.length === 0) {
+          res.status(404).json({ error: `${fileLabel}不存在或已失效。` });
+          return;
+        }
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fileName));
+        res.setHeader("Content-Length", String(fileBuffer.length));
+        res.send(fileBuffer);
         return;
       }
       res.json({

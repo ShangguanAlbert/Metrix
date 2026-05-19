@@ -1,0 +1,366 @@
+.teaching-pdf-viewer {
+  display: grid;
+  gap: 16px;
+}
+
+.teaching-pdf-viewer-empty {
+  min-height: 420px;
+  border: 1px dashed var(--teacher-border-soft);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top left, var(--teacher-accent-soft), transparent 42%),
+    linear-gradient(180deg, var(--teacher-surface-soft) 0%, var(--teacher-surface) 100%);
+}
+
+.teaching-pdf-viewer-empty-content {
+  min-height: inherit;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 32px;
+  color: var(--teacher-text-soft);
+}
+
+.teaching-pdf-viewer-empty-content strong {
+  display: block;
+  color: var(--teacher-heading, var(--teacher-text));
+  font-size: 18px;
+}
+
+.teaching-pdf-viewer-empty-content p {
+  margin: 10px 0 0;
+  max-width: 440px;
+  line-height: 1.7;
+}
+
+.teaching-pdf-viewer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.teaching-pdf-viewer-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.teaching-pdf-viewer-meta strong {
+  color: var(--teacher-heading, var(--teacher-text));
+  font-size: 18px;
+}
+
+.teaching-pdf-viewer-meta span,
+.teaching-pdf-viewer-inline-status {
+  color: var(--teacher-text-muted);
+  font-size: 13px;
+}
+
+.teaching-pdf-viewer-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.teaching-pdf-viewer-open-btn {
+  text-decoration: none;
+}
+
+.teaching-pdf-viewer-stage {
+  border: 1px solid var(--teacher-border-soft);
+  border-radius: 24px;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, var(--teacher-surface) 0%, var(--teacher-surface-soft) 100%);
+  min-height: 420px;
+}
+
+.teaching-pdf-viewer-stage .react-pdf__Document {
+  display: grid;
+  justify-content: center;
+}
+
+.teaching-pdf-viewer-page {
+  display: grid;
+  justify-content: center;
+}
+
+.teaching-pdf-viewer-page .react-pdf__Page {
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.08);
+}
+
+.teaching-pdf-viewer-page .react-pdf__Page__canvas {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+}
+
+.teaching-pdf-viewer-message {
+  min-height: 360px;
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  color: var(--teacher-text-soft);
+  text-align: center;
+}
+
+.teaching-pdf-viewer-message.error {
+  color: var(--teacher-accent-text);
+}
+
+.teaching-pdf-viewer-message p {
+  margin: 0;
+  max-width: 420px;
+  line-height: 1.7;
+}
+
+.teaching-pdf-viewer-page-loading {
+  color: var(--teacher-text-muted);
+}
+
+.teaching-session-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.teaching-session-shell {
+  grid-template-columns: 296px minmax(0, 1fr);
+}
+
+.teaching-session-sidebar {
+  padding: 12px;
+  gap: 12px;
+}
+
+.teaching-session-main {
+  padding-left: 16px;
+}
+
+.teaching-session-sidebar-profile {
+  display: grid;
+  gap: 10px;
+}
+
+.teaching-session-sidebar-avatar {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 0;
+  border-radius: 20px;
+  font-size: 28px;
+}
+
+.teaching-session-sidebar-card {
+  display: grid;
+  gap: 10px;
+}
+
+.teaching-session-sidebar-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.teaching-session-sidebar-btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.teaching-session-danger-btn {
+  color: #9b1c1c;
+  background: #fff1f0;
+}
+
+.teaching-session-danger-btn:hover {
+  color: #8f1d1d;
+  background: #ffe0de;
+}
+
+.teaching-session-feedback-list {
+  display: grid;
+  gap: 12px;
+}
+
+.teaching-session-feedback-item {
+  border: 1px solid var(--teacher-border-soft);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: var(--teacher-surface-soft);
+  display: grid;
+  gap: 8px;
+}
+
+.teaching-session-feedback-item strong {
+  color: var(--teacher-heading, var(--teacher-text));
+}
+
+.teaching-session-feedback-item span {
+  color: var(--teacher-text-muted);
+  font-size: 12px;
+}
+
+.teaching-session-feedback-item p {
+  margin: 0;
+  color: var(--teacher-text-soft);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.teaching-session-feedback-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.teaching-session-summary-list {
+  display: grid;
+  gap: 12px;
+}
+
+.teaching-session-summary-item {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--teacher-border-soft);
+  border-radius: 16px;
+  padding: 14px 16px;
+  background: var(--teacher-surface-soft);
+}
+
+.teaching-session-summary-item strong {
+  color: var(--teacher-text-muted);
+  font-size: 12px;
+}
+
+.teaching-session-summary-item span {
+  color: var(--teacher-heading, var(--teacher-text));
+  line-height: 1.6;
+}
+
+.teaching-session-student-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.teaching-session-question-composer {
+  display: grid;
+  gap: 12px;
+}
+
+.teaching-session-question-composer textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border-radius: 18px;
+  border: 1px solid var(--teacher-border);
+  background: var(--teacher-surface);
+  color: var(--teacher-text);
+  padding: 14px 16px;
+  font: inherit;
+  line-height: 1.7;
+}
+
+.teaching-session-question-composer textarea:focus {
+  outline: none;
+  border-color: var(--teacher-accent-border);
+  box-shadow: 0 0 0 3px var(--teacher-accent-soft);
+}
+
+.teaching-session-sync-tip {
+  margin: 0 0 14px;
+  border: 1px solid var(--teacher-accent-border);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: var(--teacher-accent-soft);
+  color: var(--teacher-accent-text);
+  line-height: 1.6;
+}
+
+.teaching-session-file-strip {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--teacher-border-soft);
+  display: grid;
+  gap: 10px;
+}
+
+.teaching-session-file-chip-list {
+  margin-top: 0;
+}
+
+.teaching-session-file-chip {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.teaching-session-file-chip:hover {
+  transform: translateY(-1px);
+  background: var(--teacher-surface-soft);
+}
+
+.teaching-session-file-chip.active {
+  border-color: var(--teacher-accent-border);
+  background: var(--teacher-accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(193, 95, 60, 0.14);
+}
+
+@media (max-width: 1180px) {
+  .teaching-session-info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1080px) {
+  .teaching-session-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .teaching-session-main {
+    border-left: 0;
+    border-top: 1px solid var(--teacher-border-soft);
+    padding-left: 12px;
+    padding-top: 14px;
+  }
+}
+
+@media (max-width: 760px) {
+  .teaching-pdf-viewer-stage {
+    min-height: 320px;
+    padding: 12px;
+  }
+
+  .teaching-pdf-viewer-head,
+  .teaching-pdf-viewer-head-actions,
+  .teaching-session-feedback-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .teaching-pdf-viewer-open-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .teaching-session-student-actions {
+    flex-wrap: wrap;
+  }
+
+  .teaching-session-sidebar-avatar {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    font-size: 22px;
+  }
+}

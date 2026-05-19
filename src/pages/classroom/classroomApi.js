@@ -183,10 +183,15 @@ async function downloadClassroomFile(path, { fileKind } = {}) {
   };
 }
 
-export async function downloadClassroomLessonFile(fileId, { fileKind } = {}) {
+export async function downloadClassroomLessonFile(
+  fileId,
+  { fileKind, inline = false } = {},
+) {
   const safeFileId = String(fileId || "").trim();
   return downloadClassroomFile(
-    `/api/classroom/lessons/files/${encodeURIComponent(safeFileId)}/download`,
+    `/api/classroom/lessons/files/${encodeURIComponent(safeFileId)}/download${
+      inline ? "?inline=1" : ""
+    }`,
     { fileKind },
   );
 }
