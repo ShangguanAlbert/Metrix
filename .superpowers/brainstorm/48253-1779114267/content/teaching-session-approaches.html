@@ -1,0 +1,109 @@
+<h2>教师授课模式落地方式</h2>
+<p class="subtitle">基于现有课时管理结构，比较 3 种实现路径。推荐看 B。</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>全部塞进课时详情页</h3>
+      <p>教师在当前后台页面里上传 PDF、翻页、写讲稿，学生仍走现有课堂页。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优点</h4>
+          <ul>
+            <li>入口最少，改动看起来集中</li>
+            <li>不需要新开标签页</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>问题</h4>
+          <ul>
+            <li>教师后台会变得很拥挤</li>
+            <li>授课中还要看到管理控件，干扰很强</li>
+            <li>学生观看态和教师管理态容易搅在一起</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>课时里配置，授课时开新标签页</h3>
+      <p>教师仍在课时管理里配置多个 PDF 和课堂设置；点击“开始授课”后进入独立授课页，学生进入独立观看页。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优点</h4>
+          <ul>
+            <li>最符合你现在的后台结构</li>
+            <li>管理态和授课态分离，教师操作更稳</li>
+            <li>学生端可以单独做弱同步和提问区</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>代价</h4>
+          <ul>
+            <li>要新增 2 个页面和一组会话接口</li>
+            <li>会多一个浏览器标签页</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>独立“授课中心”面板</h3>
+      <p>教师主页左侧再加一个新面板，所有课时授课都从这里统一管理。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优点</h4>
+          <ul>
+            <li>未来可扩展成更大的教学中控台</li>
+            <li>授课功能聚合度高</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>问题</h4>
+          <ul>
+            <li>第一版明显偏重</li>
+            <li>会和现有课时管理形成双入口</li>
+            <li>容易做成新的复杂子系统</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">推荐结构</div>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">教师后台 · 课时管理内配置</div>
+      <div class="mockup-body">
+        <div class="mock-nav">课时列表 | 当前课时设置</div>
+        <div class="mock-content">
+          <p><strong>授课模式</strong></p>
+          <p>多个 PDF 列表、排序、默认授课文件、是否允许学生提问</p>
+          <p>教师私有讲稿编辑区</p>
+          <button class="mock-button">开始授课</button>
+        </div>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header">新标签页 · 授课会话页</div>
+      <div class="mockup-body">
+        <div class="mock-nav">PDF 缩略导航 | 当前页 | 下一页</div>
+        <div style="display:flex; gap:16px;">
+          <div class="mock-content" style="flex:1;">PDF 播放区</div>
+          <div class="mock-sidebar" style="width:34%;">教师私有讲稿 / 举手 / 文字提问</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">如果你认可 B，我下一步就把它细化成数据结构、页面结构、接口和状态流。</p>

@@ -1,0 +1,79 @@
+<h2>教师端界面结构</h2>
+<p class="subtitle">目标：课时管理负责建课，授课中心负责授课专属配置与启动会话。</p>
+
+<div class="section">
+  <div class="label">教师主页左侧导航</div>
+  <div class="mockup">
+    <div class="mockup-header">Teacher Home</div>
+    <div class="mockup-body">
+      <div class="mock-nav">课时管理 | 授课中心 | 纪律管理 | 作业管理 | ...</div>
+      <p class="subtitle">新增一个独立的“授课中心” panel，但不新增建课入口。</p>
+    </div>
+  </div>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">A. 课时管理</div>
+    <div class="mockup-body">
+      <div class="mock-content">
+        <p><strong>保留现有职责</strong></p>
+        <p>新建课时 / 改课名 / 改时间 / 改班级 / 开关课时</p>
+        <p>课程任务 / 课程资料 继续留在这里</p>
+        <hr>
+        <p><strong>新增一块轻提示</strong></p>
+        <p>授课状态：未配置 / 已配置 / 授课中</p>
+        <p>按钮：前往授课中心</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">B. 授课中心</div>
+    <div class="mockup-body">
+      <div style="display:flex; gap:16px;">
+        <div class="mock-sidebar" style="width:34%;">
+          <p><strong>课时列表</strong></p>
+          <p>第1节课 · 810班</p>
+          <p>第2节课 · 810班</p>
+          <p>第3节课 · 811班</p>
+          <p class="subtitle">这里只显示从课时管理同步来的课时</p>
+        </div>
+        <div class="mock-content" style="flex:1;">
+          <p><strong>当前课时授课配置</strong></p>
+          <p>PDF 列表：上传 / 删除 / 排序</p>
+          <p>当前授课 PDF：从列表中指定一个</p>
+          <p>学生互动：允许提问 开/关</p>
+          <p>教师私有讲稿：富文本或纯文本编辑区</p>
+          <p>按钮：保存配置 / 开始授课</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">推荐操作路径</div>
+  <div class="cards">
+    <div class="card">
+      <div class="card-body">
+        <h3>1. 先建课</h3>
+        <p>在“课时管理”里新建一节课并设置班级、时间、开放状态。</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h3>2. 去授课中心补配置</h3>
+        <p>同一节课自动出现，补充 PDF、默认授课文件、讲稿和互动开关。</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h3>3. 开始授课</h3>
+        <p>点击“开始授课”进入独立授课页，不在后台原地上课。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">如果这版结构对，你下一步只需要再确认授课中心列表的筛选方式和授课页长什么样。</p>

@@ -1,0 +1,91 @@
+<h2>授课页与学生观看页</h2>
+<p class="subtitle">目标：教师上课时有独立授课台，学生端是弱同步观看，不把教师后台暴露给学生。</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">A. 教师授课页</div>
+    <div class="mockup-body">
+      <div class="mock-nav">课时名 | 当前 PDF | 上一页 / 下一页 | 结束授课</div>
+      <div style="display:flex; gap:16px;">
+        <div class="mock-sidebar" style="width:22%;">
+          <p><strong>PDF 列表</strong></p>
+          <p>课件-01.pdf</p>
+          <p>案例分析.pdf</p>
+          <p>课堂练习.pdf</p>
+          <p class="subtitle">支持切换当前授课文件</p>
+        </div>
+        <div class="mock-content" style="flex:1;">
+          <p><strong>PDF 播放区</strong></p>
+          <div class="placeholder" style="height:220px;">当前页预览</div>
+          <p class="subtitle">教师翻页后，会同步更新课堂当前页</p>
+        </div>
+        <div class="mock-sidebar" style="width:28%;">
+          <p><strong>教师私有讲稿</strong></p>
+          <p>这里只给教师自己看</p>
+          <hr>
+          <p><strong>课堂互动</strong></p>
+          <p>举手学生列表</p>
+          <p>文字提问列表</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">B. 学生观看页</div>
+    <div class="mockup-body">
+      <div class="mock-nav">课时名 | 跟随教师中 | 回到教师当前页</div>
+      <div style="display:flex; gap:16px;">
+        <div class="mock-content" style="flex:1;">
+          <p><strong>PDF 观看区</strong></p>
+          <div class="placeholder" style="height:220px;">当前页预览</div>
+          <p class="subtitle">默认跟随教师，但学生可以临时自己翻页</p>
+        </div>
+        <div class="mock-sidebar" style="width:30%;">
+          <p><strong>课堂互动</strong></p>
+          <p>按钮：举手</p>
+          <p>输入框：提交简短问题</p>
+          <p>提示：你当前正在自主翻页 / 你已回到教师当前页</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">弱同步规则</div>
+  <div class="cards">
+    <div class="card">
+      <div class="card-body">
+        <h3>默认跟随</h3>
+        <p>学生刚进入时，直接看到教师当前 PDF 和当前页。</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h3>临时脱离</h3>
+        <p>学生自己翻页后，状态变成“未跟随教师”，此时不再强行跳页。</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h3>一键回归</h3>
+        <p>学生点击“回到教师当前页”后，重新进入跟随状态。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">会话状态</div>
+  <div class="mockup">
+    <div class="mockup-header">每节课只有一个当前授课会话</div>
+    <div class="mockup-body">
+      <p>未开始：学生端显示“教师尚未开始授课”</p>
+      <p>授课中：学生可进入观看，教师控制当前 PDF 和页码</p>
+      <p>已结束：学生不能继续实时跟随，但可以保留课后查看能力作为后续扩展</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">如果你认可这页，下一步我就把它收成数据结构和接口设计，而不是继续停留在界面层。</p>
