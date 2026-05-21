@@ -30,3 +30,10 @@ test("withBasePath keeps already-prefixed routes unchanged", () => {
     "/hznu/metaxfang/admin/settings?teacherPanel=classroom",
   );
 });
+
+test("withBasePath preserves query strings for student workshop entry routes", () => {
+  assert.equal(
+    withBasePath("/chat?returnTo=mode-selection", "/hznu/metaxfang/"),
+    "/hznu/metaxfang/chat?returnTo=mode-selection",
+  );
+});
