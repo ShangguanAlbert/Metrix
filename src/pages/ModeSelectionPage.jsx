@@ -557,7 +557,7 @@ export default function ModeSelectionPage() {
     if (modeSelectionReturnUrl) {
       appendReturnUrlParam(params, modeSelectionReturnUrl);
     }
-    return withAuthSlot(`/chat?${params.toString()}`, activeSlot);
+    return buildAbsoluteAppUrl(`/chat?${params.toString()}`, activeSlot);
   }, [activeSlot, modeSelectionReturnUrl]);
 
   function onBackToLogin() {

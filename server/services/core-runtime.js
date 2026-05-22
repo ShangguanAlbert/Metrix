@@ -1785,6 +1785,7 @@ const adminClassroomCoursePlanSchema = new mongoose.Schema(
     courseStartAt: { type: String, default: "" },
     courseEndAt: { type: String, default: "" },
     notes: { type: String, default: "" },
+    homeworkRequirementText: { type: String, default: "" },
     enabled: { type: Boolean, default: true },
     homeworkUploadEnabled: { type: Boolean, default: true },
     lateSubmissionEnabled: { type: Boolean, default: false },
