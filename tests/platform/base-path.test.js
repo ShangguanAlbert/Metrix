@@ -37,3 +37,10 @@ test("withBasePath preserves query strings for student workshop entry routes", (
     "/hznu/metaxfang/chat?returnTo=mode-selection",
   );
 });
+
+test("withBasePath preserves the app prefix for teaching session routes", () => {
+  assert.equal(
+    withBasePath("/admin/classroom/teaching/lesson-123?slot=teacher", "/hznu/metaxfang/"),
+    "/hznu/metaxfang/admin/classroom/teaching/lesson-123?slot=teacher",
+  );
+});

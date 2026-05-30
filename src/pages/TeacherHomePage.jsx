@@ -11,6 +11,7 @@ import {
   ArrowUpDown,
   Bot,
   CalendarDays,
+  Check,
   CircleHelp,
   ChevronDown,
   ChevronUp,
@@ -115,6 +116,7 @@ import {
   uploadAdminClassroomTaskFiles,
 } from "./admin/adminApi.js";
 import { clearAdminToken, getAdminToken } from "./login/adminSession.js";
+import { buildTeachingSessionHref } from "../features/classroom/teachingSessionNavigation.js";
 import {
   clearUserAuthSession,
   resolveActiveAuthSlot,
@@ -3207,14 +3209,6 @@ export default function TeacherHomePage() {
       }))
       .filter((item) => item.file);
   }, [selectedCoursePdfFiles, selectedCourseTeachingConfig.pdfFiles]);
-  const selectedCourseTeachingPdfOptions = useMemo(
-    () =>
-      selectedCourseTeachingPdfItems.map((item) => ({
-        value: item.fileId,
-        label: String(item?.file?.name || item.fileId).trim(),
-      })),
-    [selectedCourseTeachingPdfItems],
-  );
 
   const selectedCourseTasks = useMemo(
     () => (Array.isArray(selectedCourse?.tasks) ? selectedCourse.tasks : []),
@@ -3951,6 +3945,32 @@ export default function TeacherHomePage() {
     });
   }
 
+  function onSetSelectedLessonPrimaryTeachingPdf(fileId) {
+    const safeFileId = String(fileId || "").trim();
+    if (!safeFileId) return;
+    const currentConfig = normalizeTeachingCenterConfig(
+      selectedCourse?.teachingConfig,
+    );
+    const hasFile = currentConfig.pdfFiles.some((item) => item.fileId === safeFileId);
+    const nextPdfFiles = hasFile
+      ? currentConfig.pdfFiles
+      : [
+          ...currentConfig.pdfFiles,
+          {
+            fileId: safeFileId,
+            sortOrder: currentConfig.pdfFiles.length,
+            enabled: true,
+          },
+        ];
+    onUpdateSelectedLessonTeachingConfig({
+      pdfFiles: nextPdfFiles.map((item, index) => ({
+        ...item,
+        sortOrder: index,
+      })),
+      defaultPdfFileId: safeFileId,
+    });
+  }
+
   async function onSaveSelectedLessonTeachingConfig() {
     if (!adminToken || !selectedCourse || teachingConfigSaving) return;
     setTeachingConfigSaving(true);
@@ -4003,10 +4023,7 @@ export default function TeacherHomePage() {
         normalizeTeachingCenterConfig(selectedCourse.teachingConfig),
       );
       await startAdminTeachingSession(adminToken, lessonId);
-      const teachingUrl = withAuthSlot(
-        `/admin/classroom/teaching/${encodeURIComponent(lessonId)}`,
-        activeSlot,
-      );
+      const teachingUrl = buildTeachingSessionHref(lessonId, activeSlot);
       if (typeof window !== "undefined") {
         window.open(teachingUrl, "_blank", "noopener,noreferrer");
       }
@@ -6611,291 +6628,390 @@ export default function TeacherHomePage() {
             ) : null}
 
             {activePanel === "teaching-center" ? (
-              <div className="teacher-panel-stack teacher-classroom-stack">
-                <header className="teacher-panel-head">
-                  <div>
-                    <h2>授课中心</h2>
-                    <p className="teacher-panel-save-time">
-                      课时来自课时管理，授课中心只负责 PDF 授课配置与开始授课
-                    </p>
-                  </div>
-                  <div className="teacher-panel-actions">
-                    <button
-                      type="button"
-                      className="teacher-primary-btn"
-                      onClick={() => void onSaveSelectedLessonTeachingConfig()}
-                      disabled={!selectedCourse || teachingConfigSaving}
-                    >
-                      <Save size={15} />
-                      <span>{teachingConfigSaving ? "保存中..." : "保存授课配置"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="teacher-ghost-btn"
-                      onClick={() => void onStartSelectedTeachingSession()}
-                      disabled={!selectedCourse || !!teachingSessionLaunchingLessonId}
-                    >
-                      <ExternalLink size={15} />
-                      <span>
-                        {teachingSessionLaunchingLessonId
-                          ? "正在进入授课页..."
-                          : "开始授课"}
-                      </span>
-                    </button>
-                  </div>
-                </header>
-
-                <section className="teacher-card teacher-lesson-workbench">
-                  <div className="teacher-lesson-list-panel">
+              <div className="teacher-panel-stack teaching-center-stack">
+                <section className={`teacher-card teacher-lesson-workbench${lessonListVisible ? "" : " list-collapsed"}`}>
+                  <div className={`teacher-lesson-list-panel${lessonListVisible ? "" : " collapsed"}`}>
                     <div className="teacher-lesson-list-head">
                       <h3>课时列表</h3>
                       <div className="teacher-lesson-list-head-right">
-                        <span>{`${filteredCoursePlans.length}${filteredCoursePlans.length !== teacherCoursePlans.length ? `/${teacherCoursePlans.length}` : ""} 节课`}</span>
+                        {!lessonBatchDeleteMode && (
+                          <span>{`${filteredCoursePlans.length}${filteredCoursePlans.length !== teacherCoursePlans.length ? `/${teacherCoursePlans.length}` : ""} 节课`}</span>
+                        )}
+                        <button
+                          type="button"
+                          className={`teacher-ghost-btn teacher-lesson-batch-toggle${lessonBatchDeleteMode ? " active" : ""}`}
+                          onClick={toggleLessonBatchDeleteMode}
+                        >
+                          {lessonBatchDeleteMode ? "取消批量" : "批量删除"}
+                        </button>
                       </div>
                     </div>
-                    <div className="teacher-lesson-filter-bar">
-                      <div className="teacher-image-search-input-wrap teacher-lesson-search-input">
-                        <Search size={13} />
-                        <input
-                          type="text"
-                          placeholder="搜索课时"
-                          value={lessonSearchQuery}
-                          onChange={(e) => setLessonSearchQuery(e.target.value)}
-                          aria-label="搜索课时"
-                        />
-                        {lessonSearchQuery && (
-                          <button
-                            type="button"
-                            className="teacher-search-clear-btn"
-                            onClick={() => setLessonSearchQuery("")}
-                            aria-label="清除搜索"
-                          >
-                            <X size={12} />
-                          </button>
+                    {lessonBatchDeleteMode ? (
+                      <div className="teacher-lesson-batch-bar">
+                        <label className="teacher-lesson-batch-check-all">
+                          <input
+                            type="checkbox"
+                            checked={batchAllSelected}
+                            onChange={(event) =>
+                              onToggleBatchSelectAll(event.target.checked)
+                            }
+                          />
+                          <span>全选</span>
+                        </label>
+                        <span className="teacher-lesson-batch-count">{`已选 ${selectedBatchCount} 节`}</span>
+                        <button
+                          type="button"
+                          className="teacher-delete-btn teacher-lesson-batch-delete"
+                          onClick={onBatchDeleteAction}
+                          disabled={selectedBatchCount === 0}
+                          title="删除所选课时"
+                          aria-label="删除所选课时"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="teacher-lesson-filter-bar">
+                        <div className="teacher-image-search-input-wrap teacher-lesson-search-input">
+                          <Search size={13} />
+                          <input
+                            type="text"
+                            placeholder="搜索课时"
+                            value={lessonSearchQuery}
+                            onChange={(e) => setLessonSearchQuery(e.target.value)}
+                            aria-label="搜索课时"
+                          />
+                          {lessonSearchQuery && (
+                            <button
+                              type="button"
+                              className="teacher-search-clear-btn"
+                              onClick={() => setLessonSearchQuery("")}
+                              aria-label="清除搜索"
+                            >
+                              <X size={12} />
+                            </button>
+                          )}
+                        </div>
+                        {lessonClassNames.length > 1 && (
+                          <div className="teacher-lesson-class-chips">
+                            <button
+                              type="button"
+                              className={`teacher-lesson-class-chip${lessonClassFilter === "" ? " active" : ""}`}
+                              onClick={() => setLessonClassFilter("")}
+                            >
+                              全部
+                            </button>
+                            {lessonClassNames.map((name) => (
+                              <button
+                                key={name}
+                                type="button"
+                                className={`teacher-lesson-class-chip${lessonClassFilter === name ? " active" : ""}`}
+                                onClick={() =>
+                                  setLessonClassFilter(
+                                    lessonClassFilter === name ? "" : name,
+                                  )
+                                }
+                              >
+                                {name}
+                              </button>
+                            ))}
+                          </div>
                         )}
                       </div>
-                      {lessonClassNames.length > 1 && (
-                        <div className="teacher-lesson-class-chips">
-                          <button
-                            type="button"
-                            className={`teacher-lesson-class-chip${lessonClassFilter === "" ? " active" : ""}`}
-                            onClick={() => setLessonClassFilter("")}
-                          >
-                            全部
-                          </button>
-                          {lessonClassNames.map((name) => (
-                            <button
-                              key={name}
-                              type="button"
-                              className={`teacher-lesson-class-chip${lessonClassFilter === name ? " active" : ""}`}
-                              onClick={() =>
-                                setLessonClassFilter(
-                                  lessonClassFilter === name ? "" : name,
-                                )
-                              }
-                            >
-                              {name}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    )}
                     {teacherCoursePlans.length === 0 ? (
                       <p className="teacher-empty-text">
                         暂无课时，请先到课时管理中新建课时。
                       </p>
                     ) : (
-                      <div className="teacher-lesson-list">
+                      <div
+                        className="teacher-lesson-list"
+                        ref={lessonListScrollRef}
+                        onWheel={onLessonListWheel}
+                      >
                         {filteredCoursePlans.length === 0 ? (
                           <p className="teacher-empty-text teacher-lesson-filter-empty">
                             没有符合条件的课时。
                           </p>
-                        ) : filteredCoursePlans.map((course, index) => {
-                          const courseId = String(course?.id || "");
-                          const active =
-                            courseId === String(selectedCourseId || "");
-                          const teachingConfig = normalizeTeachingCenterConfig(
-                            course?.teachingConfig,
-                          );
-                          const teachingStatus =
-                            teachingConfig.pdfFiles.length === 0
-                              ? "未配置"
-                              : "已配置";
-                          return (
-                            <article
-                              key={courseId || `teaching-lesson-${index + 1}`}
-                              className={`teacher-lesson-row${active ? " active" : ""}`}
-                            >
-                              <button
-                                type="button"
-                                className="teacher-lesson-row-main"
-                                onClick={() => setSelectedCourseId(courseId)}
+                        ) : (
+                          filteredCoursePlans.map((course, index) => {
+                            const courseId = String(course?.id || "");
+                            const active =
+                              courseId === String(selectedCourseId || "");
+                            const teachingConfig = normalizeTeachingCenterConfig(
+                              course?.teachingConfig,
+                            );
+                            const lessonClassName = normalizeLessonClassName(
+                              course?.className,
+                            );
+                            return (
+                              <article
+                                key={courseId || `teaching-lesson-${index + 1}`}
+                                className={`teacher-lesson-row${active ? " active" : ""}${lessonBatchDeleteMode ? " batch-mode" : ""}`}
                               >
-                                <strong>
-                                  {course?.courseName || `第${index + 1}节课`}
-                                </strong>
-                                <p>
-                                  <span className="teacher-lesson-row-time">
-                                    {buildLessonTimeLabel(
-                                      course?.courseStartAt,
-                                      course?.courseEndAt,
-                                      course?.courseTime,
-                                    ) || "未设置课时时间"}
+                                {lessonBatchDeleteMode ? (
+                                  <label
+                                    className="teacher-lesson-row-check"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={batchSelectedLessonIds.includes(courseId)}
+                                      onChange={(event) =>
+                                        onToggleBatchSelectLesson(
+                                          courseId,
+                                          event.target.checked,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className="teacher-lesson-row-main"
+                                  onClick={() => setSelectedCourseId(courseId)}
+                                >
+                                  <strong>
+                                    {course?.courseName || `第${index + 1}节课`}
+                                  </strong>
+                                  <p>
+                                    <span className="teacher-lesson-row-time">
+                                      {buildLessonTimeLabel(
+                                        course?.courseStartAt,
+                                        course?.courseEndAt,
+                                        course?.courseTime,
+                                      ) || "未设置课时时间"}
+                                    </span>
+                                    <span className="teacher-lesson-row-meta">{`${lessonClassName} · ${teachingConfig.pdfFiles.length} 份授课 PDF`}</span>
+                                  </p>
+                                </button>
+                                <div className="teacher-lesson-row-actions">
+                                  <span
+                                    className={`teacher-lesson-status${course?.enabled === false ? " closed" : ""}`}
+                                  >
+                                    {course?.enabled === false ? "未开放" : "已开放"}
                                   </span>
-                                  <span className="teacher-lesson-row-meta">{`${normalizeLessonClassName(
-                                    course?.className,
-                                  )} · ${teachingConfig.pdfFiles.length} 份授课 PDF`}</span>
-                                </p>
-                              </button>
-                              <div className="teacher-lesson-row-actions">
-                                <span className="teacher-lesson-status">
-                                  {teachingStatus}
-                                </span>
-                              </div>
-                            </article>
-                          );
-                        })}
+                                  <div className="teacher-lesson-row-btns">
+                                    <button
+                                      type="button"
+                                      className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onOpenRenameLessonDialog(course);
+                                      }}
+                                      title="重命名课时"
+                                      aria-label="重命名课时"
+                                    >
+                                      <Pencil size={13} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="teacher-delete-btn teacher-tooltip-btn teacher-action-icon-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onDeleteCourseAction(courseId);
+                                      }}
+                                      title="删除课时"
+                                      aria-label="删除课时"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </article>
+                            );
+                          })
+                        )}
                       </div>
                     )}
                   </div>
 
-                  <div className="teacher-lesson-detail-panel">
+                  <section className="teaching-center-main">
                     {!selectedCourse ? (
-                      <p className="teacher-empty-text">
-                        请选择左侧一节课后再配置授课内容。
-                      </p>
+                      <div className="teaching-center-empty">
+                        <h2>授课中心</h2>
+                        <p>请选择左侧一节课后再配置授课内容。</p>
+                      </div>
                     ) : (
-                      <div className="teacher-lesson-detail-scroll">
-                        <section className="teacher-card">
-                          <div className="teacher-task-draft-head">
-                            <strong>授课 PDF</strong>
-                            <div className="teacher-task-draft-actions">
-                              <input
-                                ref={teachingPdfInputRef}
-                                type="file"
-                                accept="application/pdf,.pdf"
-                                multiple
-                                className="teacher-hidden-file-input"
-                                onChange={(event) =>
-                                  void onUploadTeachingPdfFiles(event)
-                                }
-                              />
+                      <>
+                        <header className="teaching-center-main-header">
+                          <div className="teaching-center-main-header-row">
+                            <div>
+                              <h2>{selectedCourse?.courseName || "未命名课时"}</h2>
+                              <p>{`${buildLessonTimeLabel(
+                                selectedCourse?.courseStartAt,
+                                selectedCourse?.courseEndAt,
+                                selectedCourse?.courseTime,
+                              ) || "未设置课时时间"} · ${normalizeLessonClassName(
+                                selectedCourse?.className,
+                              )}`}</p>
+                            </div>
+                            <div className="teaching-center-header-badges">
+                              <label className="teaching-center-header-setting">
+                                <span>允许学生提问</span>
+                                <span className="teaching-center-switch">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedCourseTeachingConfig.allowQuestions !== false}
+                                    onChange={(event) =>
+                                      onUpdateSelectedLessonTeachingConfig({
+                                        allowQuestions: event.target.checked,
+                                      })
+                                    }
+                                  />
+                                  <span className="teaching-center-switch-slider" />
+                                </span>
+                              </label>
+                              <span
+                                className={`teacher-lesson-status${selectedCourse?.enabled === false ? " closed" : ""}`}
+                              >
+                                {selectedCourse?.enabled === false ? "未开放" : "已开放"}
+                              </span>
+                              {classroomConfigHasUnsavedChanges && (
+                                <span className="teaching-center-unsaved-tag">有未保存更改</span>
+                              )}
+                            </div>
+                          </div>
+                        </header>
+
+                        <div className="teaching-center-main-content">
+                          <section className="teaching-center-card">
+                            <div className="teaching-center-section-title">
+                              <strong>1. 授课课件 (PDF)</strong>
+                              <p>选择要在授课时展示的 PDF 课件，并指定开课时默认展示的主课件。</p>
+                            </div>
+                            <input
+                              ref={teachingPdfInputRef}
+                              type="file"
+                              accept="application/pdf,.pdf"
+                              multiple
+                              className="teacher-hidden-file-input"
+                              onChange={(event) =>
+                                void onUploadTeachingPdfFiles(event)
+                              }
+                            />
+                            <div className="teaching-center-pdf-grid">
+                              {selectedCoursePdfFiles.map((file) => {
+                                const fileId = String(file?.id || "").trim();
+                                const included = selectedCourseTeachingConfig.pdfFiles.some(
+                                  (item) => item.fileId === fileId,
+                                );
+                                const isPrimary =
+                                  included &&
+                                  fileId ===
+                                    String(
+                                      selectedCourseTeachingConfig.defaultPdfFileId || "",
+                                    ).trim();
+                                return (
+                                  <article
+                                    key={fileId}
+                                    className={`teaching-center-pdf-card${isPrimary ? " is-main" : ""}${!included ? " is-excluded" : ""}`}
+                                  >
+                                    <div className="teaching-center-pdf-card-header">
+                                      <div className="teaching-center-pdf-info">
+                                        <div className="teaching-center-pdf-name">
+                                          {file?.name || "课件 PDF"}
+                                        </div>
+                                        <div className="teaching-center-pdf-meta">
+                                          {`${formatFileSize(file?.size)} · 上传于 ${formatDisplayTime(file?.uploadedAt)}`}
+                                        </div>
+                                      </div>
+                                      {isPrimary && (
+                                        <span className="teaching-center-pdf-badge">
+                                          <Crown size={10} />
+                                          主课件
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="teaching-center-pdf-actions">
+                                      <button
+                                        type="button"
+                                        className={`teaching-center-pdf-toggle-btn${included ? " active" : ""}`}
+                                        onClick={() =>
+                                          onToggleSelectedLessonTeachingPdf(fileId)
+                                        }
+                                      >
+                                        {included ? (
+                                          <><Check size={12} /><span>已加入授课</span></>
+                                        ) : (
+                                          <><Plus size={12} /><span>加入授课</span></>
+                                        )}
+                                      </button>
+                                      {included && !isPrimary && (
+                                        <button
+                                          type="button"
+                                          className="teaching-center-pdf-primary-btn"
+                                          onClick={() =>
+                                            onSetSelectedLessonPrimaryTeachingPdf(fileId)
+                                          }
+                                        >
+                                          <Crown size={12} />
+                                          <span>设为主课件</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  </article>
+                                );
+                              })}
                               <button
                                 type="button"
-                                className="teacher-ghost-btn"
+                                className="teaching-center-upload-card"
                                 onClick={() => teachingPdfInputRef.current?.click()}
                                 disabled={teachingPdfUploading}
                               >
-                                <Upload size={15} />
+                                <Upload size={18} />
                                 <span>
-                                  {teachingPdfUploading
-                                    ? "上传中..."
-                                    : "上传授课 PDF"}
+                                  {teachingPdfUploading ? "上传中..." : "上传新课件"}
                                 </span>
                               </button>
                             </div>
-                          </div>
-                          <p className="teacher-panel-save-time">
-                            可在授课中心单独上传 PDF，上传后会自动加入授课列表。
-                          </p>
-                          {selectedCoursePdfFiles.length === 0 ? (
-                            <p className="teacher-empty-text">
-                              当前还没有授课 PDF，请直接在这里上传。
-                            </p>
-                          ) : (
-                            <div className="teacher-file-chip-list">
-                              {selectedCoursePdfFiles.map((file) => {
-                                const fileId = String(file?.id || "").trim();
-                                const checked = selectedCourseTeachingConfig.pdfFiles.some(
-                                  (item) => item.fileId === fileId,
-                                );
-                                return (
-                                  <label
-                                    key={fileId}
-                                    className="teacher-file-chip"
-                                    style={{ cursor: "pointer" }}
-                                  >
-                                    <div className="teacher-file-chip-info">
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={() =>
-                                          onToggleSelectedLessonTeachingPdf(fileId)
-                                        }
-                                      />
-                                      <div className="teacher-file-chip-meta">
-                                        <div className="teacher-file-chip-headline">
-                                          <strong>{file?.name || "课件 PDF"}</strong>
-                                        </div>
-                                        <div className="teacher-file-chip-subline">
-                                          <span>{formatFileSize(file?.size)}</span>
-                                          <span>{`上传于 ${formatDisplayTime(file?.uploadedAt)}`}</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </section>
+                          </section>
 
-                        <section className="teacher-card">
-                          <div className="teacher-task-draft-head">
-                            <strong>授课设置</strong>
-                          </div>
-                          <div className="teacher-form-grid">
-                            <label>
-                              <span>默认授课 PDF</span>
-                              <PortalSelect
-                                value={
-                                  selectedCourseTeachingConfig.defaultPdfFileId ||
-                                  String(selectedCourseTeachingPdfOptions[0]?.value || "")
-                                }
-                                options={
-                                  selectedCourseTeachingPdfOptions.length > 0
-                                    ? selectedCourseTeachingPdfOptions
-                                    : [{ value: "", label: "请先勾选 PDF" }]
-                                }
-                                compact
-                                ariaLabel="选择默认授课 PDF"
-                                onChange={(value) =>
-                                  onUpdateSelectedLessonTeachingConfig({
-                                    defaultPdfFileId: value,
-                                  })
-                                }
-                              />
-                            </label>
-                            <label className="teacher-lesson-switch-row" style={{ justifyContent: "space-between" }}>
-                              <span>允许学生文字提问</span>
-                              <input
-                                type="checkbox"
-                                checked={selectedCourseTeachingConfig.allowQuestions !== false}
-                                onChange={(event) =>
-                                  onUpdateSelectedLessonTeachingConfig({
-                                    allowQuestions: event.target.checked,
-                                  })
-                                }
-                              />
-                            </label>
-                          </div>
-                          <label style={{ display: "grid", gap: 8, marginTop: 16 }}>
-                            <span>教师私有讲稿</span>
+                          <section className="teaching-center-card">
+                            <div className="teaching-center-section-title">
+                              <strong>2. 教师私有讲稿</strong>
+                              <p>仅自己可见，不会下发给学生。授课时可在工作台随时查阅。</p>
+                            </div>
                             <textarea
-                              className="teacher-req-editor-textarea"
+                              className="teaching-center-notes-textarea"
                               value={selectedCourseTeachingConfig.teacherNotes || ""}
                               onChange={(event) =>
                                 onUpdateSelectedLessonTeachingConfig({
                                   teacherNotes: event.target.value,
                                 })
                               }
-                              placeholder="这里写授课讲稿、提醒点、课堂节奏，不会下发给学生。"
+                              placeholder="输入授课讲稿、教学提示、课堂节奏控制等备注..."
                             />
-                          </label>
-                        </section>
-                      </div>
+                          </section>
+                        </div>
+
+                        <div className="teaching-center-action-bar">
+                          <button
+                            type="button"
+                            className={`teaching-center-secondary-btn${classroomConfigHasUnsavedChanges ? " has-changes" : ""}`}
+                            onClick={() => void onSaveSelectedLessonTeachingConfig()}
+                            disabled={!selectedCourse || teachingConfigSaving}
+                          >
+                            <Save size={15} />
+                            <span>{teachingConfigSaving ? "保存中..." : classroomConfigHasUnsavedChanges ? "保存更改" : "保存当前配置"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="teaching-center-primary-btn"
+                            onClick={() => void onStartSelectedTeachingSession()}
+                            disabled={!selectedCourse || !!teachingSessionLaunchingLessonId}
+                          >
+                            <ExternalLink size={15} />
+                            <span>
+                              {teachingSessionLaunchingLessonId
+                                ? "正在进入授课页..."
+                                : "开始授课"}
+                            </span>
+                          </button>
+                        </div>
+                      </>
                     )}
-                  </div>
+                  </section>
                 </section>
               </div>
             ) : null}

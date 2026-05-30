@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, LoaderCircle } from "lucide-react";
+import { ExternalLink, LoaderCircle, Minus, Plus } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+import {
+  clampTeachingPdfZoom,
+  resolveTeachingPdfDefaultZoom,
+  resolveTeachingPdfOrientation,
+} from "../teachingPdfViewerLayout.js";
 import "../../../styles/classroom-teaching.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -36,6 +41,13 @@ export default function ClassroomTeachingPdfViewer({
     pageCount: 0,
     loadError: "",
   });
+  const [zoomState, setZoomState] = useState(() => ({
+    fileUrl: "",
+    zoom: 1,
+    pageOrientation: "unknown",
+    zoomTouched: false,
+    autoZoomApplied: false,
+  }));
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -94,8 +106,31 @@ export default function ClassroomTeachingPdfViewer({
   }, [pageNumber, safePageCount]);
   const renderedPageWidth = Math.max(
     320,
-    Math.floor(Math.max(320, viewportWidth - 40)),
+    Math.floor(Math.max(320, viewportWidth - 40) * effectiveZoom),
   );
+  const effectivePageOrientation =
+    zoomState.fileUrl === fileUrl ? zoomState.pageOrientation : "unknown";
+  const zoomTouched =
+    zoomState.fileUrl === fileUrl ? zoomState.zoomTouched : false;
+  const autoZoomApplied =
+    zoomState.fileUrl === fileUrl ? zoomState.autoZoomApplied : false;
+  const effectiveZoom = zoomState.fileUrl === fileUrl ? zoomState.zoom : 1;
+  const zoomLabel = `${Math.round(effectiveZoom * 100)}%`;
+
+  function updateZoom(nextZoom, { markTouched = true } = {}) {
+    setZoomState((current) => ({
+      fileUrl,
+      zoom: clampTeachingPdfZoom(nextZoom),
+      pageOrientation:
+        current.fileUrl === fileUrl ? current.pageOrientation : "unknown",
+      zoomTouched: markTouched ? true : current.fileUrl === fileUrl ? current.zoomTouched : false,
+      autoZoomApplied: markTouched
+        ? false
+        : current.fileUrl === fileUrl
+          ? current.autoZoomApplied
+          : false,
+    }));
+  }
 
   if (!fileUrl) {
     return (
@@ -116,6 +151,39 @@ export default function ClassroomTeachingPdfViewer({
           <span>{safePageCount > 0 ? `第 ${safePageNumber} / ${safePageCount} 页` : "正在读取页数..."}</span>
         </div>
         <div className="teaching-pdf-viewer-head-actions">
+          <div className="teaching-pdf-viewer-zoom-group" aria-label="PDF 缩放控制">
+            <button
+              type="button"
+              className="teacher-ghost-btn teaching-pdf-viewer-zoom-btn"
+              onClick={() => updateZoom(effectiveZoom - 0.1)}
+              disabled={effectiveZoom <= 0.85}
+              title="缩小"
+            >
+              <Minus size={15} />
+            </button>
+            <button
+              type="button"
+              className="teacher-ghost-btn teaching-pdf-viewer-zoom-value"
+              onClick={() => updateZoom(1)}
+              title="恢复适应宽度"
+            >
+              <span>{zoomLabel}</span>
+            </button>
+            <button
+              type="button"
+              className="teacher-ghost-btn teaching-pdf-viewer-zoom-btn"
+              onClick={() => updateZoom(effectiveZoom + 0.1)}
+              disabled={effectiveZoom >= 2.2}
+              title="放大"
+            >
+              <Plus size={15} />
+            </button>
+          </div>
+          {effectivePageOrientation === "portrait" ? (
+            <span className="teaching-pdf-viewer-inline-status">
+              {autoZoomApplied ? "检测到竖版教材，已自动放大" : "竖版 PDF"}
+            </span>
+          ) : null}
           {actionSlot}
           <a
             href={fileUrl}
@@ -176,6 +244,28 @@ export default function ClassroomTeachingPdfViewer({
               width={renderedPageWidth}
               renderAnnotationLayer={false}
               renderTextLayer={false}
+              onLoadSuccess={(page) => {
+                const { width, height } = readPdfPageDimensions(page);
+                const nextOrientation = resolveTeachingPdfOrientation(width, height);
+                if (!zoomTouched) {
+                  const nextZoom = resolveTeachingPdfDefaultZoom(width, height);
+                  setZoomState({
+                    fileUrl,
+                    zoom: nextZoom,
+                    pageOrientation: nextOrientation,
+                    zoomTouched: false,
+                    autoZoomApplied: nextZoom !== 1,
+                  });
+                  return;
+                }
+                setZoomState((current) => ({
+                  fileUrl,
+                  zoom: current.fileUrl === fileUrl ? current.zoom : 1,
+                  pageOrientation: nextOrientation,
+                  zoomTouched: current.fileUrl === fileUrl ? current.zoomTouched : false,
+                  autoZoomApplied: false,
+                }));
+              }}
               loading={<span className="teaching-pdf-viewer-page-loading">页面加载中…</span>}
             />
           </div>
@@ -191,4 +281,22 @@ function buildPdfjsAssetBaseUrl() {
     ? String(baseUrl || "/")
     : `${String(baseUrl || "/")}/`;
   return `${normalizedBase}pdfjs/`;
+}
+
+function readPdfPageDimensions(page) {
+  const view = Array.isArray(page?.view) ? page.view : [];
+  if (view.length >= 4) {
+    const width = Math.abs(Number(view[2] || 0) - Number(view[0] || 0));
+    const height = Math.abs(Number(view[3] || 0) - Number(view[1] || 0));
+    if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+      return { width, height };
+    }
+  }
+
+  const width = Number(page?.width || page?.originalWidth || 0);
+  const height = Number(page?.height || page?.originalHeight || 0);
+  return {
+    width: Number.isFinite(width) ? width : 0,
+    height: Number.isFinite(height) ? height : 0,
+  };
 }

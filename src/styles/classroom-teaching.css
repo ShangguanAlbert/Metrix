@@ -64,6 +64,21 @@
   flex-wrap: wrap;
 }
 
+.teaching-pdf-viewer-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.teaching-pdf-viewer-zoom-btn,
+.teaching-pdf-viewer-zoom-value {
+  min-width: 42px;
+}
+
+.teaching-pdf-viewer-zoom-value {
+  justify-content: center;
+}
+
 .teaching-pdf-viewer-open-btn {
   text-decoration: none;
 }
@@ -75,22 +90,25 @@
   background:
     linear-gradient(180deg, var(--teacher-surface) 0%, var(--teacher-surface-soft) 100%);
   min-height: 420px;
+  overflow: auto;
 }
 
 .teaching-pdf-viewer-stage .react-pdf__Document {
   display: grid;
   justify-content: center;
+  min-width: 100%;
 }
 
 .teaching-pdf-viewer-page {
-  display: grid;
-  justify-content: center;
+  min-width: 100%;
 }
 
 .teaching-pdf-viewer-page .react-pdf__Page {
   border-radius: 18px;
   overflow: hidden;
   box-shadow: 0 24px 48px rgba(15, 23, 42, 0.08);
+  width: max-content;
+  margin: 0 auto;
 }
 
 .teaching-pdf-viewer-page .react-pdf__Page__canvas {
