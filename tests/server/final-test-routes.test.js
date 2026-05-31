@@ -111,6 +111,10 @@ function createAdminConfigModelDouble(initial = {}) {
 }
 
 function createFinalTestDeps() {
+  const env = {
+    FINAL_TEST_TURNBACK_PASSPHRASE: "test-turnback-passphrase",
+    FINAL_TEST_RESTART_PASSPHRASE: "test-restart-passphrase",
+  };
   const noopMiddleware = (_req, _res, next) => {
     if (typeof next === "function") next();
   };
@@ -161,6 +165,7 @@ function createFinalTestDeps() {
     express: {
       json: () => noopMiddleware,
     },
+    env,
     requireChatAuth: noopMiddleware,
     requireAdminAuth: noopMiddleware,
     studentHomeworkUpload: {
@@ -394,7 +399,7 @@ test("turnback with the expected passphrase opens a new editable stage version",
       body: {
         fromStage: "stage3",
         toStage: "stage2",
-        passphrase: "turnback2026!",
+        passphrase: "test-turnback-passphrase",
         reason: "误点提交",
       },
     },
@@ -489,7 +494,7 @@ test("restart with the expected passphrase resets the session and records the ev
         profile: { className: "810班" },
       },
       body: {
-        passphrase: "Try again",
+        passphrase: "test-restart-passphrase",
         reason: "误操作，需要重新作答",
       },
     },

@@ -9,6 +9,7 @@
    - `npm install`
    - `cp .env.example .env`
    - 修改 `.env` 中的 API Key、`AUTH_SECRET`、Mongo 账号密码相关变量
+   - 如需使用期末测试回退或重新开始功能，请设置 `FINAL_TEST_TURNBACK_PASSPHRASE` 和 `FINAL_TEST_RESTART_PASSPHRASE`
    - 如需挂在子路径下：配置 `EDUCHAT_BASE_PATH`，例如 `EDUCHAT_BASE_PATH=/hznu/metaxfang/`
    - 如需使用 PackyCode：配置 `PACKYCODE_API_KEY`；可选覆盖 `PACKYCODE_CHAT_ENDPOINT`，默认使用 `https://www.packyapi.com/v1/chat/completions`
    - 如需使用 MiniMax 原生聊天、歌词生成与音乐生成：配置 `MINIMAX_API_KEY`；可选覆盖 `MINIMAX_CHAT_ENDPOINT`、`MINIMAX_MUSIC_ENDPOINT` 与 `MINIMAX_LYRICS_ENDPOINT`
@@ -30,6 +31,7 @@
 2. 配置环境变量：
    - `cp .env.example .env`
    - 至少配置一个 provider 的 API Key；若使用 PackyCode，请设置 `PACKYCODE_API_KEY`；若使用 MiniMax，请设置 `MINIMAX_API_KEY`
+   - 如需使用期末测试回退或重新开始功能，请设置 `FINAL_TEST_TURNBACK_PASSPHRASE` 和 `FINAL_TEST_RESTART_PASSPHRASE`
    - 如需本地模拟子路径部署，可额外设置 `EDUCHAT_BASE_PATH=/hznu/metaxfang/`
    - 本地调试群聊 `@AI` 时，建议单独启动 Mongo 和 Redis，再用 `npm run dev`
    - 本地默认 Redis 地址可直接使用 `.env` 里的 `GROUP_CHAT_AI_REDIS_URL=redis://127.0.0.1:6380`

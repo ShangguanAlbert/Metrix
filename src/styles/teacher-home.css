@@ -1205,6 +1205,7 @@
 }
 
 .teacher-form-grid input,
+.teacher-full-row input,
 .teacher-full-row textarea,
 .teacher-task-editor-grid input,
 .teacher-task-editor-content textarea {
@@ -1218,12 +1219,14 @@
 }
 
 .teacher-form-grid input,
+.teacher-full-row input,
 .teacher-task-editor-grid input {
   min-height: 38px;
   padding: 0 10px;
 }
 
 .teacher-form-grid input:focus,
+.teacher-full-row input:focus,
 .teacher-full-row textarea:focus,
 .teacher-task-editor-grid input:focus,
 .teacher-task-editor-content textarea:focus {
@@ -1232,7 +1235,7 @@
 }
 
 .teacher-full-row {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .teacher-full-row textarea,
@@ -1243,10 +1246,14 @@
   overflow-y: auto;
 }
 
+.teacher-full-row input {
+  height: 38px;
+}
+
 .teacher-final-test-columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 14px;
+  gap: 10px;
   align-items: start;
   min-height: 0;
 }
@@ -1254,7 +1261,7 @@
 .teacher-final-test-card,
 .teacher-final-test-preview-card {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .teacher-final-test-card .teacher-form-grid,
@@ -1266,8 +1273,8 @@
 
 .teacher-final-test-preview {
   display: grid;
-  gap: 10px;
-  padding: 14px;
+  gap: 8px;
+  padding: 12px;
   border-radius: 12px;
   border: 1px solid var(--teacher-border-soft);
   background: var(--teacher-surface-muted);
@@ -1292,25 +1299,25 @@
 .teacher-final-test-task-head {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
 }
 
 .teacher-final-test-task-head p {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   font-size: 12px;
   color: var(--teacher-text-muted);
 }
 
 .teacher-final-test-task-list {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .teacher-final-test-task-item {
   display: grid;
-  gap: 10px;
-  padding: 14px;
+  gap: 8px;
+  padding: 12px;
   border-radius: 12px;
   border: 1px solid var(--teacher-border-soft);
   background: var(--teacher-surface-muted);
@@ -1388,11 +1395,47 @@
 
 .teacher-final-test-preview-task {
   display: grid;
-  gap: 6px;
-  padding: 12px;
+  gap: 4px;
+  padding: 10px;
   border-radius: 10px;
   border: 1px solid var(--teacher-border-soft);
   background: var(--teacher-surface);
+}
+
+@media (min-width: 1081px) {
+  .teacher-final-test-stack {
+    height: 100%;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .teacher-final-test-columns {
+    flex: 1 1 auto;
+    min-height: 0;
+    align-items: stretch;
+    overflow: hidden;
+  }
+
+  .teacher-final-test-card,
+  .teacher-final-test-preview-card {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .teacher-final-test-card {
+    overflow-y: auto;
+  }
+
+  .teacher-final-test-preview-card {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .teacher-final-test-preview {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
 }
 
 .teacher-task-editor-content textarea {

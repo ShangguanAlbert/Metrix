@@ -41,6 +41,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     cors,
     multer,
     dotenv,
+    env = process.env,
     http,
     existsSync,
     mkdtemp,
@@ -711,6 +712,10 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     createCrc32Table,
     toPublicUser,
   } = deps;
+
+  function readConfiguredPassphrase(name) {
+    return String(env?.[name] || "").trim();
+  }
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -1400,7 +1405,12 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     const reason = sanitizeText(req.body?.reason, "", 240);
     const fromStage = String(req.body?.fromStage || "").trim();
     const toStage = String(req.body?.toStage || "").trim();
-    if (passphrase !== "turnback2026!") {
+    const configuredPassphrase = readConfiguredPassphrase("FINAL_TEST_TURNBACK_PASSPHRASE");
+    if (!configuredPassphrase) {
+      res.status(500).json({ error: "系统未配置回退口令。" });
+      return;
+    }
+    if (passphrase !== configuredPassphrase) {
       res.status(400).json({ error: "回退口令错误。" });
       return;
     }
@@ -1456,7 +1466,12 @@ export function registerAuthUserClassroomRoutes(app, deps) {
   app.post("/api/classroom/final-test/session/restart", requireChatAuth, async (req, res) => {
     const passphrase = String(req.body?.passphrase || "").trim();
     const reason = sanitizeText(req.body?.reason, "", 240);
-    if (passphrase !== "Try again") {
+    const configuredPassphrase = readConfiguredPassphrase("FINAL_TEST_RESTART_PASSPHRASE");
+    if (!configuredPassphrase) {
+      res.status(500).json({ error: "系统未配置重新开始口令。" });
+      return;
+    }
+    if (passphrase !== configuredPassphrase) {
       res.status(400).json({ error: "重新开始口令错误。" });
       return;
     }

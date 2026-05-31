@@ -38,3 +38,9 @@ test("teacher home exposes a final test sidebar entry and editor panel", () => {
 test("student final test panel reads teacher-authored final test content", () => {
   assert.match(studentFinalTestPanelSource, /taskSettings\?\.finalTestConfig/);
 });
+
+test("final test turnback dialog renders inline error feedback", () => {
+  assert.match(studentFinalTestPanelSource, /dialog\.errorMessage/);
+  assert.match(studentFinalTestPanelSource, /final-test-dialog-error/);
+  assert.match(finalTestCssSource, /\.final-test-dialog-error\s*\{/);
+});

@@ -6539,8 +6539,8 @@ export default function TeacherHomePage() {
                 <section className="teacher-card teacher-final-test-card">
                   <label className="teacher-full-row">
                     <span>顶部说明</span>
-                    <textarea
-                      rows={4}
+                    <input
+                      type="text"
                       value={finalTestConfig.introText}
                       onChange={(event) =>
                         setFinalTestConfig((current) => ({

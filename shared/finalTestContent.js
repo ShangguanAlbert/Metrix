@@ -30,9 +30,8 @@ function sanitizeBlockText(value, fallback, maxLength) {
   const text = String(value ?? "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
-    .trim()
     .slice(0, maxLength);
-  return text || fallback;
+  return text.trim() ? text : fallback;
 }
 
 function sanitizeTaskMode(value, fallback = "platform") {
