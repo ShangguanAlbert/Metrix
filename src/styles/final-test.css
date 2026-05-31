@@ -3,6 +3,12 @@
   box-sizing: border-box;
 }
 
+.student-final-test-stack {
+  overflow: hidden !important;
+  padding: 0 !important;
+  gap: 0 !important;
+}
+
 .final-test-shell {
   --ft-bg: #f7f5ee;
   --ft-surface: #ffffff;
@@ -235,7 +241,8 @@
   grid-template-columns: minmax(0, 1.12fr) minmax(360px, 0.88fr);
   gap: 14px;
   align-items: stretch;
-  min-height: calc(100vh - 180px);
+  height: 100%;
+  min-height: 0;
 }
 
 .final-test-exam-pane {
@@ -306,7 +313,17 @@
   overflow-y: auto;
 }
 
+.final-test-answer-pane .final-test-pane-scroll {
+  overflow: visible;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .final-test-answer-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -325,10 +342,15 @@
 }
 
 .final-test-embedded-board {
+  flex: 0 0 auto;
   padding: 0;
   border: 0;
   box-shadow: none;
   background: transparent;
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(83, 70, 54, 0.2) transparent;
 }
 
 .final-test-stage-strip {
@@ -435,43 +457,62 @@
 
 .final-test-stage-head {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .final-test-stage-head > div:first-child {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
 }
 
-.final-test-stage h3 {
+.final-test-stage h3,
+.final-test-stage-head h3 {
+  flex: 0 0 auto;
   margin: 0;
   font-size: 19px;
   font-weight: 700;
   color: var(--ft-ink);
   letter-spacing: -0.005em;
   line-height: 1.35;
+  white-space: nowrap;
+}
+
+.final-test-stage-guide {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  max-width: none;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ft-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .final-test-stage-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-self: flex-end;
 }
 
 .final-test-answer-workbench {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 18px 16px;
-  border: 1px solid var(--ft-border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.75);
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .final-test-field {
@@ -643,7 +684,10 @@
 }
 
 .final-test-answer-field {
+  flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .final-test-unsaved-flag {
@@ -656,10 +700,19 @@
 }
 
 .final-test-answer-field textarea {
-  min-height: 220px;
-  padding: 18px 16px;
-  background: #fffdf8;
+  flex: 1 1 auto;
+  min-height: 120px;
+  height: auto;
+  overflow-y: auto;
+  padding: 22px 24px;
+  border-radius: 16px;
+  background: #fffefb;
   line-height: 1.8;
+}
+
+.final-test-answer-field textarea:focus {
+  border-color: var(--ft-border-strong);
+  box-shadow: none;
 }
 
 .final-test-chat-pane {
@@ -703,6 +756,17 @@
   background: transparent;
   border: 0;
   padding: 0 2px 12px;
+}
+
+.final-test-chat-empty-hint {
+  margin: 0 4px 8px 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--ft-border-strong);
+  border-radius: 12px;
+  background: rgba(255, 253, 250, 0.72);
+  color: var(--ft-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .final-test-chat-input-wrap {
@@ -833,9 +897,19 @@
   transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
 }
 
+.final-test-prompt-toggle small {
+  color: var(--ft-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .final-test-prompt-toggle:hover {
   background: var(--ft-accent-soft);
   border-color: rgba(193, 95, 60, 0.24);
+  color: var(--ft-accent-strong);
+}
+
+.final-test-prompt-toggle:hover small {
   color: var(--ft-accent-strong);
 }
 
@@ -1041,10 +1115,41 @@
   gap: 10px;
 }
 
+.final-test-dialog-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(180, 35, 24, 0.18);
+  background: rgba(180, 35, 24, 0.08);
+  color: var(--ft-danger);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.final-test-dialog-error svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
 .final-test-dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+@keyframes ft-tip-notice-lifecycle {
+  0%   { opacity: 0; transform: translateY(10px) scale(0.96); }
+  10%  { opacity: 1; transform: translateY(0)    scale(1);    }
+  82%  { opacity: 1; transform: translateY(0)    scale(1);    }
+  100% { opacity: 0; transform: translateY(6px)  scale(0.98); }
+}
+
+@keyframes ft-tip-error-lifecycle {
+  0%   { opacity: 0; transform: translateY(10px) scale(0.96); }
+  6%   { opacity: 1; transform: translateY(0)    scale(1);    }
+  86%  { opacity: 1; transform: translateY(0)    scale(1);    }
+  100% { opacity: 0; transform: translateY(6px)  scale(0.98); }
 }
 
 .final-test-floating-tip {
@@ -1069,6 +1174,7 @@
 
 .final-test-floating-tip-notice {
   max-width: min(420px, calc(100vw - 48px));
+  animation: ft-tip-notice-lifecycle 3.5s ease-out both;
 }
 
 .final-test-floating-tip-error {
@@ -1079,6 +1185,7 @@
   background: rgba(180, 35, 24, 0.96);
   color: #fff;
   border: 1px solid rgba(180, 35, 24, 0.32);
+  animation: ft-tip-error-lifecycle 5s ease-out both;
 }
 
 .final-test-floating-stack {
@@ -1096,6 +1203,45 @@
 .final-test-floating-stack .final-test-floating-tip {
   position: static;
   pointer-events: auto;
+}
+
+.final-test-survey-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.final-test-survey-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+  overflow-y: auto;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 248, 0.92) 0%, rgba(255, 252, 246, 0.96) 100%);
+}
+
+.final-test-survey-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.final-test-survey-intro p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ft-text-soft);
+  line-height: 1.7;
+}
+
+.final-test-survey-iframe {
+  flex: 1 1 auto;
+  min-height: 560px;
+  width: 100%;
+  border: 1px solid var(--ft-border);
+  border-radius: 12px;
+  background: var(--ft-surface);
 }
 
 @media (max-width: 1180px) {

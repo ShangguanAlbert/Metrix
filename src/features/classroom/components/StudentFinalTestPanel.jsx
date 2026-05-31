@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  ExternalLink,
   RotateCcw,
 } from "lucide-react";
 import MessageList from "../../../components/MessageList.jsx";
@@ -37,6 +38,8 @@ const STAGE2_PROMPTS = [
   "哪个想法更有新颖性和实用性",
   "如果放到校园里，可以怎么改",
 ];
+
+const SURVEY_URL = "https://wj.qq.com/s2/26868195/6777/";
 
 
 function buildStage2DraftText(stage2 = {}) {
@@ -136,16 +139,26 @@ function normalizeSessionForView(session, fallbackVariant) {
 }
 
 function buildStage2SystemPrompt(variant, taskTitle, stage1DraftText = "", draftText = "") {
-  const ideasText = String(stage1DraftText || "").trim();
-  const baseText =
-    variant === "three-stage-guided"
-      ? "你现在处于实验班的 AI 协作改进阶段。请围绕学生原始想法做比较、改进、组合与反思，不要直接替学生生成完整最终答案。"
-      : "你现在处于对照班的自由 AI 协作阶段。允许自由讨论与生成，但回复要简洁、具体、可执行。";
+  const taskText = String(taskTitle || "任务 1：改进普通书包").trim();
   const draftSection = String(draftText || "").trim();
-  return `${baseText}\n\n任务：${String(taskTitle || "任务 1：改进普通书包").trim()}\n\n学生原始想法：\n${ideasText || "本阶段没有原始想法记录。"}${
-    draftSection ? `\n\n当前草稿：\n${draftSection}` : ""
-  }`
-    .trim();
+  if (variant === "two-stage-free") {
+    return [
+      "你现在处于对照班的自由 AI 协作阶段。允许自由讨论与生成，但回复要简洁、具体、可执行。",
+      `任务：${taskText}`,
+      draftSection ? `学生当前笔记：\n${draftSection}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  const ideasText = String(stage1DraftText || "").trim();
+  return [
+    "你现在处于实验班的 AI 协作改进阶段。请围绕学生原始想法做比较、改进、组合与反思，不要直接替学生生成完整最终答案。",
+    `任务：${taskText}`,
+    `学生原始想法：\n${ideasText || "本阶段没有原始想法记录。"}`,
+    draftSection ? `当前草稿：\n${draftSection}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function hasCompletedStage1Draft(draftText = "") {
@@ -345,6 +358,12 @@ function FinalTestDialog({ dialog, onClose, onSubmit }) {
             </label>
           </div>
         ) : null}
+        {dialog.errorMessage ? (
+          <div className="final-test-dialog-error" role="alert">
+            <AlertTriangle size={14} />
+            <span>{dialog.errorMessage}</span>
+          </div>
+        ) : null}
         <footer className="final-test-dialog-actions">
           <button type="button" className="final-test-ghost-btn" onClick={onClose}>
             取消
@@ -390,6 +409,8 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   const [stage1Dirty, setStage1Dirty] = useState(false);
   const [stage2Input, setStage2Input] = useState("");
   const [stage2Dirty, setStage2Dirty] = useState(false);
+  const [stage3Input, setStage3Input] = useState("");
+  const [stage3Dirty, setStage3Dirty] = useState(false);
   const [aiQuoteText, setAiQuoteText] = useState("");
   const [promptsExpanded, setPromptsExpanded] = useState(false);
   const [dialog, setDialog] = useState(null);
@@ -400,6 +421,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   const sessionRef = useRef(null);
   const stage1SyncKeyRef = useRef("");
   const stage2SyncKeyRef = useRef("");
+  const stage3SyncKeyRef = useRef("");
   const persistRequestIdRef = useRef(0);
   const localSessionVersionRef = useRef(0);
   const lastInputAtRef = useRef(Date.now());
@@ -463,6 +485,23 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     setStage2Input(stage2AnswerText);
     setStage2Dirty(false);
   }, [stage, stage2AnswerText, stage2SyncKey]);
+
+  const stage3SyncKey =
+    stage === "stage3"
+      ? [
+          String(session?.startedAt || ""),
+          String(session?.status || ""),
+          Array.isArray(session?.turnbackEvents) ? session.turnbackEvents.length : 0,
+        ].join("|")
+      : "";
+
+  useEffect(() => {
+    if (stage !== "stage3") return;
+    if (stage3SyncKeyRef.current === stage3SyncKey) return;
+    stage3SyncKeyRef.current = stage3SyncKey;
+    setStage3Input(stage3FinalText);
+    setStage3Dirty(false);
+  }, [stage, stage3FinalText, stage3SyncKey]);
 
   const syncExperimentTask = useCallback((nextTask) => {
     if (!nextTask || typeof nextTask !== "object") return;
@@ -742,8 +781,9 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       toStage,
       passphrase: "",
       reason: "",
+      errorMessage: "",
       passphraseLabel: "回退口令",
-      passphrasePlaceholder: "turnback2026!",
+      passphrasePlaceholder: "请输入口令",
       reasonLabel: "回退原因",
       reasonPlaceholder: "请说明为什么需要回退",
     });
@@ -757,8 +797,9 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       confirmLabel: "确认重新开始",
       passphrase: "",
       reason: "",
+      errorMessage: "",
       passphraseLabel: "重新开始口令",
-      passphrasePlaceholder: "Try again",
+      passphrasePlaceholder: "请输入口令",
       reasonLabel: "重新开始原因",
       reasonPlaceholder: "请说明为什么需要重新开始",
     });
@@ -769,11 +810,15 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       if (!dialog) return;
       if (dialog.kind === "turnback" || dialog.kind === "restart") {
         if (action.type === "passphrase") {
-          setDialog((current) => (current ? { ...current, passphrase: action.value } : current));
+          setDialog((current) =>
+            current ? { ...current, passphrase: action.value, errorMessage: "" } : current,
+          );
           return;
         }
         if (action.type === "reason") {
-          setDialog((current) => (current ? { ...current, reason: action.value } : current));
+          setDialog((current) =>
+            current ? { ...current, reason: action.value, errorMessage: "" } : current,
+          );
           return;
         }
         if (action.type !== "confirm") return;
@@ -810,7 +855,15 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
           );
           setDialog(null);
         } catch (error) {
-          setLoadError(error?.message || (dialog.kind === "turnback" ? "回退失败。" : "重新开始失败。"));
+          setDialog((current) =>
+            current
+              ? {
+                  ...current,
+                  errorMessage:
+                    error?.message || (dialog.kind === "turnback" ? "回退失败。" : "重新开始失败。"),
+                }
+              : current,
+          );
         }
         return;
       }
@@ -912,6 +965,35 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     return normalized;
   }
 
+  function handleStage3Edit(value) {
+    setStage3Input(value);
+    setStage3Dirty(true);
+  }
+
+  function saveStage3Draft(nativeInputType = "manual_save") {
+    const current = sessionRef.current;
+    if (!current || current.status !== "stage3_active") return current;
+    const value = String(stage3Input || "");
+    const previousValue = String(current.stage3?.finalText || "");
+    const baseNextSession = {
+      ...current,
+      stage3: {
+        ...(current.stage3 || {}),
+        finalText: value,
+      },
+    };
+    const nextSession = applyMutationRisk(baseNextSession, {
+      stage: "stage3",
+      fieldKey: "stage3.finalText",
+      previousValue,
+      nextValue: value,
+      inputType: nativeInputType,
+    });
+    const normalized = commitSession(nextSession, { immediate: true });
+    setStage3Dirty(false);
+    return normalized;
+  }
+
   function updateStage3FinalText(value, nativeInputType = "") {
     const current = sessionRef.current;
     if (!current || current.status !== "stage3_active") return;
@@ -1009,6 +1091,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   }
 
   async function confirmFinalSubmit() {
+    saveStage3Draft();
     setSubmitting(true);
     setLoadError("");
     try {
@@ -1400,21 +1483,20 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     stage === "stage1"
       ? "请先独立写下你的改进方案"
       : stage === "stage2"
-        ? "左侧完成作答，右侧与 AI 协作"
+        ? variant === "two-stage-free"
+          ? "左侧随时记录笔记，右侧自由使用 AI"
+          : "左侧完成作答，右侧与 AI 协作"
         : isExpired
           ? "当前内容已锁定"
           : "在这里完成最终定稿";
-  const answerFieldLabel =
-    stage === "stage1"
-      ? ""
-      : stage === "stage2"
-        ? "协作草稿"
-        : "最终方案";
+  const answerFieldLabel = "";
   const answerPlaceholder =
     stage === "stage1"
       ? "在这里写下你的改进方案。"
       : stage === "stage2"
-        ? "继续在这里整理你的答案，可以把 AI 的建议补进来。"
+        ? variant === "two-stage-free"
+          ? "自由使用 AI 完成任务 1 并记录草稿。"
+          : "在这里整理你的改进方案。可以参考 AI 建议，但请用自己的话完成草稿。"
         : "在这里整理最终方案。";
   const displayedStage2Messages = useMemo(() => {
     const base = session?.stage2?.messages || [];
@@ -1500,7 +1582,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
         </>
       ) : null}
 
-      {session?.status !== "not_started" ? (
+      {session?.status !== "not_started" && !isSubmitted ? (
         <section className="final-test-exam-layout">
           <section className="final-test-exam-pane final-test-answer-pane">
             <header className="final-test-pane-head">
@@ -1541,22 +1623,48 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
               </section>
 
               <div className="final-test-stage-strip final-test-stage-strip-embedded">
-                <StageBadge
-                  active={stage === "stage1"}
-                  muted={variant !== "three-stage-guided"}
-                  index="1"
-                  name="独立思考阶段"
-                />
-                <StageBadge
-                  active={stage === "stage2"}
-                  index="2"
-                  name="AI 协作阶段"
-                />
-                <StageBadge
-                  active={stage === "stage3" || stage === "time_expired" || stage === "submitted"}
-                  index="3"
-                  name="独立定稿阶段"
-                />
+                {variant === "two-stage-free" ? (
+                  <>
+                    <StageBadge
+                      active={stage === "stage2"}
+                      index="1"
+                      name="AI 自由使用阶段"
+                    />
+                    <StageBadge
+                      active={stage === "stage3" || stage === "time_expired"}
+                      index="2"
+                      name="独立定稿阶段"
+                    />
+                    <StageBadge
+                      active={false}
+                      index="3"
+                      name="任务感受"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <StageBadge
+                      active={stage === "stage1"}
+                      index="1"
+                      name="独立思考阶段"
+                    />
+                    <StageBadge
+                      active={stage === "stage2"}
+                      index="2"
+                      name="AI 协作阶段"
+                    />
+                    <StageBadge
+                      active={stage === "stage3" || stage === "time_expired"}
+                      index="3"
+                      name="独立定稿阶段"
+                    />
+                    <StageBadge
+                      active={false}
+                      index="4"
+                      name="任务感受"
+                    />
+                  </>
+                )}
               </div>
 
               <section className="final-test-answer-workbench">
@@ -1565,7 +1673,8 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                     <h3>
                       {currentStageTitle}
                       {(stage === "stage1" && stage1Dirty) ||
-                      (stage === "stage2" && stage2Dirty) ? (
+                      (stage === "stage2" && stage2Dirty) ||
+                      (stage === "stage3" && stage3Dirty) ? (
                         <em className="final-test-unsaved-flag">未保存</em>
                       ) : null}
                     </h3>
@@ -1625,7 +1734,36 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                         </button>
                       </>
                     ) : null}
-                    {(stage === "stage3" || stage === "time_expired") && !isSubmitted ? (
+                    {stage === "stage3" && !isExpired && !isSubmitted ? (
+                      <>
+                        <button
+                          type="button"
+                          className="final-test-ghost-btn"
+                          onClick={() => openTurnbackDialog("stage3", "stage2")}
+                          disabled={submitting}
+                        >
+                          <RotateCcw size={15} />
+                          <span>回退到上一阶段</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="final-test-ghost-btn"
+                          onClick={() => saveStage3Draft()}
+                          disabled={!stage3Dirty}
+                        >
+                          {stage3Dirty ? "保存草稿" : "已保存"}
+                        </button>
+                        <button
+                          type="button"
+                          className="final-test-secondary-btn"
+                          onClick={requestFinalSubmit}
+                          disabled={submitting}
+                        >
+                          {submitting ? "提交中…" : "提交测试"}
+                        </button>
+                      </>
+                    ) : null}
+                    {stage === "time_expired" && !isSubmitted ? (
                       <button
                         type="button"
                         className="final-test-secondary-btn"
@@ -1633,17 +1771,6 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                         disabled={submitting}
                       >
                         {submitting ? "提交中…" : "提交测试"}
-                      </button>
-                    ) : null}
-                    {stage === "stage3" && !isExpired && !isSubmitted ? (
-                      <button
-                        type="button"
-                        className="final-test-ghost-btn"
-                        onClick={() => openTurnbackDialog("stage3", "stage2")}
-                        disabled={submitting}
-                      >
-                        <RotateCcw size={15} />
-                        <span>回退到上一阶段</span>
                       </button>
                     ) : null}
                   </div>
@@ -1658,7 +1785,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                         ? stage1Input
                         : stage === "stage2"
                           ? stage2Input
-                          : stage3FinalText
+                          : stage3Input
                     }
                     onChange={(event) => {
                       const nextValue = event.target.value;
@@ -1671,7 +1798,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                         return;
                       }
                       if (stage === "stage3") {
-                        updateStage3FinalText(nextValue, event.nativeEvent?.inputType);
+                        handleStage3Edit(nextValue);
                       }
                     }}
                     onPaste={(event) => {
@@ -1709,6 +1836,11 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
             </header>
 
             <div className="final-test-chat-message-wrap">
+              {stage === "stage2" && displayedStage2Messages.length === 0 ? (
+                <div className="final-test-chat-empty-hint">
+                  可以向 AI 提问，例如比较想法、指出不足、提出改进方向。
+                </div>
+              ) : null}
               <MessageList
                 activeSessionId={`final-test-${studentUserId || className || "student"}`}
                 messages={displayedStage2Messages}
@@ -1720,10 +1852,11 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                 onAskSelection={stage === "stage2" ? (text) => setAiQuoteText(text) : null}
                 showAssistantActions={stage === "stage2"}
                 disableAssistantCopy={false}
+                assistantForwardLabel="追加到左侧协作草稿"
               />
             </div>
 
-            {variant === "three-stage-guided" && stage === "stage2" ? (
+            {stage === "stage2" && variant === "three-stage-guided" ? (
               <div className="final-test-prompt-section">
                 <button
                   type="button"
@@ -1732,6 +1865,9 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                   aria-expanded={promptsExpanded}
                 >
                   <span>快捷提问</span>
+                  {!promptsExpanded ? (
+                    <small>不知道怎么问？</small>
+                  ) : null}
                   {promptsExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
                 </button>
                 {promptsExpanded ? (
@@ -1784,6 +1920,62 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
         </section>
       ) : null}
 
+      {isSubmitted ? (
+        <section className="final-test-survey-pane final-test-exam-pane">
+          <header className="final-test-pane-head">
+            <div className="final-test-pane-head-main">
+              <h2>{finalTestTitle}</h2>
+            </div>
+            <div className="final-test-pane-head-actions">
+              <button
+                type="button"
+                className="final-test-ghost-btn"
+                onClick={openRestartDialog}
+                disabled={saving || streaming || submitting || starting}
+              >
+                申请重新开始
+              </button>
+            </div>
+          </header>
+          <div className="final-test-survey-body">
+            <div className="final-test-stage-strip final-test-stage-strip-embedded">
+              {variant === "two-stage-free" ? (
+                <>
+                  <StageBadge active={false} muted index="1" name="AI 自由使用阶段" />
+                  <StageBadge active={false} muted index="2" name="独立定稿阶段" />
+                  <StageBadge active index="3" name="任务感受" />
+                </>
+              ) : (
+                <>
+                  <StageBadge active={false} muted index="1" name="独立思考阶段" />
+                  <StageBadge active={false} muted index="2" name="AI 协作阶段" />
+                  <StageBadge active={false} muted index="3" name="独立定稿阶段" />
+                  <StageBadge active index="4" name="任务感受" />
+                </>
+              )}
+            </div>
+            <div className="final-test-survey-intro">
+              <p>测试已完成，感谢参与！请在下方填写任务感受问卷，分享你在本次测试中的体验。</p>
+              <a
+                href={SURVEY_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="final-test-ghost-btn"
+              >
+                <ExternalLink size={14} />
+                <span>在新标签页打开问卷</span>
+              </a>
+            </div>
+            <iframe
+              src={SURVEY_URL}
+              title="任务感受问卷"
+              className="final-test-survey-iframe"
+              sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation"
+            />
+          </div>
+        </section>
+      ) : null}
+
       {dialog ? (
         <FinalTestDialog
           dialog={dialog}
@@ -1795,12 +1987,12 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       {loadError || notice ? (
         <div className="final-test-floating-stack">
           {loadError ? (
-            <div className="final-test-floating-tip final-test-floating-tip-error" role="alert">
+            <div key={loadError} className="final-test-floating-tip final-test-floating-tip-error" role="alert">
               <AlertTriangle size={14} />
               <span>{loadError}</span>
             </div>
           ) : null}
-          {notice ? <div className="final-test-floating-tip final-test-floating-tip-notice">{notice}</div> : null}
+          {notice ? <div key={notice} className="final-test-floating-tip final-test-floating-tip-notice">{notice}</div> : null}
         </div>
       ) : null}
     </div>

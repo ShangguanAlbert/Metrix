@@ -241,6 +241,7 @@ const MessageList = forwardRef(function MessageList({
   onAssistantFeedback,
   onAssistantRegenerate,
   onAssistantForward,
+  assistantForwardLabel = "转发到左侧对话",
   onSaveNote,
   onAskSelection,
   onLatestChange,
@@ -480,6 +481,7 @@ const MessageList = forwardRef(function MessageList({
           onAssistantFeedback={onAssistantFeedback}
           onAssistantRegenerate={onAssistantRegenerate}
           onAssistantForward={onAssistantForward}
+          assistantForwardLabel={assistantForwardLabel}
           onSaveNote={onSaveNote}
           onReasoningToggle={prepareForReasoningToggle}
           promptMessageId={promptMap.get(m.id) || ""}
@@ -495,6 +497,7 @@ const MessageList = forwardRef(function MessageList({
       onAssistantFeedback,
       onAssistantRegenerate,
       onAssistantForward,
+      assistantForwardLabel,
       onSaveNote,
       prepareForReasoningToggle,
       promptMap,
@@ -950,6 +953,7 @@ const MessageItem = memo(function MessageItem({
   onAssistantFeedback,
   onAssistantRegenerate,
   onAssistantForward,
+  assistantForwardLabel = "转发到左侧对话",
   onSaveNote,
   onReasoningToggle,
   promptMessageId,
@@ -1439,8 +1443,8 @@ const MessageItem = memo(function MessageItem({
                   <button
                     type="button"
                     className="msg-action-btn"
-                    title="转发到左侧对话"
-                    aria-label="转发到左侧对话"
+                    title={assistantForwardLabel}
+                    aria-label={assistantForwardLabel}
                     onClick={() => onAssistantForward?.(m.id)}
                     disabled={isStreaming}
                   >
