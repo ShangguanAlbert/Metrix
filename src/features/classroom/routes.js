@@ -1,6 +1,8 @@
-import { buildModeSelectionRedirect } from "../../app/routes/navigationTargets.js";
+import {
+  buildModeSelectionPanelRedirect,
+  buildModeSelectionRedirect,
+} from "../../app/routes/navigationTargets.js";
 import ModeSelectionPage from "./pages/ModeSelectionPage.jsx";
-import ProductImprovementTaskPage from "./pages/ProductImprovementTaskPage.jsx";
 
 export const classroomRoutes = [
   {
@@ -15,8 +17,8 @@ export const classroomRoutes = [
   },
   {
     path: "/classroom/tasks/product-improvement",
-    component: ProductImprovementTaskPage,
     auth: "user",
+    redirectTo: ({ activeSlot }) => buildModeSelectionPanelRedirect(activeSlot, "final-test"),
   },
   {
     path: "/agent-lab",

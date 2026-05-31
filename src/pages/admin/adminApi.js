@@ -240,6 +240,17 @@ export function saveAdminClassroomSettings(adminToken, payload) {
   });
 }
 
+export function fetchAdminFinalTestConfig(adminToken) {
+  return request("/api/auth/admin/final-test-config", adminToken);
+}
+
+export function saveAdminFinalTestConfig(adminToken, payload) {
+  return request("/api/auth/admin/final-test-config", adminToken, {
+    method: "PUT",
+    body: JSON.stringify(payload && typeof payload === "object" ? payload : {}),
+  });
+}
+
 export function fetchAdminClassroomPlans(adminToken) {
   return request("/api/auth/admin/classroom-plans", adminToken);
 }

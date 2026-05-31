@@ -17,8 +17,29 @@ async function readJson(resp) {
   }
 }
 
+function shouldEnableFinalTestDebug() {
+  if (typeof window === "undefined") return false;
+  try {
+    const params = new URLSearchParams(String(window.location.search || ""));
+    const raw = String(params.get("finalTestDebug") || params.get("debug") || "")
+      .trim()
+      .toLowerCase();
+    return ["1", "true", "yes", "on"].includes(raw);
+  } catch {
+    return false;
+  }
+}
+
+function appendFinalTestDebugParam(path) {
+  const safePath = String(path || "").trim();
+  if (!safePath.startsWith("/api/classroom/final-test/")) return safePath;
+  if (!shouldEnableFinalTestDebug()) return safePath;
+  const joiner = safePath.includes("?") ? "&" : "?";
+  return `${safePath}${joiner}finalTestDebug=1`;
+}
+
 async function request(path, options = {}) {
-  const resp = await fetch(path, {
+  const resp = await fetch(appendFinalTestDebugParam(path), {
     method: "GET",
     ...options,
     headers: authHeaders({
@@ -36,6 +57,43 @@ async function request(path, options = {}) {
 
 export function fetchClassroomTaskSettings() {
   return request("/api/classroom/tasks/settings");
+}
+
+export function fetchClassroomFinalTestSession() {
+  return request("/api/classroom/final-test/session");
+}
+
+export function startClassroomFinalTestSession() {
+  return request("/api/classroom/final-test/session/start", {
+    method: "POST",
+  });
+}
+
+export function updateClassroomFinalTestSession(payload = {}) {
+  return request("/api/classroom/final-test/session", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function turnbackClassroomFinalTestSession(payload = {}) {
+  return request("/api/classroom/final-test/session/turnback", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function restartClassroomFinalTestSession(payload = {}) {
+  return request("/api/classroom/final-test/session/restart", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function submitClassroomFinalTestSession() {
+  return request("/api/classroom/final-test/session/submit", {
+    method: "POST",
+  });
 }
 
 export function updateClassroomSeatAssignment(seatIndex) {

@@ -57,6 +57,7 @@ import {
   normalizeClassroomHomeworkRequirementText,
   resolveClassroomHomeworkRequirementText,
 } from "../../shared/classroomHomework.js";
+import { normalizeFinalTestContentConfig } from "../../shared/finalTestContent.js";
 import {
   TEACHER_CLASSROOM_FILE_MAX_FILE_SIZE_BYTES,
   TEACHER_TASK_UPLOAD_MAX_FILES,
@@ -103,6 +104,7 @@ import {
   fetchAdminUserDirectory,
   mergeAdminUserDirectoryUsers,
   saveAdminClassroomPlans,
+  saveAdminFinalTestConfig,
   saveAdminClassroomSeatLayouts,
   updateAdminUserDirectoryUser,
   uploadAdminClassroomTaskFiles,
@@ -135,6 +137,7 @@ const TEACHER_HOME_PANEL_KEYS = Object.freeze(
     "homework",
     "seat-fixed",
     "random-rollcall",
+    "final-test",
     "user-manage",
     "export-center",
     "image-library",
@@ -149,6 +152,7 @@ const CLASSROOM_MANAGE_PANEL_KEYS = Object.freeze(
     "homework",
     "seat-fixed",
     "random-rollcall",
+    "final-test",
   ]),
 );
 const CLASSROOM_MANAGE_HIDDEN_ADMIN_USERNAME_KEYS = Object.freeze(
@@ -836,6 +840,19 @@ function buildClassroomConfigSnapshot({
   });
 }
 
+function buildFinalTestConfigSnapshot(finalTestConfig) {
+  return JSON.stringify(normalizeFinalTestContentConfig(finalTestConfig));
+}
+
+function createTeacherFinalTestTaskDraft(index = 0) {
+  return {
+    id: `task-${Date.now().toString(36)}-${index + 1}`,
+    title: `任务 ${index + 1}`,
+    description: "",
+    mode: "platform",
+  };
+}
+
 function resolveTeacherFeatureTransitionLabel(pathname) {
   const safePath = String(pathname || "")
     .trim()
@@ -1217,6 +1234,7 @@ export default function TeacherHomePage() {
   const deleteConfirmInputRef = useRef(null);
   const disciplineStudentSearchInputRef = useRef(null);
   const classroomConfigSavedSnapshotRef = useRef("");
+  const finalTestConfigSavedSnapshotRef = useRef("");
 
   const [adminToken, setAdminToken] = useState(() => getAdminToken());
   const [loading, setLoading] = useState(true);
@@ -1410,6 +1428,7 @@ export default function TeacherHomePage() {
   const [exportCenterError, setExportCenterError] = useState("");
   const [exportCenterNotice, setExportCenterNotice] = useState("");
   const [classroomSaveNotice, setClassroomSaveNotice] = useState("");
+  const [finalTestSaving, setFinalTestSaving] = useState(false);
   const [exportCenterDeleteDialogOpen, setExportCenterDeleteDialogOpen] =
     useState(false);
   const [seatLayoutsByClass, setSeatLayoutsByClass] = useState(() =>
@@ -1418,6 +1437,9 @@ export default function TeacherHomePage() {
   const [seatLayoutsSyncReady, setSeatLayoutsSyncReady] = useState(false);
   const [classroomDisciplineConfig, setClassroomDisciplineConfig] = useState(
     () => normalizeDisciplineConfig(null),
+  );
+  const [finalTestConfig, setFinalTestConfig] = useState(() =>
+    normalizeFinalTestContentConfig(null),
   );
   const [disciplineDraftBehavior, setDisciplineDraftBehavior] = useState("");
   const [disciplineStudentKeyword, setDisciplineStudentKeyword] = useState("");
@@ -1637,13 +1659,20 @@ export default function TeacherHomePage() {
         const normalizedDisciplineConfig = normalizeDisciplineConfig(
           plansData?.classroomDisciplineConfig,
         );
+        const normalizedFinalTestConfig = normalizeFinalTestContentConfig(
+          plansData?.finalTestConfig,
+        );
         setTeacherCoursePlans(normalizedPlans);
         setClassroomDisciplineConfig(normalizedDisciplineConfig);
+        setFinalTestConfig(normalizedFinalTestConfig);
         classroomConfigSavedSnapshotRef.current = buildClassroomConfigSnapshot({
           productTaskEnabled: legacyProductEnabled,
           teacherCoursePlans: normalizedPlans,
           classroomDisciplineConfig: normalizedDisciplineConfig,
         });
+        finalTestConfigSavedSnapshotRef.current = buildFinalTestConfigSnapshot(
+          normalizedFinalTestConfig,
+        );
         const serverSeatLayouts = normalizeSeatLayoutsByClass(
           plansData?.seatLayoutsByClass,
         );
@@ -2127,6 +2156,7 @@ export default function TeacherHomePage() {
           { key: "classroom", label: "课时管理", icon: ClipboardList },
           { key: "discipline", label: "纪律管理", icon: CircleHelp },
           { key: "homework", label: "作业管理", icon: FileText },
+          { key: "final-test", label: "期末测试", icon: BookCheck },
           { key: "seat-fixed", label: "座位管理", icon: LayoutGrid },
           { key: "random-rollcall", label: "随机点名", icon: Dices },
         ],
@@ -2265,7 +2295,19 @@ export default function TeacherHomePage() {
   }
 
   function confirmLeaveWithUnsavedClassroomConfig() {
-    if (!classroomConfigHasUnsavedChanges) return true;
+    const hasClassroomChanges = classroomConfigHasUnsavedChanges;
+    const hasFinalTestChanges = finalTestConfigHasUnsavedChanges;
+    if (!hasClassroomChanges && !hasFinalTestChanges) return true;
+    if (hasClassroomChanges && hasFinalTestChanges) {
+      return window.confirm(
+        "当前有未保存的课时/任务修改和期末测试内容修改，切换栏目后这些修改将丢失。确定要放弃并离开吗？",
+      );
+    }
+    if (hasFinalTestChanges) {
+      return window.confirm(
+        "当前有未保存的期末测试内容修改，切换栏目后这些修改将丢失。确定要放弃并离开吗？",
+      );
+    }
     return window.confirm(
       "当前有未保存的课时/任务修改，切换栏目后这些修改将丢失。确定要放弃并离开吗？",
     );
@@ -3208,8 +3250,16 @@ export default function TeacherHomePage() {
   );
   const classroomConfigHasUnsavedChanges =
     classroomConfigSnapshot !== classroomConfigSavedSnapshotRef.current;
+  const finalTestConfigSnapshot = useMemo(
+    () => buildFinalTestConfigSnapshot(finalTestConfig),
+    [finalTestConfig],
+  );
+  const finalTestConfigHasUnsavedChanges =
+    finalTestConfigSnapshot !== finalTestConfigSavedSnapshotRef.current;
   useEffect(() => {
-    if (!classroomConfigHasUnsavedChanges) return undefined;
+    if (!classroomConfigHasUnsavedChanges && !finalTestConfigHasUnsavedChanges) {
+      return undefined;
+    }
     const handleBeforeUnload = (event) => {
       event.preventDefault();
       event.returnValue = "";
@@ -3219,7 +3269,7 @@ export default function TeacherHomePage() {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [classroomConfigHasUnsavedChanges]);
+  }, [classroomConfigHasUnsavedChanges, finalTestConfigHasUnsavedChanges]);
   const filteredHomeworkLessons = useMemo(() => {
     const q = homeworkSearchQuery.trim().toLowerCase();
     if (!q) return homeworkLessons;
@@ -4157,8 +4207,85 @@ export default function TeacherHomePage() {
     ],
   );
 
+  const persistFinalTestConfig = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!adminToken || finalTestSaving) return false;
+      if (!silent) setError("");
+      if (!silent) setClassroomSaveNotice("");
+      setFinalTestSaving(true);
+      try {
+        const data = await saveAdminFinalTestConfig(adminToken, {
+          finalTestConfig,
+        });
+        const normalizedFinalTestConfig = normalizeFinalTestContentConfig(
+          data?.finalTestConfig,
+        );
+        setFinalTestConfig(normalizedFinalTestConfig);
+        setClassroomUpdatedAt(
+          String(data?.updatedAt || new Date().toISOString()),
+        );
+        finalTestConfigSavedSnapshotRef.current = buildFinalTestConfigSnapshot(
+          normalizedFinalTestConfig,
+        );
+        if (!silent) {
+          setClassroomSaveNotice("期末测试内容已保存。");
+        }
+        return true;
+      } catch (rawError) {
+        if (handleAuthError(rawError)) return false;
+        setError(readErrorMessage(rawError));
+        return false;
+      } finally {
+        setFinalTestSaving(false);
+      }
+    },
+    [adminToken, finalTestConfig, finalTestSaving, handleAuthError],
+  );
+
   async function onSaveClassroomConfig() {
     await persistClassroomConfig({ silent: false });
+  }
+
+  async function onSaveFinalTestConfig() {
+    await persistFinalTestConfig({ silent: false });
+  }
+
+  function updateFinalTestTaskAt(taskIndex, updater) {
+    setFinalTestConfig((current) => {
+      const tasks = Array.isArray(current?.tasks) ? current.tasks : [];
+      const nextTasks = tasks.map((task, index) => {
+        if (index !== taskIndex) return task;
+        return updater(task, index);
+      });
+      return normalizeFinalTestContentConfig({
+        ...current,
+        tasks: nextTasks,
+      });
+    });
+  }
+
+  function addFinalTestTask() {
+    setFinalTestConfig((current) => {
+      const tasks = Array.isArray(current?.tasks) ? current.tasks : [];
+      return normalizeFinalTestContentConfig({
+        ...current,
+        tasks: [...tasks, createTeacherFinalTestTaskDraft(tasks.length)],
+      });
+    });
+  }
+
+  function removeFinalTestTask(taskIndex) {
+    setFinalTestConfig((current) => {
+      const tasks = Array.isArray(current?.tasks) ? current.tasks : [];
+      const nextTasks = tasks.filter((_, index) => index !== taskIndex);
+      return normalizeFinalTestContentConfig({
+        ...current,
+        tasks:
+          nextTasks.length > 0
+            ? nextTasks
+            : [createTeacherFinalTestTaskDraft(0)],
+      });
+    });
   }
 
   function onSelectTaskFiles(event) {
@@ -6379,7 +6506,170 @@ export default function TeacherHomePage() {
               </div>
             ) : null}
 
-            {activePanel === "discipline" ? (
+            {activePanel === "final-test" ? (
+              <div className="teacher-panel-stack teacher-final-test-stack">
+                <header className="teacher-panel-head">
+                  <div>
+                    <h2>期末测试</h2>
+                    <p className="teacher-panel-save-time">
+                      {`编辑学生端将显示的期末测试内容 · 最近保存：${formatDisplayTime(classroomUpdatedAt)}`}
+                    </p>
+                  </div>
+                  <div className="teacher-panel-actions">
+                    {finalTestConfigHasUnsavedChanges ? (
+                      <span className="teacher-user-manage-dirty-tag">
+                        期末测试内容未保存
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="teacher-primary-btn teacher-tooltip-btn teacher-action-icon-btn"
+                      onClick={onSaveFinalTestConfig}
+                      disabled={loading || saving || finalTestSaving || uploadingFiles}
+                      data-tooltip={finalTestSaving ? "保存中..." : "保存期末测试内容"}
+                      title={finalTestSaving ? "保存中..." : "保存期末测试内容"}
+                      aria-label={finalTestSaving ? "保存中..." : "保存期末测试内容"}
+                    >
+                      <Save size={15} />
+                    </button>
+                  </div>
+                </header>
+
+                <div className="teacher-final-test-columns">
+                <section className="teacher-card teacher-final-test-card">
+                  <label className="teacher-full-row">
+                    <span>顶部说明</span>
+                    <textarea
+                      rows={4}
+                      value={finalTestConfig.introText}
+                      onChange={(event) =>
+                        setFinalTestConfig((current) => ({
+                          ...current,
+                          introText: event.target.value,
+                        }))
+                      }
+                      placeholder="说明期末测试包含哪些部分，以及平台内任务的要求。"
+                    />
+                  </label>
+                  <div className="teacher-final-test-task-head">
+                    <div>
+                      <strong>任务列表</strong>
+                      <p>学生端会按这里的顺序显示任务。可继续新增任务。</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="teacher-ghost-btn"
+                      onClick={addFinalTestTask}
+                    >
+                      <Plus size={14} />
+                      <span>添加任务</span>
+                    </button>
+                  </div>
+                  <div className="teacher-final-test-task-list">
+                    {(Array.isArray(finalTestConfig.tasks)
+                      ? finalTestConfig.tasks
+                      : []
+                    ).map((task, index) => (
+                      <section
+                        key={task.id || `task-${index + 1}`}
+                        className="teacher-final-test-task-item"
+                      >
+                        <div className="teacher-final-test-task-item-head">
+                          <strong>{`任务 ${index + 1}`}</strong>
+                          <div className="teacher-final-test-task-item-actions">
+                            <label className="teacher-final-test-task-mode">
+                              <select
+                                value={task.mode || "platform"}
+                                onChange={(event) =>
+                                  updateFinalTestTaskAt(index, (currentTask) => ({
+                                    ...currentTask,
+                                    mode: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="platform">平台内任务</option>
+                                <option value="offline">线下任务</option>
+                              </select>
+                            </label>
+                            <button
+                              type="button"
+                              className="teacher-final-test-task-remove"
+                              onClick={() => removeFinalTestTask(index)}
+                              disabled={(finalTestConfig.tasks || []).length <= 1}
+                            >
+                              <Trash2 size={14} />
+                              <span>删除</span>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="teacher-form-grid teacher-form-grid-single">
+                          <label>
+                            <span>任务标题</span>
+                            <input
+                              type="text"
+                              value={task.title || ""}
+                              onChange={(event) =>
+                                updateFinalTestTaskAt(index, (currentTask) => ({
+                                  ...currentTask,
+                                  title: event.target.value,
+                                }))
+                              }
+                              placeholder={`任务 ${index + 1} 标题`}
+                            />
+                          </label>
+                        </div>
+                        <label className="teacher-full-row">
+                          <span>任务说明</span>
+                          <textarea
+                            rows={index === 0 ? 5 : 3}
+                            value={task.description || ""}
+                            onChange={(event) =>
+                              updateFinalTestTaskAt(index, (currentTask) => ({
+                                ...currentTask,
+                                description: event.target.value,
+                              }))
+                            }
+                            placeholder={
+                              task.mode === "offline"
+                                ? "说明该任务在线下如何完成。"
+                                : "让学生知道具体要做什么、重点写什么。"
+                            }
+                          />
+                        </label>
+                      </section>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="teacher-card teacher-final-test-preview-card">
+                  <h3>学生端预览</h3>
+                  <div className="teacher-final-test-preview">
+                    <p>{finalTestConfig.introText}</p>
+                    {(Array.isArray(finalTestConfig.tasks)
+                      ? finalTestConfig.tasks
+                      : []
+                    ).map((task, index) => (
+                      <div
+                        key={task.id || `preview-task-${index + 1}`}
+                        className="teacher-final-test-preview-task"
+                      >
+                        <strong>{task.title || `任务 ${index + 1}`}</strong>
+                        <p
+                          className={
+                            task.mode === "offline"
+                              ? "teacher-final-test-preview-muted"
+                              : ""
+                          }
+                        >
+                          {task.description || "未填写任务说明。"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                </div>
+              </div>
+            ) : activePanel === "discipline" ? (
               <div className="teacher-panel-stack teacher-discipline-stack">
                 <header className="teacher-panel-head">
                   <div>

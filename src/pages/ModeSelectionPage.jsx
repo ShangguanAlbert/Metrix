@@ -4,6 +4,7 @@ import {
   BookOpenCheck,
   Download,
   ExternalLink,
+  FileText,
   Image,
   LayoutGrid,
   Lock,
@@ -24,6 +25,7 @@ import {
   CLASSROOM_HOMEWORK_DIRECTORY_UPLOAD_ERROR,
   resolveClassroomHomeworkRequirementText,
 } from "../../shared/classroomHomework.js";
+import { normalizeFinalTestContentConfig } from "../../shared/finalTestContent.js";
 import {
   clearUserAuthSession,
   getStoredAuthUser,
@@ -42,6 +44,7 @@ import {
   uploadClassroomHomeworkFiles,
 } from "./classroom/classroomApi.js";
 import { analyzeHomeworkFileSelection } from "../features/classroom/homeworkUploadValidation.js";
+import StudentFinalTestPanel from "../features/classroom/components/StudentFinalTestPanel.jsx";
 import { getStudentHomeworkHistoryLessons } from "../features/classroom/studentHomeworkHistory.js";
 import "../styles/teacher-home.css";
 import "../styles/mode-selection.css";
@@ -226,6 +229,31 @@ function extractLessonSerialFromName(courseName) {
   return Number.isFinite(value) && value > 0 ? value : Number.NaN;
 }
 
+function resolveStudentHomePanel(search) {
+  const safeSearch = String(search || "").trim();
+  const params = new URLSearchParams(safeSearch.startsWith("?") ? safeSearch : `?${safeSearch}`);
+  const panel = String(params.get("panel") || "").trim();
+  const allowedPanels = new Set([
+    "classroom",
+    "final-test",
+    "history-homework",
+    "seat-selection",
+    "workshop",
+    "image-generation",
+    "party",
+  ]);
+  return allowedPanels.has(panel) ? panel : "classroom";
+}
+
+function resolveFinalTestDebugMode(search) {
+  const safeSearch = String(search || "").trim();
+  const params = new URLSearchParams(safeSearch.startsWith("?") ? safeSearch : `?${safeSearch}`);
+  const raw = String(params.get("finalTestDebug") || params.get("debug") || "")
+    .trim()
+    .toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function sortLessonPlans(plans) {
   const source = Array.isArray(plans) ? plans : [];
   return source
@@ -325,8 +353,9 @@ export default function ModeSelectionPage() {
     .trim()
     .toLowerCase();
   const isShangguanTeacher = teacherScopeKey === SHANGGUAN_FUZE_TEACHER_SCOPE_KEY;
+  const finalTestDebugMode = resolveFinalTestDebugMode(location.search);
 
-  const [activePanel, setActivePanel] = useState("classroom");
+  const [activePanel, setActivePanel] = useState(() => resolveStudentHomePanel(location.search));
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsError, setSettingsError] = useState("");
   const [downloadError, setDownloadError] = useState("");
@@ -351,10 +380,21 @@ export default function ModeSelectionPage() {
   const [selectedHistoryLessonId, setSelectedHistoryLessonId] = useState("");
   const [taskSettings, setTaskSettings] = useState({
     firstLessonDate: CLASS_TASK_FALLBACK_DATE,
+    experimentTask: {
+      enabled: false,
+      variant: "disabled",
+      durationMinutes: 20,
+      entryLabel: "期末测试",
+    },
+    finalTestConfig: normalizeFinalTestContentConfig(null),
     teacherCoursePlans: [],
     teacherHistoryCoursePlans: [],
     seatLayout: null,
   });
+
+  useEffect(() => {
+    setActivePanel(resolveStudentHomePanel(location.search));
+  }, [location.search]);
 
   useEffect(() => {
     seatSelectedIndexRef.current = seatSelectedIndex;
@@ -370,12 +410,27 @@ export default function ModeSelectionPage() {
       firstLessonDate: String(
         data?.firstLessonDate || CLASS_TASK_FALLBACK_DATE,
       ),
+      experimentTask:
+        data?.experimentTask && typeof data.experimentTask === "object"
+          ? {
+              enabled: data.experimentTask.enabled === true,
+              variant: String(data.experimentTask.variant || "disabled"),
+              durationMinutes: Number(data.experimentTask.durationMinutes || 20),
+              entryLabel: String(data.experimentTask.entryLabel || "期末测试"),
+            }
+          : {
+              enabled: false,
+              variant: "disabled",
+              durationMinutes: 20,
+              entryLabel: "期末测试",
+            },
       teacherCoursePlans: Array.isArray(data?.teacherCoursePlans)
         ? data.teacherCoursePlans
         : [],
       teacherHistoryCoursePlans: Array.isArray(data?.teacherHistoryCoursePlans)
         ? data.teacherHistoryCoursePlans
         : [],
+      finalTestConfig: normalizeFinalTestContentConfig(data?.finalTestConfig),
       seatLayout: nextSeatLayout,
     });
     if (!nextSeatLayout) {
@@ -921,6 +976,12 @@ export default function ModeSelectionPage() {
       hint: "按节次查看教师发布的课堂任务",
     },
     {
+      key: "final-test",
+      label: "期末测试",
+      icon: FileText,
+      hint: "进入任务 1 的阶段式测试页面",
+    },
+    {
       key: "history-homework",
       label: "历史作业",
       icon: Download,
@@ -1238,7 +1299,15 @@ export default function ModeSelectionPage() {
         </aside>
 
         <main className="teacher-home-main student-home-main">
-          {activePanel === "classroom" ? (
+          {activePanel === "final-test" ? (
+            <div className="teacher-panel-stack student-panel-stack student-final-test-stack">
+              <StudentFinalTestPanel
+                storedUser={storedUser}
+                taskSettings={taskSettings}
+                debugMode={finalTestDebugMode}
+              />
+            </div>
+          ) : activePanel === "classroom" ? (
             <div className="teacher-panel-stack student-panel-stack">
               <header className="teacher-panel-head">
                 <div>

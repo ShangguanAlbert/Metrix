@@ -30,6 +30,7 @@ import {
   withBasePath,
 } from "../config/base-path.js";
 import { normalizeClassroomHomeworkRequirementText } from "../../shared/classroomHomework.js";
+import { normalizeFinalTestContentConfig } from "../../shared/finalTestContent.js";
 import { SYSTEM_PROMPT_LEAK_PROTECTION_TOP_PROMPT } from "../prompts/leakProtectionPrompt.js";
 import { PROMPT_LEAK_PROBE_KEYWORDS } from "../prompts/leakProtectionKeywords.js";
 
@@ -1840,6 +1841,10 @@ const adminConfigSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: () => ({}),
     },
+    finalTestConfig: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => normalizeFinalTestContentConfig(),
+    },
   },
   {
     timestamps: true,
@@ -1912,6 +1917,30 @@ const classroomHomeworkFileSchema = new mongoose.Schema(
 const ClassroomHomeworkFile =
   mongoose.models.ClassroomHomeworkFile ||
   mongoose.model("ClassroomHomeworkFile", classroomHomeworkFileSchema);
+const finalTestSessionSchema = new mongoose.Schema(
+  {
+    key: { type: String, default: ADMIN_CONFIG_KEY, index: true },
+    teacherScopeKey: { type: String, default: DEFAULT_TEACHER_SCOPE_KEY, index: true },
+    studentUserId: { type: String, default: "", index: true },
+    className: { type: String, default: "", index: true },
+    variant: { type: String, default: "" },
+    status: { type: String, default: "disabled", index: true },
+    startedAt: { type: String, default: "" },
+    deadlineAt: { type: String, default: "" },
+    lockedAt: { type: String, default: "" },
+    submittedAt: { type: String, default: "" },
+    timeExpired: { type: Boolean, default: false },
+    durationMinutes: { type: Number, default: 20 },
+    payload: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+  },
+  {
+    timestamps: true,
+    collection: "final_test_sessions",
+  },
+);
+const FinalTestSession =
+  mongoose.models.FinalTestSession ||
+  mongoose.model("FinalTestSession", finalTestSessionSchema);
 function normalizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
 
@@ -10512,6 +10541,7 @@ function normalizeAdminConfigDoc(doc) {
     seatLayoutsByClass: sanitizeAdminClassroomSeatLayoutsByClassPayload(
       doc?.seatLayoutsByClass,
     ),
+    finalTestConfig: normalizeFinalTestContentConfig(doc?.finalTestConfig),
     updatedAt: sanitizeIsoDate(doc?.updatedAt),
   };
 }
@@ -18102,9 +18132,11 @@ export {
   AdminConfig,
   adminClassroomLessonFileSchema,
   AdminClassroomLessonFile,
-  classroomHomeworkFileSchema,
-  ClassroomHomeworkFile,
-  getDefaultRuntimeConfigByAgent,
+    classroomHomeworkFileSchema,
+    ClassroomHomeworkFile,
+    finalTestSessionSchema,
+    FinalTestSession,
+    getDefaultRuntimeConfigByAgent,
   createDefaultAgentRuntimeConfigMap,
   normalizeMessages,
   normalizeMessageContent,

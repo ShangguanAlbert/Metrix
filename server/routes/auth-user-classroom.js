@@ -8,6 +8,15 @@ import {
   CLASSROOM_HOMEWORK_DIRECTORY_UPLOAD_ERROR,
   normalizeClassroomHomeworkRequirementText,
 } from "../../shared/classroomHomework.js";
+import { normalizeFinalTestContentConfig } from "../../shared/finalTestContent.js";
+import {
+  applyFinalTestPatch,
+  buildFinalTestRiskSnapshot,
+  createFinalTestSessionBase,
+  FINAL_TEST_DURATION_MINUTES,
+  normalizeFinalTestSession,
+  resolveFinalTestVariant,
+} from "../../shared/finalTestState.js";
 
 export function registerAuthUserClassroomRoutes(app, deps) {
   function readSignedUrlExpiryText(url) {
@@ -242,6 +251,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     AdminClassroomLessonFile,
     classroomHomeworkFileSchema,
     ClassroomHomeworkFile,
+    FinalTestSession,
     getDefaultRuntimeConfigByAgent,
     createDefaultAgentRuntimeConfigMap,
     normalizeMessages,
@@ -770,6 +780,128 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     };
   }
 
+  function resolveExperimentTaskDescriptor(teacherScopeKey, className) {
+    const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
+    const safeClassName = sanitizeClassroomUserClassName(className);
+    const variant =
+      safeTeacherScopeKey === SHANGGUAN_FUZE_TEACHER_SCOPE_KEY
+        ? resolveFinalTestVariant(safeClassName)
+        : "disabled";
+    return {
+      enabled: variant !== "disabled",
+      variant,
+      durationMinutes: FINAL_TEST_DURATION_MINUTES,
+      entryLabel: "期末测试",
+    };
+  }
+
+  function isFinalTestDebugRequest(req) {
+    const queryValue = String(req?.query?.finalTestDebug || req?.query?.debug || "")
+      .trim()
+      .toLowerCase();
+    const bodyValue = String(req?.body?.finalTestDebug || req?.body?.debug || "")
+      .trim()
+      .toLowerCase();
+    return ["1", "true", "yes", "on"].includes(queryValue) || ["1", "true", "yes", "on"].includes(bodyValue);
+  }
+
+  async function resolveMaybeLean(docOrQuery) {
+    const resolved = await docOrQuery;
+    if (resolved && typeof resolved.lean === "function") {
+      return resolved.lean();
+    }
+    return resolved;
+  }
+
+  function buildFinalTestSessionQuery({ teacherScopeKey, studentUserId, className }) {
+    return {
+      key: ADMIN_CONFIG_KEY,
+      teacherScopeKey: sanitizeTeacherScopeKey(teacherScopeKey),
+      studentUserId: sanitizeId(studentUserId, ""),
+      className: sanitizeClassroomUserClassName(className),
+    };
+  }
+
+  function buildPersistedFinalTestSessionDoc(query, session) {
+    const normalized = normalizeFinalTestSession(session);
+    return {
+      key: ADMIN_CONFIG_KEY,
+      teacherScopeKey: query.teacherScopeKey,
+      studentUserId: query.studentUserId,
+      className: query.className,
+      variant: normalized.variant,
+      status: normalized.status,
+      startedAt: normalized.startedAt,
+      deadlineAt: normalized.deadlineAt,
+      lockedAt: normalized.lockedAt,
+      submittedAt: normalized.submittedAt,
+      timeExpired: normalized.timeExpired === true,
+      durationMinutes: FINAL_TEST_DURATION_MINUTES,
+      payload: {
+        stage1: normalized.stage1,
+        stage2: normalized.stage2,
+        stage3: normalized.stage3,
+        turnbackEvents: normalized.turnbackEvents,
+        riskLog: normalized.riskLog,
+      },
+    };
+  }
+
+  async function writeFinalTestSession(query, session) {
+    const payload = buildPersistedFinalTestSessionDoc(query, session);
+    const updated = await resolveMaybeLean(
+      FinalTestSession.findOneAndUpdate(
+        query,
+        {
+          $set: payload,
+        },
+        {
+          upsert: true,
+          new: true,
+        },
+      ),
+    );
+    return normalizeFinalTestSession(updated);
+  }
+
+  async function readFinalTestSessionRecord({
+    teacherScopeKey,
+    studentUserId,
+    className,
+    debugMode = false,
+  }) {
+    const query = buildFinalTestSessionQuery({
+      teacherScopeKey,
+      studentUserId,
+      className,
+    });
+    const experimentTask = resolveExperimentTaskDescriptor(
+      teacherScopeKey,
+      className,
+    );
+    const existing = await resolveMaybeLean(FinalTestSession.findOne(query));
+    if (!existing) {
+      return {
+        query,
+        session: normalizeFinalTestSession({
+          ...createFinalTestSessionBase({
+            studentUserId,
+            className,
+            variant: experimentTask.variant,
+            nowIso: new Date().toISOString(),
+          }),
+          status: "not_started",
+          startedAt: "",
+          deadlineAt: "",
+          durationMinutes: FINAL_TEST_DURATION_MINUTES,
+        }),
+        experimentTask,
+      };
+    }
+    const normalized = normalizeFinalTestSession(existing);
+    return { query, session: normalized, experimentTask };
+  }
+
   function findSeatIndexByIdentityTokens(seats, tokenSet) {
     if (!Array.isArray(seats) || !(tokenSet instanceof Set) || tokenSet.size === 0) return -1;
     return seats.findIndex((seatValue) => tokenSet.has(normalizeSeatValueToken(seatValue)));
@@ -1113,15 +1245,21 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     const isShangguanTeacher = teacherScopeKey === SHANGGUAN_FUZE_TEACHER_SCOPE_KEY;
     const userProfile = sanitizeUserProfile(req.authUser?.profile);
     const userClassName = sanitizeClassroomUserClassName(userProfile.className);
+    const experimentTask = resolveExperimentTaskDescriptor(
+      teacherScopeKey,
+      userProfile.className,
+    );
     const seatLayoutClassName = sanitizeSeatLayoutClassName(userProfile.className);
     let productImprovementEnabled = false;
     let teacherCoursePlans = [];
     let teacherHistoryCoursePlans = [];
     let seatLayout = null;
+    let finalTestConfig = normalizeFinalTestContentConfig(null);
 
     if (isShangguanTeacher) {
       const config = await readAdminAgentConfig();
       productImprovementEnabled = !!config.shangguanClassTaskProductImprovementEnabled;
+      finalTestConfig = normalizeFinalTestContentConfig(config.finalTestConfig);
       teacherHistoryCoursePlans = sortAdminClassroomCoursePlans(
         config.teacherCoursePlans
           .map((lesson) => ({
@@ -1163,9 +1301,254 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       firstLessonDate: CLASSROOM_FIRST_LESSON_DATE,
       questionnaireUrl: CLASSROOM_QUESTIONNAIRE_URL,
       productImprovementEnabled,
+      experimentTask,
+      finalTestConfig,
       teacherCoursePlans,
       teacherHistoryCoursePlans,
       seatLayout,
+    });
+  });
+
+  app.get("/api/classroom/final-test/session", requireChatAuth, async (req, res) => {
+    const userProfile = sanitizeUserProfile(req.authUser?.profile);
+    const debugMode = isFinalTestDebugRequest(req);
+    const { session, experimentTask } = await readFinalTestSessionRecord({
+      teacherScopeKey: req.authTeacherScopeKey,
+      studentUserId: req.authUser?._id,
+      className: userProfile.className,
+      debugMode,
+    });
+
+    res.json({
+      ok: true,
+      experimentTask,
+      session,
+    });
+  });
+
+  app.post("/api/classroom/final-test/session/start", requireChatAuth, async (req, res) => {
+    const userProfile = sanitizeUserProfile(req.authUser?.profile);
+    const debugMode = isFinalTestDebugRequest(req);
+    const { query, session, experimentTask } = await readFinalTestSessionRecord({
+      teacherScopeKey: req.authTeacherScopeKey,
+      studentUserId: req.authUser?._id,
+      className: userProfile.className,
+      debugMode,
+    });
+    if (!experimentTask.enabled) {
+      res.status(403).json({ error: "当前班级未开放期末测试。" });
+      return;
+    }
+    if (session.status !== "not_started") {
+      res.json({
+        ok: true,
+        experimentTask,
+        session: {
+          ...session,
+          durationMinutes: FINAL_TEST_DURATION_MINUTES,
+        },
+      });
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const started = createFinalTestSessionBase({
+      studentUserId: req.authUser?._id,
+      className: userProfile.className,
+      variant: experimentTask.variant,
+      startedAt: nowIso,
+      nowIso,
+    });
+    const persisted = await writeFinalTestSession(query, started);
+    res.json({
+      ok: true,
+      experimentTask,
+      session: {
+        ...persisted,
+        durationMinutes: FINAL_TEST_DURATION_MINUTES,
+      },
+    });
+  });
+
+  app.put("/api/classroom/final-test/session", requireChatAuth, async (req, res) => {
+    const userProfile = sanitizeUserProfile(req.authUser?.profile);
+    const debugMode = isFinalTestDebugRequest(req);
+    const { query, session, experimentTask } = await readFinalTestSessionRecord({
+      teacherScopeKey: req.authTeacherScopeKey,
+      studentUserId: req.authUser?._id,
+      className: userProfile.className,
+      debugMode,
+    });
+    if (!experimentTask.enabled) {
+      res.status(403).json({ error: "当前班级未开放期末测试。" });
+      return;
+    }
+    const next = applyFinalTestPatch(session, req.body || {});
+    const riskSummary = buildFinalTestRiskSnapshot(next.riskLog);
+    const persisted = await writeFinalTestSession(query, next);
+    res.json({
+      ok: true,
+      experimentTask,
+      session: {
+        ...persisted,
+        riskSummary,
+      },
+    });
+  });
+
+  app.post("/api/classroom/final-test/session/turnback", requireChatAuth, async (req, res) => {
+    const passphrase = String(req.body?.passphrase || "").trim();
+    const reason = sanitizeText(req.body?.reason, "", 240);
+    const fromStage = String(req.body?.fromStage || "").trim();
+    const toStage = String(req.body?.toStage || "").trim();
+    if (passphrase !== "turnback2026!") {
+      res.status(400).json({ error: "回退口令错误。" });
+      return;
+    }
+    if (!reason) {
+      res.status(400).json({ error: "请填写回退原因。" });
+      return;
+    }
+
+    const userProfile = sanitizeUserProfile(req.authUser?.profile);
+    const debugMode = isFinalTestDebugRequest(req);
+    const { query, session, experimentTask } = await readFinalTestSessionRecord({
+      teacherScopeKey: req.authTeacherScopeKey,
+      studentUserId: req.authUser?._id,
+      className: userProfile.className,
+      debugMode,
+    });
+    if (!experimentTask.enabled) {
+      res.status(403).json({ error: "当前班级未开放期末测试。" });
+      return;
+    }
+
+    const targetStatus =
+      toStage === "stage1"
+        ? "stage1_draft"
+        : toStage === "stage2"
+          ? "stage2_active"
+          : session.status;
+    const turnbackEvent = {
+      eventId: `turnback-${Date.now().toString(36)}`,
+      fromStage,
+      toStage,
+      passphraseAccepted: true,
+      reason,
+      createdAt: new Date().toISOString(),
+    };
+    const persisted = await writeFinalTestSession(
+      query,
+      applyFinalTestPatch(session, {
+        status: targetStatus,
+        turnbackEvents: [
+          ...(Array.isArray(session.turnbackEvents) ? session.turnbackEvents : []),
+          turnbackEvent,
+        ],
+      }),
+    );
+    res.json({
+      ok: true,
+      experimentTask,
+      session: persisted,
+    });
+  });
+
+  app.post("/api/classroom/final-test/session/restart", requireChatAuth, async (req, res) => {
+    const passphrase = String(req.body?.passphrase || "").trim();
+    const reason = sanitizeText(req.body?.reason, "", 240);
+    if (passphrase !== "Try again") {
+      res.status(400).json({ error: "重新开始口令错误。" });
+      return;
+    }
+    if (!reason) {
+      res.status(400).json({ error: "请填写重新开始原因。" });
+      return;
+    }
+
+    const userProfile = sanitizeUserProfile(req.authUser?.profile);
+    const debugMode = isFinalTestDebugRequest(req);
+    const { query, session, experimentTask } = await readFinalTestSessionRecord({
+      teacherScopeKey: req.authTeacherScopeKey,
+      studentUserId: req.authUser?._id,
+      className: userProfile.className,
+      debugMode,
+    });
+    if (!experimentTask.enabled) {
+      res.status(403).json({ error: "当前班级未开放期末测试。" });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const archivedSession = normalizeFinalTestSession(session);
+    const restartEvent = {
+      eventId: `restart-${Date.now().toString(36)}`,
+      kind: "restart",
+      previousStatus: session.status,
+      previousStartedAt: session.startedAt,
+      previousSession: {
+        status: archivedSession.status,
+        startedAt: archivedSession.startedAt,
+        lockedAt: archivedSession.lockedAt,
+        submittedAt: archivedSession.submittedAt,
+        timeExpired: archivedSession.timeExpired === true,
+        durationMinutes: archivedSession.durationMinutes,
+        stage1: archivedSession.stage1,
+        stage2: archivedSession.stage2,
+        stage3: archivedSession.stage3,
+        riskLog: Array.isArray(archivedSession.riskLog) ? archivedSession.riskLog : [],
+      },
+      passphraseAccepted: true,
+      reason,
+      createdAt: nowIso,
+    };
+    const restartedSession = createFinalTestSessionBase({
+      studentUserId: req.authUser?._id,
+      className: userProfile.className,
+      variant: experimentTask.variant,
+      startedAt: nowIso,
+      nowIso,
+    });
+    const persisted = await writeFinalTestSession(
+      query,
+      applyFinalTestPatch(restartedSession, {
+        turnbackEvents: [
+          ...(Array.isArray(session.turnbackEvents) ? session.turnbackEvents : []),
+          restartEvent,
+        ],
+        riskLog: Array.isArray(session.riskLog) ? session.riskLog : [],
+      }),
+    );
+    res.json({
+      ok: true,
+      experimentTask,
+      session: persisted,
+    });
+  });
+
+  app.post("/api/classroom/final-test/session/submit", requireChatAuth, async (req, res) => {
+    const userProfile = sanitizeUserProfile(req.authUser?.profile);
+    const debugMode = isFinalTestDebugRequest(req);
+    const { query, session, experimentTask } = await readFinalTestSessionRecord({
+      teacherScopeKey: req.authTeacherScopeKey,
+      studentUserId: req.authUser?._id,
+      className: userProfile.className,
+      debugMode,
+    });
+    if (!experimentTask.enabled) {
+      res.status(403).json({ error: "当前班级未开放期末测试。" });
+      return;
+    }
+    const persisted = await writeFinalTestSession(
+      query,
+      applyFinalTestPatch(session, {
+        status: "submitted",
+        submittedAt: new Date().toISOString(),
+      }),
+    );
+    res.json({
+      ok: true,
+      experimentTask,
+      session: persisted,
     });
   });
 
@@ -2237,6 +2620,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherCoursePlans: config.teacherCoursePlans,
       heartbeatIntervalSeconds: Math.floor(USER_BROWSER_HEARTBEAT_INTERVAL_MS / 1000),
       heartbeatStaleSeconds: Math.floor(USER_BROWSER_HEARTBEAT_STALE_MS / 1000),
+      finalTestConfig: normalizeFinalTestContentConfig(config.finalTestConfig),
       updatedAt: config.updatedAt,
     });
   });
@@ -2271,7 +2655,45 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherCoursePlans: config.teacherCoursePlans,
       heartbeatIntervalSeconds: Math.floor(USER_BROWSER_HEARTBEAT_INTERVAL_MS / 1000),
       heartbeatStaleSeconds: Math.floor(USER_BROWSER_HEARTBEAT_STALE_MS / 1000),
+      finalTestConfig: normalizeFinalTestContentConfig(config.finalTestConfig),
       updatedAt: config.updatedAt,
+    });
+  });
+
+  app.get("/api/auth/admin/final-test-config", async (req, res) => {
+    if (!(await authenticateAdminRequest(req, res))) return;
+    const config = await readAdminAgentConfig();
+    res.json({
+      ok: true,
+      finalTestConfig: normalizeFinalTestContentConfig(config.finalTestConfig),
+      updatedAt: config.updatedAt,
+    });
+  });
+
+  app.put("/api/auth/admin/final-test-config", async (req, res) => {
+    if (!(await authenticateAdminRequest(req, res))) return;
+    const finalTestConfig = normalizeFinalTestContentConfig(
+      req.body?.finalTestConfig,
+    );
+    const doc = await AdminConfig.findOneAndUpdate(
+      { key: ADMIN_CONFIG_KEY },
+      {
+        $set: {
+          key: ADMIN_CONFIG_KEY,
+          finalTestConfig,
+        },
+      },
+      {
+        upsert: true,
+        new: true,
+        setDefaultsOnInsert: true,
+      },
+    ).lean();
+
+    res.json({
+      ok: true,
+      finalTestConfig: normalizeFinalTestContentConfig(doc?.finalTestConfig),
+      updatedAt: sanitizeIsoDate(doc?.updatedAt) || new Date().toISOString(),
     });
   });
 
@@ -2294,6 +2716,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherCoursePlans: config.teacherCoursePlans,
       classroomDisciplineConfig: config.classroomDisciplineConfig,
       seatLayoutsByClass: normalizeSeatLayoutsByClassFromConfig(config),
+      finalTestConfig: normalizeFinalTestContentConfig(config.finalTestConfig),
       updatedAt: config.updatedAt,
     });
   });
@@ -2991,6 +3414,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherCoursePlans: config.teacherCoursePlans,
       classroomDisciplineConfig: config.classroomDisciplineConfig,
       seatLayoutsByClass: normalizeSeatLayoutsByClassFromConfig(config),
+      finalTestConfig: normalizeFinalTestContentConfig(config.finalTestConfig),
       updatedAt: config.updatedAt,
     });
   });
