@@ -12,6 +12,7 @@ import MessageInput from "../../../components/MessageInput.jsx";
 import "../../../styles/chat.css";
 import {
   buildInternalTransferEvent,
+  lockExpiredSession,
   normalizeFinalTestSession,
   resolveFinalTestStageFromStatus,
 } from "../../../../shared/finalTestState.js";
@@ -40,6 +41,8 @@ const STAGE2_PROMPTS = [
 ];
 
 const SURVEY_URL = "https://wj.qq.com/s2/26868195/6777/";
+const FINAL_TEST_START_CONFIRM_MESSAGE =
+  "期末测试会记录所有时间和操作，请各位同学诚信测试。确认参加后将立即开始考试并进入计时模式。";
 
 
 function buildStage2DraftText(stage2 = {}) {
@@ -48,6 +51,14 @@ function buildStage2DraftText(stage2 = {}) {
 
 function buildStage3FinalText(stage3 = {}) {
   return String(stage3?.finalText || "").trim();
+}
+
+function formatFinalTestCountdown(remainingMs = 0) {
+  const safeMs = Math.max(0, Number(remainingMs || 0));
+  const totalSeconds = Math.ceil(safeMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function createRiskEvent(type, stage, extra = {}) {
@@ -394,8 +405,12 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   const [experimentTask, setExperimentTask] = useState(() => ({
     enabled: taskExperiment?.enabled === true,
     variant: String(taskExperiment?.variant || "disabled"),
-    durationMinutes: Number(taskExperiment?.durationMinutes || 20),
+    durationMinutes: Number.isFinite(Number(taskExperiment?.durationMinutes))
+      ? Math.max(0, Number(taskExperiment.durationMinutes))
+      : 20,
     entryLabel: String(taskExperiment?.entryLabel || "期末测试"),
+    demoMode: taskExperiment?.demoMode === true,
+    timingEnabled: taskExperiment?.timingEnabled === true,
   }));
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -415,6 +430,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   const [promptsExpanded, setPromptsExpanded] = useState(false);
   const [dialog, setDialog] = useState(null);
   const [notice, setNotice] = useState("");
+  const [remainingMs, setRemainingMs] = useState(0);
   const saveTimerRef = useRef(null);
   const streamAbortRef = useRef(null);
   const mountedRef = useRef(false);
@@ -434,6 +450,8 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   );
 
   const variant = session?.variant || experimentTask.variant || "disabled";
+  const isDemoMode = experimentTask.demoMode === true;
+  const timingEnabled = experimentTask.timingEnabled === true && !isDemoMode;
   const stage = resolveFinalTestStageFromStatus(session?.status);
   const isSubmitted = session?.status === "submitted";
   const isExpired = session?.status === "time_expired_locked" || session?.timeExpired === true;
@@ -442,11 +460,22 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     session.status !== "not_started" &&
     session.status !== "disabled" &&
     session.status !== "";
-  const stage2Messages = session?.stage2?.messages || [];
   const stage1DraftText = String(session?.stage1?.draftText || "");
   const stage2AnswerText = buildStage2DraftText(session?.stage2 || {});
   const stage3FinalText = buildStage3FinalText(session?.stage3 || {});
   const stage3Locked = session?.status === "time_expired_locked" || isSubmitted;
+  const liveRemainingMs =
+    timingEnabled && isStarted
+      ? Math.max(
+          0,
+          remainingMs || Date.parse(String(session?.deadlineAt || "")) - Date.now(),
+        )
+      : 0;
+  const timerStatusText = isDemoMode
+    ? "演示模式，不计时"
+    : timingEnabled && isStarted && !isSubmitted
+      ? `剩余时间 ${formatFinalTestCountdown(liveRemainingMs)}`
+      : "";
   const stage1SyncKey =
     stage === "stage1"
       ? [
@@ -509,8 +538,12 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       ...current,
       enabled: nextTask.enabled === true,
       variant: String(nextTask.variant || current.variant || "disabled"),
-      durationMinutes: Number(nextTask.durationMinutes || current.durationMinutes || 20),
+      durationMinutes: Number.isFinite(Number(nextTask.durationMinutes))
+        ? Math.max(0, Number(nextTask.durationMinutes))
+        : Number(current.durationMinutes || 20),
       entryLabel: String(nextTask.entryLabel || current.entryLabel || "期末测试"),
+      demoMode: nextTask.demoMode === true,
+      timingEnabled: nextTask.timingEnabled === true,
     }));
   }, []);
 
@@ -709,6 +742,44 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   }, [notice]);
 
   useEffect(() => {
+    if (!isStarted || !timingEnabled || isSubmitted) {
+      setRemainingMs(0);
+      return undefined;
+    }
+    const deadlineMs = Date.parse(String(session?.deadlineAt || ""));
+    if (!Number.isFinite(deadlineMs)) {
+      setRemainingMs(0);
+      return undefined;
+    }
+
+    const syncCountdown = () => {
+      const nextRemainingMs = Math.max(0, deadlineMs - Date.now());
+      setRemainingMs(nextRemainingMs);
+      if (
+        nextRemainingMs <= 0 &&
+        sessionRef.current &&
+        sessionRef.current.status !== "submitted" &&
+        sessionRef.current.status !== "time_expired_locked"
+      ) {
+        const locked = normalizeSessionForView(
+          lockExpiredSession(sessionRef.current, new Date().toISOString()),
+          variant,
+        );
+        localSessionVersionRef.current += 1;
+        sessionRef.current = locked;
+        setSession(locked);
+        writeShadowSession(shadowStorageKey, locked);
+        void persistSession(locked, { snapshotVersion: localSessionVersionRef.current });
+        setNotice("考试时间已到，当前内容已锁定，请尽快提交。");
+      }
+    };
+
+    syncCountdown();
+    const timerId = window.setInterval(syncCountdown, 1000);
+    return () => window.clearInterval(timerId);
+  }, [isStarted, isSubmitted, persistSession, shadowStorageKey, timingEnabled, variant, session?.deadlineAt]);
+
+  useEffect(() => {
     if (!loadError) return undefined;
     const timerId = window.setTimeout(() => setLoadError(""), 5000);
     return () => window.clearTimeout(timerId);
@@ -901,6 +972,19 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     }
   }
 
+  function requestStart() {
+    if (isDemoMode) {
+      void handleStart();
+      return;
+    }
+    openConfirmDialog(
+      "确认参加期末测试",
+      FINAL_TEST_START_CONFIRM_MESSAGE,
+      handleStart,
+      "确认参加",
+    );
+  }
+
   // Stage 1 为手动保存模式：编辑只更新本地输入并标记“未保存”，不自动写入会话/服务端。
   function handleStage1Edit(value) {
     setStage1Input(value);
@@ -994,27 +1078,6 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     return normalized;
   }
 
-  function updateStage3FinalText(value, nativeInputType = "") {
-    const current = sessionRef.current;
-    if (!current || current.status !== "stage3_active") return;
-    const previousValue = String(current.stage3?.finalText || "");
-    const baseNextSession = {
-      ...current,
-      stage3: {
-        ...(current.stage3 || {}),
-        finalText: value,
-      },
-    };
-    const nextSession = applyMutationRisk(baseNextSession, {
-      stage: "stage3",
-      fieldKey: "stage3.finalText",
-      previousValue,
-      nextValue: value,
-      inputType: nativeInputType,
-    });
-    commitSession(nextSession);
-  }
-
   async function confirmStage1Submit() {
     const current = sessionRef.current;
     if (!current) return;
@@ -1034,6 +1097,11 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
           draftText,
           lockedAt: nowIso,
           submittedAt: nowIso,
+        },
+        stage2: {
+          ...(current.stage2 || {}),
+          draftText,
+          submittedAt: "",
         },
       },
       variant,
@@ -1140,7 +1208,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     );
   }
 
-  async function sendStage2Message(text, _files = []) {
+  async function sendStage2Message(text) {
     const current = sessionRef.current;
     const safeText = String(text || "").trim();
     if (!current || current.status !== "stage2_active" || !safeText || streaming) return;
@@ -1477,8 +1545,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
             mode: "platform",
           },
         ];
-  const finalTestTitle =
-    variant === "three-stage-guided" ? "810 班级期末测试" : "811 班级期末测试";
+  const finalTestTitle = "期末测试";
   const currentStageTitle =
     stage === "stage1"
       ? "请先独立写下你的改进方案"
@@ -1545,6 +1612,11 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
               <h2>{finalTestTitle}</h2>
               <p className="final-test-hero-copy">{finalTestContent.introText}</p>
             </div>
+            <div className="final-test-hero-side">
+              <div className={`final-test-runtime-pill${isDemoMode ? " demo" : " timed"}`}>
+                {timerStatusText || (isDemoMode ? "演示模式，不计时" : "正式模式，开始后计时")}
+              </div>
+            </div>
           </header>
 
           <section className="final-test-task-board final-test-task-board-compact">
@@ -1568,15 +1640,21 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
 
           <section className="final-test-card final-test-landing">
             <header className="final-test-landing-head">
-              <h3>点击开始测试后进入作答流程</h3>
+              <h3>{isDemoMode ? "点击开始演示后进入作答流程" : "点击确认开始考试后进入作答流程"}</h3>
             </header>
             <button
               type="button"
               className="final-test-primary-btn final-test-start-btn"
-              onClick={() => void handleStart()}
+              onClick={() => void requestStart()}
               disabled={starting}
             >
-              {starting ? "正在开始…" : "开始测试"}
+              {starting
+                ? isDemoMode
+                  ? "正在进入演示…"
+                  : "正在开始…"
+                : isDemoMode
+                  ? "开始演示"
+                  : "确认开始考试"}
             </button>
           </section>
         </>
@@ -1591,6 +1669,11 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                 <p>{finalTestContent.introText}</p>
               </div>
               <div className="final-test-pane-head-actions">
+                {timerStatusText ? (
+                  <span className={`final-test-runtime-pill${isDemoMode ? " demo" : " timed"}`}>
+                    {timerStatusText}
+                  </span>
+                ) : null}
                 <button
                   type="button"
                   className="final-test-ghost-btn"

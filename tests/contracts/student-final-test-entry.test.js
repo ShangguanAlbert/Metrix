@@ -44,3 +44,26 @@ test("final test turnback dialog renders inline error feedback", () => {
   assert.match(studentFinalTestPanelSource, /final-test-dialog-error/);
   assert.match(finalTestCssSource, /\.final-test-dialog-error\s*\{/);
 });
+
+test("student final test panel includes exam honesty confirmation and demo mode copy", () => {
+  assert.match(studentFinalTestPanelSource, /会记录所有时间和操作/);
+  assert.match(studentFinalTestPanelSource, /诚信测试/);
+  assert.match(studentFinalTestPanelSource, /演示模式/);
+});
+
+test("student final test title stays generic without class names", () => {
+  assert.match(studentFinalTestPanelSource, /const finalTestTitle = "期末测试";/);
+  assert.doesNotMatch(studentFinalTestPanelSource, /810 班级期末测试/);
+  assert.doesNotMatch(studentFinalTestPanelSource, /811 班级期末测试/);
+});
+
+test("stage1 submission seeds stage2 draft with the independent-thinking content", () => {
+  const confirmStage1SubmitBlock = studentFinalTestPanelSource.match(
+    /async function confirmStage1Submit\(\)\s*\{[\s\S]*?\n\s{2}\}\n\n\s{2}async function confirmEnterStage3/,
+  )?.[0];
+  assert.ok(confirmStage1SubmitBlock, "expected confirmStage1Submit implementation block");
+  assert.match(
+    confirmStage1SubmitBlock,
+    /status:\s*"stage2_active"[\s\S]*stage1:\s*\{[\s\S]*draftText[\s\S]*stage2:\s*\{[\s\S]*draftText,/,
+  );
+});

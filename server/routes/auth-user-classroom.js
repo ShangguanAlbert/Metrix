@@ -14,6 +14,7 @@ import {
   buildFinalTestRiskSnapshot,
   createFinalTestSessionBase,
   FINAL_TEST_DURATION_MINUTES,
+  lockExpiredSession,
   normalizeFinalTestSession,
   resolveFinalTestVariant,
 } from "../../shared/finalTestState.js";
@@ -723,6 +724,18 @@ export function registerAuthUserClassroomRoutes(app, deps) {
   const CLASSROOM_TARGET_CLASS_NAMES = Object.freeze(["810班", "811班"]);
   const CLASSROOM_DEFAULT_TARGET_CLASS_NAME = CLASSROOM_TARGET_CLASS_NAMES[0];
 
+  function normalizeFinalTestUsernameKey(value) {
+    if (typeof toUsernameKey === "function") {
+      return toUsernameKey(value);
+    }
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "");
+  }
+
+  const TERMINAL_ADMIN_USERNAME_KEY = normalizeFinalTestUsernameKey("上官福泽");
+
   function sanitizeClassroomTargetClassName(value, fallback = CLASSROOM_DEFAULT_TARGET_CLASS_NAME) {
     const className = sanitizeText(value, "", 40).replace(/\s+/g, "");
     if (CLASSROOM_TARGET_CLASS_NAMES.includes(className)) return className;
@@ -785,18 +798,29 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     };
   }
 
-  function resolveExperimentTaskDescriptor(teacherScopeKey, className) {
+  function isFinalTestDemoUser(user) {
+    if (!user || user.role !== "admin") return false;
+    return normalizeFinalTestUsernameKey(user?.username) === TERMINAL_ADMIN_USERNAME_KEY;
+  }
+
+  function resolveExperimentTaskDescriptor(teacherScopeKey, className, user) {
     const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
     const safeClassName = sanitizeClassroomUserClassName(className);
-    const variant =
-      safeTeacherScopeKey === SHANGGUAN_FUZE_TEACHER_SCOPE_KEY
+    const demoMode =
+      safeTeacherScopeKey === SHANGGUAN_FUZE_TEACHER_SCOPE_KEY && isFinalTestDemoUser(user);
+    const variant = demoMode
+      ? "three-stage-guided"
+      : safeTeacherScopeKey === SHANGGUAN_FUZE_TEACHER_SCOPE_KEY
         ? resolveFinalTestVariant(safeClassName)
         : "disabled";
+    const timingEnabled = variant !== "disabled" && !demoMode;
     return {
       enabled: variant !== "disabled",
       variant,
-      durationMinutes: FINAL_TEST_DURATION_MINUTES,
+      durationMinutes: timingEnabled ? FINAL_TEST_DURATION_MINUTES : 0,
       entryLabel: "期末测试",
+      demoMode,
+      timingEnabled,
     };
   }
 
@@ -816,6 +840,141 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       return resolved.lean();
     }
     return resolved;
+  }
+
+  async function loadClassroomRosterDirectory(teacherScopeKey) {
+    const rosterQuery = AuthUser.find(
+      {
+        role: "user",
+        lockedTeacherScopeKey: teacherScopeKey,
+      },
+      { username: 1, profile: 1, accountTag: 1 },
+    );
+    const rosterUsers =
+      rosterQuery && typeof rosterQuery.lean === "function"
+        ? await rosterQuery.lean()
+        : await resolveMaybeLean(rosterQuery);
+
+    const rosterAll = (Array.isArray(rosterUsers) ? rosterUsers : [])
+      .map((user) => {
+        const profile = sanitizeUserProfile(user?.profile);
+        const className = sanitizeClassroomUserClassName(profile.className);
+        return {
+          userId: sanitizeId(user?._id, ""),
+          username: sanitizeText(user?.username, "", 64),
+          studentName: sanitizeText(profile.name || user?.username, "", 64),
+          studentId: sanitizeText(profile.studentId, "", 20),
+          className,
+        };
+      })
+      .filter((item) => item.userId)
+      .sort(compareClassroomRosterStudent);
+
+    const userClassByUserId = new Map(
+      rosterAll.map((student) => [student.userId, student.className]),
+    );
+    const rosterByClassName = new Map(
+      CLASSROOM_TARGET_CLASS_NAMES.map((className) => [className, []]),
+    );
+    rosterAll.forEach((student) => {
+      const className = sanitizeClassroomUserClassName(student.className);
+      if (!className) return;
+      if (!rosterByClassName.has(className)) {
+        rosterByClassName.set(className, []);
+      }
+      rosterByClassName.get(className).push(student);
+    });
+
+    return {
+      rosterAll,
+      rosterByClassName,
+      userClassByUserId,
+    };
+  }
+
+  async function loadFixedFinalTestRosterDirectory(teacherScopeKey) {
+    const safeTeacherScopeKey = sanitizeTeacherScopeKey(teacherScopeKey);
+    const fixedAccounts = (Array.isArray(FIXED_STUDENT_ACCOUNTS)
+      ? FIXED_STUDENT_ACCOUNTS
+      : [])
+      .map((account) => {
+        const username = sanitizeText(account?.username, "", 64);
+        const usernameKey = normalizeFinalTestUsernameKey(username);
+        const className = sanitizeClassroomUserClassName(account?.className);
+        const requiredTeacherScopeKey = sanitizeTeacherScopeKey(
+          account?.requiredTeacherScopeKey ||
+            FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY,
+        );
+        if (
+          !username ||
+          !usernameKey ||
+          !className ||
+          requiredTeacherScopeKey !== safeTeacherScopeKey
+        ) {
+          return null;
+        }
+        return {
+          username,
+          usernameKey,
+          studentName: username,
+          studentId: sanitizeText(account?.studentId, "", 20),
+          className,
+        };
+      })
+      .filter(Boolean);
+    const usernameKeys = fixedAccounts.map((account) => account.usernameKey);
+    const fixedUserQuery =
+      usernameKeys.length > 0
+        ? AuthUser.find(
+            {
+              usernameKey: { $in: usernameKeys },
+            },
+            { username: 1, usernameKey: 1, profile: 1, accountTag: 1 },
+          )
+        : null;
+    const fixedUsers = fixedUserQuery
+      ? fixedUserQuery && typeof fixedUserQuery.lean === "function"
+        ? await fixedUserQuery.lean()
+        : await resolveMaybeLean(fixedUserQuery)
+      : [];
+    const userByUsernameKey = new Map(
+      (Array.isArray(fixedUsers) ? fixedUsers : []).map((user) => [
+        normalizeFinalTestUsernameKey(user?.usernameKey || user?.username),
+        user,
+      ]),
+    );
+    const rosterAll = fixedAccounts
+      .map((account) => {
+        const user = userByUsernameKey.get(account.usernameKey) || null;
+        const profile = sanitizeUserProfile(user?.profile);
+        return {
+          userId: sanitizeId(user?._id, "") || `fixed:${account.usernameKey}`,
+          username: account.username,
+          studentName:
+            sanitizeText(profile.name, "", 64) ||
+            account.studentName ||
+            account.username,
+          studentId:
+            sanitizeText(profile.studentId, "", 20) || account.studentId,
+          className: account.className,
+          usernameKey: account.usernameKey,
+          matchedUserId: sanitizeId(user?._id, ""),
+        };
+      })
+      .sort(compareClassroomRosterStudent);
+    const rosterByClassName = new Map(
+      CLASSROOM_TARGET_CLASS_NAMES.map((className) => [className, []]),
+    );
+    rosterAll.forEach((student) => {
+      if (!rosterByClassName.has(student.className)) {
+        rosterByClassName.set(student.className, []);
+      }
+      rosterByClassName.get(student.className).push(student);
+    });
+    return {
+      rosterAll,
+      rosterByClassName,
+    };
   }
 
   function buildFinalTestSessionQuery({ teacherScopeKey, studentUserId, className }) {
@@ -841,7 +1000,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       lockedAt: normalized.lockedAt,
       submittedAt: normalized.submittedAt,
       timeExpired: normalized.timeExpired === true,
-      durationMinutes: FINAL_TEST_DURATION_MINUTES,
+      durationMinutes: normalized.durationMinutes,
       payload: {
         stage1: normalized.stage1,
         stage2: normalized.stage2,
@@ -873,6 +1032,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     teacherScopeKey,
     studentUserId,
     className,
+    authUser,
     debugMode = false,
   }) {
     const query = buildFinalTestSessionQuery({
@@ -883,6 +1043,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     const experimentTask = resolveExperimentTaskDescriptor(
       teacherScopeKey,
       className,
+      authUser,
     );
     const existing = await resolveMaybeLean(FinalTestSession.findOne(query));
     if (!existing) {
@@ -894,17 +1055,36 @@ export function registerAuthUserClassroomRoutes(app, deps) {
             className,
             variant: experimentTask.variant,
             nowIso: new Date().toISOString(),
+            durationMinutes: experimentTask.durationMinutes,
           }),
           status: "not_started",
           startedAt: "",
           deadlineAt: "",
-          durationMinutes: FINAL_TEST_DURATION_MINUTES,
+          durationMinutes: experimentTask.durationMinutes,
         }),
         experimentTask,
       };
     }
     const normalized = normalizeFinalTestSession(existing);
-    return { query, session: normalized, experimentTask };
+    const nowIso = new Date(Date.now()).toISOString();
+    const baseSession = normalizeFinalTestSession({
+      ...normalized,
+      durationMinutes: experimentTask.durationMinutes,
+      deadlineAt: experimentTask.timingEnabled ? normalized.deadlineAt : "",
+    });
+    const nextSession =
+      debugMode || !experimentTask.timingEnabled ? baseSession : lockExpiredSession(baseSession, nowIso);
+    if (
+      nextSession.status !== normalized.status ||
+      nextSession.timeExpired !== normalized.timeExpired ||
+      nextSession.lockedAt !== normalized.lockedAt ||
+      nextSession.durationMinutes !== normalized.durationMinutes ||
+      nextSession.deadlineAt !== normalized.deadlineAt
+    ) {
+      const persisted = await writeFinalTestSession(query, nextSession);
+      return { query, session: persisted, experimentTask };
+    }
+    return { query, session: nextSession, experimentTask };
   }
 
   function findSeatIndexByIdentityTokens(seats, tokenSet) {
@@ -1253,6 +1433,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     const experimentTask = resolveExperimentTaskDescriptor(
       teacherScopeKey,
       userProfile.className,
+      req.authUser,
     );
     const seatLayoutClassName = sanitizeSeatLayoutClassName(userProfile.className);
     let productImprovementEnabled = false;
@@ -1321,6 +1502,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherScopeKey: req.authTeacherScopeKey,
       studentUserId: req.authUser?._id,
       className: userProfile.className,
+      authUser: req.authUser,
       debugMode,
     });
 
@@ -1338,6 +1520,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherScopeKey: req.authTeacherScopeKey,
       studentUserId: req.authUser?._id,
       className: userProfile.className,
+      authUser: req.authUser,
       debugMode,
     });
     if (!experimentTask.enabled) {
@@ -1350,7 +1533,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         experimentTask,
         session: {
           ...session,
-          durationMinutes: FINAL_TEST_DURATION_MINUTES,
+          durationMinutes: experimentTask.durationMinutes,
         },
       });
       return;
@@ -1362,6 +1545,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       variant: experimentTask.variant,
       startedAt: nowIso,
       nowIso,
+      durationMinutes: experimentTask.durationMinutes,
     });
     const persisted = await writeFinalTestSession(query, started);
     res.json({
@@ -1369,7 +1553,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       experimentTask,
       session: {
         ...persisted,
-        durationMinutes: FINAL_TEST_DURATION_MINUTES,
+        durationMinutes: experimentTask.durationMinutes,
       },
     });
   });
@@ -1381,6 +1565,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherScopeKey: req.authTeacherScopeKey,
       studentUserId: req.authUser?._id,
       className: userProfile.className,
+      authUser: req.authUser,
       debugMode,
     });
     if (!experimentTask.enabled) {
@@ -1425,6 +1610,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherScopeKey: req.authTeacherScopeKey,
       studentUserId: req.authUser?._id,
       className: userProfile.className,
+      authUser: req.authUser,
       debugMode,
     });
     if (!experimentTask.enabled) {
@@ -1486,6 +1672,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherScopeKey: req.authTeacherScopeKey,
       studentUserId: req.authUser?._id,
       className: userProfile.className,
+      authUser: req.authUser,
       debugMode,
     });
     if (!experimentTask.enabled) {
@@ -1522,6 +1709,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       variant: experimentTask.variant,
       startedAt: nowIso,
       nowIso,
+      durationMinutes: experimentTask.durationMinutes,
     });
     const persisted = await writeFinalTestSession(
       query,
@@ -1547,6 +1735,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       teacherScopeKey: req.authTeacherScopeKey,
       studentUserId: req.authUser?._id,
       className: userProfile.className,
+      authUser: req.authUser,
       debugMode,
     });
     if (!experimentTask.enabled) {
@@ -2712,6 +2901,118 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     });
   });
 
+  app.get("/api/auth/admin/final-test-submissions", async (req, res) => {
+    if (!(await authenticateAdminRequest(req, res))) return;
+    const teacherScopeKey = SHANGGUAN_FUZE_TEACHER_SCOPE_KEY;
+    const [{ rosterAll, rosterByClassName }, records] = await Promise.all([
+      loadFixedFinalTestRosterDirectory(teacherScopeKey),
+      resolveMaybeLean(
+        FinalTestSession.find({
+          key: ADMIN_CONFIG_KEY,
+          teacherScopeKey,
+          className: {
+            $in: CLASSROOM_TARGET_CLASS_NAMES,
+          },
+        }),
+      ),
+    ]);
+    const sessions = (Array.isArray(records) ? records : [])
+      .map((item) => {
+        const normalized = normalizeFinalTestSession(item);
+        return {
+          studentUserId: normalized.studentUserId,
+          className: normalized.className,
+          variant: normalized.variant,
+          status: normalized.status,
+          startedAt: normalized.startedAt,
+          lockedAt: normalized.lockedAt,
+          submittedAt: normalized.submittedAt,
+          timeExpired: normalized.timeExpired === true,
+          durationMinutes: normalized.durationMinutes,
+          updatedAt: sanitizeIsoDate(item?.updatedAt),
+        };
+      })
+      .sort((a, b) => {
+        const classCompare = String(a?.className || "").localeCompare(
+          String(b?.className || ""),
+          "zh-CN",
+          { sensitivity: "base" },
+        );
+        if (classCompare !== 0) return classCompare;
+        return String(a?.studentUserId || "").localeCompare(
+          String(b?.studentUserId || ""),
+          "zh-CN",
+          { sensitivity: "base" },
+        );
+      });
+
+    const sessionByStudentUserId = new Map();
+    sessions.forEach((session) => {
+      const studentUserId = sanitizeId(session?.studentUserId, "");
+      if (!studentUserId || sessionByStudentUserId.has(studentUserId)) return;
+      sessionByStudentUserId.set(studentUserId, session);
+    });
+
+    const classes = CLASSROOM_TARGET_CLASS_NAMES.map((className) => {
+      const roster = rosterByClassName.get(className) || [];
+      const students = roster.map((student) => {
+        const matchedUserId = sanitizeId(student?.matchedUserId || student?.userId, "");
+        const session = matchedUserId
+          ? sessionByStudentUserId.get(matchedUserId) || null
+          : null;
+        const status = sanitizeText(session?.status, "", 40);
+        return {
+          studentUserId: student.userId,
+          username: student.username,
+          studentName: student.studentName,
+          studentId: student.studentId,
+          className: student.className,
+          submitted: status === "submitted",
+          status,
+          submittedAt: sanitizeIsoDate(session?.submittedAt) || "",
+          updatedAt: sanitizeIsoDate(session?.updatedAt) || "",
+        };
+      });
+      const submittedCount = students.filter((student) => student.submitted).length;
+      const unlistedSessions = sessions
+        .filter(
+          (session) =>
+            sanitizeClassroomUserClassName(session?.className) === className &&
+            !roster.some(
+              (student) =>
+                sanitizeId(student?.matchedUserId || "", "") ===
+                sanitizeId(session?.studentUserId, ""),
+            ),
+        )
+        .map((session) => ({
+          studentUserId: sanitizeId(session?.studentUserId, ""),
+          className,
+          submitted: sanitizeText(session?.status, "", 40) === "submitted",
+          status: sanitizeText(session?.status, "", 40),
+          submittedAt: sanitizeIsoDate(session?.submittedAt) || "",
+          updatedAt: sanitizeIsoDate(session?.updatedAt) || "",
+        }));
+
+      return {
+        className,
+        studentTotal: students.length,
+        submittedCount,
+        pendingCount: Math.max(students.length - submittedCount, 0),
+        students,
+        unlistedSessions,
+      };
+    });
+
+    res.json({
+      ok: true,
+      teacherScopeKey,
+      rosterTotal: rosterAll.length,
+      sessions,
+      classes,
+      updatedAt: new Date().toISOString(),
+    });
+  });
+
   app.get("/api/auth/admin/classroom-plans", async (req, res) => {
     const admin = await authenticateAdminRequest(req, res);
     if (!admin) return;
@@ -2779,14 +3080,8 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       .map((lesson) => sanitizeId(lesson?.id, ""))
       .filter(Boolean);
 
-    const [rosterUsers, homeworkDocs] = await Promise.all([
-      AuthUser.find(
-        {
-          role: "user",
-          lockedTeacherScopeKey: teacherScopeKey,
-        },
-        { username: 1, profile: 1, accountTag: 1 },
-      ).lean(),
+    const [{ rosterAll, rosterByClassName, userClassByUserId }, homeworkDocs] = await Promise.all([
+      loadClassroomRosterDirectory(teacherScopeKey),
       lessonIds.length > 0
         ? ClassroomHomeworkFile.find({
             key: ADMIN_CONFIG_KEY,
@@ -2797,33 +3092,6 @@ export function registerAuthUserClassroomRoutes(app, deps) {
             .lean()
         : Promise.resolve([]),
     ]);
-
-    const rosterAll = rosterUsers
-      .map((user) => {
-        const profile = sanitizeUserProfile(user?.profile);
-        const className = sanitizeClassroomUserClassName(profile.className);
-        return {
-          userId: sanitizeId(user?._id, ""),
-          username: sanitizeText(user?.username, "", 64),
-          studentName: sanitizeText(profile.name || user?.username, "", 64),
-          studentId: sanitizeText(profile.studentId, "", 20),
-          className,
-        };
-      })
-      .filter((item) => item.userId)
-      .sort(compareClassroomRosterStudent);
-    const userClassByUserId = new Map(rosterAll.map((student) => [student.userId, student.className]));
-    const rosterByClassName = new Map(
-      CLASSROOM_TARGET_CLASS_NAMES.map((className) => [className, []]),
-    );
-    rosterAll.forEach((student) => {
-      const className = sanitizeClassroomUserClassName(student.className);
-      if (!className) return;
-      if (!rosterByClassName.has(className)) {
-        rosterByClassName.set(className, []);
-      }
-      rosterByClassName.get(className).push(student);
-    });
 
     const lessonStudentDocsMap = new Map();
     for (const doc of homeworkDocs) {

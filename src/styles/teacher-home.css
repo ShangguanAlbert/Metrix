@@ -1402,6 +1402,106 @@
   background: var(--teacher-surface);
 }
 
+.teacher-final-test-status-layout {
+  display: grid;
+  gap: 12px;
+}
+
+.teacher-final-test-status-card {
+  display: grid;
+  gap: 10px;
+}
+
+.teacher-final-test-status-toolbar,
+.teacher-final-test-status-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.teacher-final-test-status-toolbar h3,
+.teacher-final-test-status-section-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--teacher-heading);
+}
+
+.teacher-final-test-status-section-head span {
+  margin: 0;
+  font-size: 12px;
+  color: var(--teacher-text-muted);
+}
+
+.teacher-final-test-status-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+
+.teacher-final-test-status-class-select {
+  width: 168px;
+  min-width: 168px;
+}
+
+.teacher-final-test-class-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.teacher-final-test-status-title {
+  display: grid;
+  gap: 4px;
+}
+
+.teacher-final-test-status-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--teacher-text-muted);
+}
+
+.teacher-final-test-student-grid {
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+}
+
+.teacher-final-test-student-tile {
+  min-height: 62px;
+  justify-content: center;
+  display: grid;
+  justify-items: center;
+}
+
+.teacher-final-test-unlisted-block {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.teacher-final-test-unlisted-block strong {
+  font-size: 12px;
+  color: var(--teacher-text-soft);
+}
+
+.teacher-final-test-unlisted-list {
+  display: grid;
+  gap: 6px;
+}
+
+.teacher-final-test-unlisted-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  border: 1px dashed var(--teacher-border-soft);
+  background: var(--teacher-surface-muted);
+  color: var(--teacher-text-soft);
+}
+
 @media (min-width: 1081px) {
   .teacher-final-test-stack {
     height: 100%;
@@ -1435,6 +1535,26 @@
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+  }
+
+  .teacher-final-test-class-grid {
+    align-items: start;
+  }
+}
+
+@media (max-width: 1080px) {
+  .teacher-final-test-status-toolbar,
+  .teacher-final-test-status-section-head {
+    align-items: flex-start;
+  }
+
+  .teacher-final-test-status-controls {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .teacher-final-test-status-section-head {
+    flex-direction: column;
   }
 }
 
@@ -2725,7 +2845,7 @@
 
 .teacher-export-center-filter-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 280px));
+  grid-template-columns: repeat(3, minmax(0, 280px));
   gap: 12px;
 }
 

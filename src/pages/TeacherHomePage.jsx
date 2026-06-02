@@ -91,6 +91,7 @@ import {
   exportAdminClassroomHomeworkLessonZip,
   exportAdminGeneratedImagesTxt,
   exportAdminGroupChatsZip,
+  exportAdminFinalTestZip,
   exportAdminUsersTxt,
   dissolveAdminGroupChatRoom,
   deleteAdminClassroomTaskFile,
@@ -99,6 +100,7 @@ import {
   fetchAdminGroupChatRooms,
   fetchAdminClassroomHomeworkOverview,
   fetchAdminClassroomPlans,
+  fetchAdminFinalTestSubmissions,
   fetchAdminMe,
   fetchAdminOnlinePresence,
   fetchAdminUserDirectory,
@@ -130,6 +132,11 @@ const COURSE_TARGET_CLASS_VALUES = Object.freeze(
   COURSE_TARGET_CLASS_OPTIONS.map((item) => item.value),
 );
 const COURSE_DEFAULT_CLASS_NAME = COURSE_TARGET_CLASS_OPTIONS[0].value;
+const FINAL_TEST_EXPORT_CLASS_OPTIONS = Object.freeze([
+  { value: "all", label: "全部班级" },
+  { value: "810班", label: "810班" },
+  { value: "811班", label: "811班" },
+]);
 const TEACHER_HOME_PANEL_KEYS = Object.freeze(
   new Set([
     "classroom",
@@ -277,6 +284,17 @@ function readUserRoleLabel(role) {
     .toLowerCase() === "admin"
     ? "管理员"
     : "学生";
+}
+
+function readFinalTestStatusLabel(status) {
+  const safeStatus = String(status || "").trim();
+  if (safeStatus === "submitted") return "已提交";
+  if (safeStatus === "stage1_draft") return "独立思考中";
+  if (safeStatus === "stage2_active") return "AI协作中";
+  if (safeStatus === "stage3_active") return "独立定稿中";
+  if (safeStatus === "time_expired_locked") return "已到时未提交";
+  if (safeStatus === "disabled") return "未开放";
+  return "未开始";
 }
 
 function clampInteger(value, min, max, fallback = min) {
@@ -883,19 +901,29 @@ function resolveTeacherHomeExportContextFromSearch(search = "") {
       params.get("exportTeacherScopeKey") || "",
     ).trim();
     const exportDate = String(params.get("exportDate") || "").trim();
+    const finalTestClassName = String(
+      params.get("exportFinalTestClassName") || "",
+    ).trim();
     const normalizedTeacherScopeKey = TEACHER_SCOPE_OPTIONS.some(
       (item) => String(item?.key || "").trim() === teacherScopeKey,
     )
       ? teacherScopeKey
       : "";
+    const normalizedFinalTestClassName = FINAL_TEST_EXPORT_CLASS_OPTIONS.some(
+      (item) => String(item?.value || "").trim() === finalTestClassName,
+    )
+      ? finalTestClassName
+      : "all";
     return {
       teacherScopeKey: normalizedTeacherScopeKey,
       exportDate: isValidDateInputValue(exportDate) ? exportDate : "",
+      finalTestClassName: normalizedFinalTestClassName,
     };
   } catch {
     return {
       teacherScopeKey: "",
       exportDate: "",
+      finalTestClassName: "all",
     };
   }
 }
@@ -1424,11 +1452,23 @@ export default function TeacherHomePage() {
   const [exportCenterDate, setExportCenterDate] = useState(
     () => requestedExportCenterContext.exportDate || readTodayDateInputValue(),
   );
+  const [exportCenterFinalTestClassName, setExportCenterFinalTestClassName] =
+    useState(() => requestedExportCenterContext.finalTestClassName || "all");
   const [exportCenterLoading, setExportCenterLoading] = useState("");
   const [exportCenterError, setExportCenterError] = useState("");
   const [exportCenterNotice, setExportCenterNotice] = useState("");
   const [classroomSaveNotice, setClassroomSaveNotice] = useState("");
+  const [finalTestView, setFinalTestView] = useState("editor");
   const [finalTestSaving, setFinalTestSaving] = useState(false);
+  const [finalTestSubmissionLoading, setFinalTestSubmissionLoading] =
+    useState(false);
+  const [finalTestSubmissionUpdatedAt, setFinalTestSubmissionUpdatedAt] =
+    useState("");
+  const [finalTestSubmissionClasses, setFinalTestSubmissionClasses] = useState([]);
+  const [finalTestSubmissionClassName, setFinalTestSubmissionClassName] =
+    useState("all");
+  const [finalTestSubmissionDisplayMode, setFinalTestSubmissionDisplayMode] =
+    useState("submission");
   const [exportCenterDeleteDialogOpen, setExportCenterDeleteDialogOpen] =
     useState(false);
   const [seatLayoutsByClass, setSeatLayoutsByClass] = useState(() =>
@@ -1605,6 +1645,25 @@ export default function TeacherHomePage() {
     }
   }, [adminToken, handleAuthError]);
 
+  const loadFinalTestSubmissions = useCallback(async () => {
+    if (!adminToken) return;
+    setFinalTestSubmissionLoading(true);
+    try {
+      const data = await fetchAdminFinalTestSubmissions(adminToken);
+      setFinalTestSubmissionClasses(
+        Array.isArray(data?.classes) ? data.classes : [],
+      );
+      setFinalTestSubmissionUpdatedAt(
+        String(data?.updatedAt || new Date().toISOString()),
+      );
+    } catch (rawError) {
+      if (handleAuthError(rawError)) return;
+      setError(readErrorMessage(rawError));
+    } finally {
+      setFinalTestSubmissionLoading(false);
+    }
+  }, [adminToken, handleAuthError]);
+
   const loadPartyRoomManage = useCallback(async () => {
     if (!adminToken) return;
     setPartyRoomManageLoading(true);
@@ -1730,6 +1789,9 @@ export default function TeacherHomePage() {
     setExportCenterDate(
       requestedExportCenterContext.exportDate || readTodayDateInputValue(),
     );
+    setExportCenterFinalTestClassName(
+      requestedExportCenterContext.finalTestClassName || "all",
+    );
     void loadPageData();
   }, [loadPageData, requestedExportCenterContext, requestedTeacherPanel]);
 
@@ -1745,6 +1807,9 @@ export default function TeacherHomePage() {
     if (safeActivePanel === "export-center") {
       const safeTeacherScopeKey = String(exportCenterScopeKey || "").trim();
       const safeExportDate = String(exportCenterDate || "").trim();
+      const safeFinalTestClassName = String(
+        exportCenterFinalTestClassName || "all",
+      ).trim();
       if (safeTeacherScopeKey) {
         nextParams.set("exportTeacherScopeKey", safeTeacherScopeKey);
       } else {
@@ -1755,9 +1820,15 @@ export default function TeacherHomePage() {
       } else {
         nextParams.delete("exportDate");
       }
+      if (safeFinalTestClassName && safeFinalTestClassName !== "all") {
+        nextParams.set("exportFinalTestClassName", safeFinalTestClassName);
+      } else {
+        nextParams.delete("exportFinalTestClassName");
+      }
     } else {
       nextParams.delete("exportTeacherScopeKey");
       nextParams.delete("exportDate");
+      nextParams.delete("exportFinalTestClassName");
     }
     const currentSearch = String(location.search || "").replace(/^\?/, "");
     const nextSearch = nextParams.toString();
@@ -1769,6 +1840,7 @@ export default function TeacherHomePage() {
   }, [
     activePanel,
     exportCenterDate,
+    exportCenterFinalTestClassName,
     exportCenterScopeKey,
     location.hash,
     location.pathname,
@@ -1794,7 +1866,9 @@ export default function TeacherHomePage() {
   }, [activePanel, loadImageLibrary]);
 
   useEffect(() => {
-    if (activePanel !== "user-manage" && activePanel !== "discipline") return;
+    if (activePanel !== "user-manage" && activePanel !== "discipline") {
+      return;
+    }
     void loadUserDirectory();
   }, [activePanel, loadUserDirectory]);
 
@@ -1819,6 +1893,11 @@ export default function TeacherHomePage() {
     if (activePanel !== "party-manage") return;
     void loadPartyRoomManage();
   }, [activePanel, loadPartyRoomManage]);
+
+  useEffect(() => {
+    if (activePanel !== "final-test" || finalTestView !== "submissions") return;
+    void loadFinalTestSubmissions();
+  }, [activePanel, finalTestView, loadFinalTestSubmissions]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2262,6 +2341,9 @@ export default function TeacherHomePage() {
       if (String(activePanel || "").trim() === "export-center") {
         const safeTeacherScopeKey = String(exportCenterScopeKey || "").trim();
         const safeExportDate = String(exportCenterDate || "").trim();
+        const safeFinalTestClassName = String(
+          exportCenterFinalTestClassName || "all",
+        ).trim();
         if (safeTeacherScopeKey) {
           nextParams.set("exportTeacherScopeKey", safeTeacherScopeKey);
           returnParams.set("exportTeacherScopeKey", safeTeacherScopeKey);
@@ -2269,6 +2351,13 @@ export default function TeacherHomePage() {
         if (isValidDateInputValue(safeExportDate)) {
           nextParams.set("exportDate", safeExportDate);
           returnParams.set("exportDate", safeExportDate);
+        }
+        if (safeFinalTestClassName && safeFinalTestClassName !== "all") {
+          nextParams.set("exportFinalTestClassName", safeFinalTestClassName);
+          returnParams.set(
+            "exportFinalTestClassName",
+            safeFinalTestClassName,
+          );
         }
       }
       const returnPath = returnParams.toString()
@@ -2622,6 +2711,23 @@ export default function TeacherHomePage() {
     });
   }
 
+  async function onExportCenterFinalTestZip() {
+    await runExportCenterTask("final-test", async () => {
+      const data = await exportAdminFinalTestZip(
+        adminToken,
+        exportCenterScopeKey,
+        {
+          className: exportCenterFinalTestClassName,
+        },
+      );
+      triggerBrowserDownload(
+        data?.blob,
+        data?.filename || "期末测试导出.zip",
+      );
+      setExportCenterNotice("期末测试痕迹导出完成。");
+    });
+  }
+
   async function onExportCenterAllRecordsZip() {
     await runExportCenterTask("all-records", async () => {
       const data = await exportAdminAllRecordsZip(
@@ -2727,6 +2833,19 @@ export default function TeacherHomePage() {
     });
     return summary;
   }, [userDirectoryItems, userDirectoryTargetClassNameKeys]);
+
+  const visibleFinalTestSubmissionClasses = useMemo(() => {
+    const classFilter = normalizeLessonClassName(
+      finalTestSubmissionClassName,
+    );
+    const source = Array.isArray(finalTestSubmissionClasses)
+      ? finalTestSubmissionClasses
+      : [];
+    if (!classFilter || classFilter === "all") return source;
+    return source.filter(
+      (item) => normalizeLessonClassName(item?.className) === classFilter,
+    );
+  }, [finalTestSubmissionClassName, finalTestSubmissionClasses]);
 
   const userDirectoryRoleCounts = useMemo(() => {
     const counts = {
@@ -6512,162 +6631,355 @@ export default function TeacherHomePage() {
                   <div>
                     <h2>期末测试</h2>
                     <p className="teacher-panel-save-time">
-                      {`编辑学生端将显示的期末测试内容 · 最近保存：${formatDisplayTime(classroomUpdatedAt)}`}
+                      {finalTestView === "submissions"
+                        ? `查看 810班 / 811班 的交卷情况 · 最近刷新：${formatDisplayTime(
+                            finalTestSubmissionUpdatedAt,
+                          )}`
+                        : `编辑学生端将显示的期末测试内容 · 最近保存：${formatDisplayTime(
+                            classroomUpdatedAt,
+                          )}`}
                     </p>
                   </div>
                   <div className="teacher-panel-actions">
-                    {finalTestConfigHasUnsavedChanges ? (
+                    <div
+                      className="teacher-homework-view-toggle"
+                      role="tablist"
+                      aria-label="期末测试视图切换"
+                    >
+                      <button
+                        type="button"
+                        className={`teacher-homework-view-btn${
+                          finalTestView === "editor" ? " active" : ""
+                        }`}
+                        onClick={() => setFinalTestView("editor")}
+                      >
+                        编辑内容
+                      </button>
+                      <button
+                        type="button"
+                        className={`teacher-homework-view-btn${
+                          finalTestView === "submissions" ? " active" : ""
+                        }`}
+                        onClick={() => setFinalTestView("submissions")}
+                      >
+                        提交情况
+                      </button>
+                    </div>
+                    {finalTestView === "editor" && finalTestConfigHasUnsavedChanges ? (
                       <span className="teacher-user-manage-dirty-tag">
                         期末测试内容未保存
                       </span>
                     ) : null}
-                    <button
-                      type="button"
-                      className="teacher-primary-btn teacher-tooltip-btn teacher-action-icon-btn"
-                      onClick={onSaveFinalTestConfig}
-                      disabled={loading || saving || finalTestSaving || uploadingFiles}
-                      data-tooltip={finalTestSaving ? "保存中..." : "保存期末测试内容"}
-                      title={finalTestSaving ? "保存中..." : "保存期末测试内容"}
-                      aria-label={finalTestSaving ? "保存中..." : "保存期末测试内容"}
-                    >
-                      <Save size={15} />
-                    </button>
+                    {finalTestView === "submissions" ? (
+                      <button
+                        type="button"
+                        className="teacher-ghost-btn teacher-tooltip-btn teacher-action-icon-btn"
+                        onClick={() => void loadFinalTestSubmissions()}
+                        disabled={finalTestSubmissionLoading}
+                        data-tooltip={finalTestSubmissionLoading ? "刷新中..." : "刷新提交情况"}
+                        title={finalTestSubmissionLoading ? "刷新中..." : "刷新提交情况"}
+                        aria-label={finalTestSubmissionLoading ? "刷新中..." : "刷新提交情况"}
+                      >
+                        <RefreshCw
+                          size={15}
+                          className={finalTestSubmissionLoading ? "is-spinning" : ""}
+                        />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="teacher-primary-btn teacher-tooltip-btn teacher-action-icon-btn"
+                        onClick={onSaveFinalTestConfig}
+                        disabled={loading || saving || finalTestSaving || uploadingFiles}
+                        data-tooltip={finalTestSaving ? "保存中..." : "保存期末测试内容"}
+                        title={finalTestSaving ? "保存中..." : "保存期末测试内容"}
+                        aria-label={finalTestSaving ? "保存中..." : "保存期末测试内容"}
+                      >
+                        <Save size={15} />
+                      </button>
+                    )}
                   </div>
                 </header>
 
-                <div className="teacher-final-test-columns">
-                <section className="teacher-card teacher-final-test-card">
-                  <label className="teacher-full-row">
-                    <span>顶部说明</span>
-                    <input
-                      type="text"
-                      value={finalTestConfig.introText}
-                      onChange={(event) =>
-                        setFinalTestConfig((current) => ({
-                          ...current,
-                          introText: event.target.value,
-                        }))
-                      }
-                      placeholder="说明期末测试包含哪些部分，以及平台内任务的要求。"
-                    />
-                  </label>
-                  <div className="teacher-final-test-task-head">
-                    <div>
-                      <strong>任务列表</strong>
-                      <p>学生端会按这里的顺序显示任务。可继续新增任务。</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="teacher-ghost-btn"
-                      onClick={addFinalTestTask}
-                    >
-                      <Plus size={14} />
-                      <span>添加任务</span>
-                    </button>
-                  </div>
-                  <div className="teacher-final-test-task-list">
-                    {(Array.isArray(finalTestConfig.tasks)
-                      ? finalTestConfig.tasks
-                      : []
-                    ).map((task, index) => (
-                      <section
-                        key={task.id || `task-${index + 1}`}
-                        className="teacher-final-test-task-item"
-                      >
-                        <div className="teacher-final-test-task-item-head">
-                          <strong>{`任务 ${index + 1}`}</strong>
-                          <div className="teacher-final-test-task-item-actions">
-                            <label className="teacher-final-test-task-mode">
-                              <select
-                                value={task.mode || "platform"}
+                {finalTestView === "editor" ? (
+                  <div className="teacher-final-test-columns">
+                    <section className="teacher-card teacher-final-test-card">
+                      <label className="teacher-full-row">
+                        <span>顶部说明</span>
+                        <input
+                          type="text"
+                          value={finalTestConfig.introText}
+                          onChange={(event) =>
+                            setFinalTestConfig((current) => ({
+                              ...current,
+                              introText: event.target.value,
+                            }))
+                          }
+                          placeholder="说明期末测试包含哪些部分，以及平台内任务的要求。"
+                        />
+                      </label>
+                      <div className="teacher-final-test-task-head">
+                        <div>
+                          <strong>任务列表</strong>
+                          <p>学生端会按这里的顺序显示任务。可继续新增任务。</p>
+                        </div>
+                        <button
+                          type="button"
+                          className="teacher-ghost-btn"
+                          onClick={addFinalTestTask}
+                        >
+                          <Plus size={14} />
+                          <span>添加任务</span>
+                        </button>
+                      </div>
+                      <div className="teacher-final-test-task-list">
+                        {(Array.isArray(finalTestConfig.tasks)
+                          ? finalTestConfig.tasks
+                          : []
+                        ).map((task, index) => (
+                          <section
+                            key={task.id || `task-${index + 1}`}
+                            className="teacher-final-test-task-item"
+                          >
+                            <div className="teacher-final-test-task-item-head">
+                              <strong>{`任务 ${index + 1}`}</strong>
+                              <div className="teacher-final-test-task-item-actions">
+                                <label className="teacher-final-test-task-mode">
+                                  <select
+                                    value={task.mode || "platform"}
+                                    onChange={(event) =>
+                                      updateFinalTestTaskAt(index, (currentTask) => ({
+                                        ...currentTask,
+                                        mode: event.target.value,
+                                      }))
+                                    }
+                                  >
+                                    <option value="platform">平台内任务</option>
+                                    <option value="offline">线下任务</option>
+                                  </select>
+                                </label>
+                                <button
+                                  type="button"
+                                  className="teacher-final-test-task-remove"
+                                  onClick={() => removeFinalTestTask(index)}
+                                  disabled={(finalTestConfig.tasks || []).length <= 1}
+                                >
+                                  <Trash2 size={14} />
+                                  <span>删除</span>
+                                </button>
+                              </div>
+                            </div>
+                            <div className="teacher-form-grid teacher-form-grid-single">
+                              <label>
+                                <span>任务标题</span>
+                                <input
+                                  type="text"
+                                  value={task.title || ""}
+                                  onChange={(event) =>
+                                    updateFinalTestTaskAt(index, (currentTask) => ({
+                                      ...currentTask,
+                                      title: event.target.value,
+                                    }))
+                                  }
+                                  placeholder={`任务 ${index + 1} 标题`}
+                                />
+                              </label>
+                            </div>
+                            <label className="teacher-full-row">
+                              <span>任务说明</span>
+                              <textarea
+                                rows={index === 0 ? 5 : 3}
+                                value={task.description || ""}
                                 onChange={(event) =>
                                   updateFinalTestTaskAt(index, (currentTask) => ({
                                     ...currentTask,
-                                    mode: event.target.value,
+                                    description: event.target.value,
                                   }))
                                 }
-                              >
-                                <option value="platform">平台内任务</option>
-                                <option value="offline">线下任务</option>
-                              </select>
+                                placeholder={
+                                  task.mode === "offline"
+                                    ? "说明该任务在线下如何完成。"
+                                    : "让学生知道具体要做什么、重点写什么。"
+                                }
+                              />
                             </label>
-                            <button
-                              type="button"
-                              className="teacher-final-test-task-remove"
-                              onClick={() => removeFinalTestTask(index)}
-                              disabled={(finalTestConfig.tasks || []).length <= 1}
-                            >
-                              <Trash2 size={14} />
-                              <span>删除</span>
-                            </button>
-                          </div>
-                        </div>
-                        <div className="teacher-form-grid teacher-form-grid-single">
-                          <label>
-                            <span>任务标题</span>
-                            <input
-                              type="text"
-                              value={task.title || ""}
-                              onChange={(event) =>
-                                updateFinalTestTaskAt(index, (currentTask) => ({
-                                  ...currentTask,
-                                  title: event.target.value,
-                                }))
-                              }
-                              placeholder={`任务 ${index + 1} 标题`}
-                            />
-                          </label>
-                        </div>
-                        <label className="teacher-full-row">
-                          <span>任务说明</span>
-                          <textarea
-                            rows={index === 0 ? 5 : 3}
-                            value={task.description || ""}
-                            onChange={(event) =>
-                              updateFinalTestTaskAt(index, (currentTask) => ({
-                                ...currentTask,
-                                description: event.target.value,
-                              }))
-                            }
-                            placeholder={
-                              task.mode === "offline"
-                                ? "说明该任务在线下如何完成。"
-                                : "让学生知道具体要做什么、重点写什么。"
-                            }
-                          />
-                        </label>
-                      </section>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="teacher-card teacher-final-test-preview-card">
-                  <h3>学生端预览</h3>
-                  <div className="teacher-final-test-preview">
-                    <p>{finalTestConfig.introText}</p>
-                    {(Array.isArray(finalTestConfig.tasks)
-                      ? finalTestConfig.tasks
-                      : []
-                    ).map((task, index) => (
-                      <div
-                        key={task.id || `preview-task-${index + 1}`}
-                        className="teacher-final-test-preview-task"
-                      >
-                        <strong>{task.title || `任务 ${index + 1}`}</strong>
-                        <p
-                          className={
-                            task.mode === "offline"
-                              ? "teacher-final-test-preview-muted"
-                              : ""
-                          }
-                        >
-                          {task.description || "未填写任务说明。"}
-                        </p>
+                          </section>
+                        ))}
                       </div>
-                    ))}
+                    </section>
+
+                    <section className="teacher-card teacher-final-test-preview-card">
+                      <h3>学生端预览</h3>
+                      <div className="teacher-final-test-preview">
+                        <p>{finalTestConfig.introText}</p>
+                        {(Array.isArray(finalTestConfig.tasks)
+                          ? finalTestConfig.tasks
+                          : []
+                        ).map((task, index) => (
+                          <div
+                            key={task.id || `preview-task-${index + 1}`}
+                            className="teacher-final-test-preview-task"
+                          >
+                            <strong>{task.title || `任务 ${index + 1}`}</strong>
+                            <p
+                              className={
+                                task.mode === "offline"
+                                  ? "teacher-final-test-preview-muted"
+                                  : ""
+                              }
+                            >
+                              {task.description || "未填写任务说明。"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
                   </div>
-                </section>
-                </div>
+                ) : (
+                  <div className="teacher-final-test-status-layout">
+                    <div className="teacher-final-test-status-toolbar">
+                      <h3>交卷总览</h3>
+                      <div className="teacher-final-test-status-controls">
+                        <div
+                          className="teacher-homework-view-toggle"
+                          role="tablist"
+                          aria-label="期末测试提交情况显示内容"
+                        >
+                          <button
+                            type="button"
+                            className={`teacher-homework-view-btn${
+                              finalTestSubmissionDisplayMode === "submission"
+                                ? " active"
+                                : ""
+                            }`}
+                            onClick={() =>
+                              setFinalTestSubmissionDisplayMode("submission")
+                            }
+                          >
+                            交卷状态
+                          </button>
+                          <button
+                            type="button"
+                            className={`teacher-homework-view-btn${
+                              finalTestSubmissionDisplayMode === "stage"
+                                ? " active"
+                                : ""
+                            }`}
+                            onClick={() =>
+                              setFinalTestSubmissionDisplayMode("stage")
+                            }
+                          >
+                            当前步骤
+                          </button>
+                        </div>
+                        <PortalSelect
+                          className="teacher-final-test-status-class-select"
+                          value={finalTestSubmissionClassName}
+                          ariaLabel="期末测试提交情况班级"
+                          options={FINAL_TEST_EXPORT_CLASS_OPTIONS}
+                          onChange={setFinalTestSubmissionClassName}
+                          compact
+                        />
+                      </div>
+                    </div>
+
+                    {finalTestSubmissionLoading ? (
+                      <section className="teacher-card teacher-final-test-status-card">
+                        <p className="teacher-empty-text">正在读取提交情况…</p>
+                      </section>
+                    ) : visibleFinalTestSubmissionClasses.length === 0 ? (
+                      <section className="teacher-card teacher-final-test-status-card">
+                        <p className="teacher-empty-text">当前筛选下还没有班级名单。</p>
+                      </section>
+                    ) : (
+                      <div className="teacher-final-test-class-grid">
+                        {visibleFinalTestSubmissionClasses.map((classItem) => {
+                          const className = normalizeLessonClassName(
+                            classItem?.className,
+                          );
+                          const students = Array.isArray(classItem?.students)
+                            ? classItem.students
+                            : [];
+                          const submittedCount = students.filter(
+                            (student) => student?.submitted === true,
+                          ).length;
+                          const unlistedSessions = Array.isArray(
+                            classItem?.unlistedSessions,
+                          )
+                            ? classItem.unlistedSessions
+                            : [];
+                          return (
+                            <section
+                              key={`final-test-class-${className || "unknown"}`}
+                              className="teacher-card teacher-final-test-status-card"
+                            >
+                              <div className="teacher-final-test-status-section-head">
+                                <div className="teacher-final-test-status-title">
+                                  <h3>{`全班名单（已交 ${submittedCount} / ${students.length}）`}</h3>
+                                </div>
+                              </div>
+
+                              {students.length === 0 ? (
+                                <p className="teacher-empty-text">这个班级还没有花名册。</p>
+                              ) : (
+                                <div className="teacher-homework-card-grid teacher-final-test-student-grid">
+                                  {students.map((student) => {
+                                    const submitted = student?.submitted === true;
+                                    const detailStatusLabel =
+                                      readFinalTestStatusLabel(student?.status);
+                                    const statusLabel =
+                                      finalTestSubmissionDisplayMode === "stage"
+                                        ? detailStatusLabel
+                                        : submitted
+                                          ? "已交"
+                                          : "未交";
+                                    return (
+                                      <article
+                                        key={`final-test-student-${student?.studentUserId || student?.studentId || student?.studentName}`}
+                                        className={`teacher-homework-student-card teacher-final-test-student-tile${
+                                          submitted ? " submitted" : " missing"
+                                        }`}
+                                        title={`${student?.studentName || "未命名学生"} · ${detailStatusLabel}${
+                                          student?.submittedAt
+                                            ? ` · ${formatDisplayTime(student.submittedAt)}`
+                                            : ""
+                                        }`}
+                                      >
+                                        <span className="teacher-homework-student-card-name">
+                                          {student?.studentName || "未命名学生"}
+                                        </span>
+                                        <span className="teacher-homework-student-card-status">
+                                          {statusLabel}
+                                        </span>
+                                      </article>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {unlistedSessions.length > 0 ? (
+                                <div className="teacher-final-test-unlisted-block">
+                                  <strong>名单外记录</strong>
+                                  <div className="teacher-final-test-unlisted-list">
+                                    {unlistedSessions.map((item) => (
+                                      <article
+                                        key={`final-test-unlisted-${className}-${item?.studentUserId || item?.updatedAt}`}
+                                        className="teacher-final-test-unlisted-item"
+                                      >
+                                        <span>{item?.studentUserId || "未知账号"}</span>
+                                        <span>{readFinalTestStatusLabel(item?.status)}</span>
+                                      </article>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </section>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : activePanel === "discipline" ? (
               <div className="teacher-panel-stack teacher-discipline-stack">
@@ -7602,7 +7914,7 @@ export default function TeacherHomePage() {
                   <div>
                     <h2>导出中心</h2>
                     <p className="teacher-panel-save-time">
-                      统一导出聊天、群聊、图片与归档记录
+                      统一导出聊天、群聊、图片、期末测试与归档记录
                     </p>
                   </div>
                 </header>
@@ -7612,7 +7924,7 @@ export default function TeacherHomePage() {
                     <div className="teacher-export-center-filter-head">
                       <h3>统一筛选</h3>
                       <p>
-                        先选择授课教师和日期，再按下方分类执行导出。日期仅作用于"按日期导出"的按钮。
+                        先选择授课教师、期末测试班级和日期，再按下方分类执行导出。日期仅作用于"按日期导出"的按钮。
                       </p>
                     </div>
                     <div className="teacher-export-center-filter-fields">
@@ -7625,6 +7937,21 @@ export default function TeacherHomePage() {
                           options={exportCenterScopeOptions}
                           onChange={(value) => {
                             setExportCenterScopeKey(value);
+                            setExportCenterError("");
+                          }}
+                          disabled={!!exportCenterLoading}
+                          compact
+                        />
+                      </label>
+                      <label className="teacher-export-center-field">
+                        <span>期末测试班级</span>
+                        <PortalSelect
+                          className="teacher-export-center-scope-select"
+                          value={exportCenterFinalTestClassName}
+                          ariaLabel="期末测试导出班级"
+                          options={FINAL_TEST_EXPORT_CLASS_OPTIONS}
+                          onChange={(value) => {
+                            setExportCenterFinalTestClassName(value);
                             setExportCenterError("");
                           }}
                           disabled={!!exportCenterLoading}
@@ -7730,6 +8057,29 @@ export default function TeacherHomePage() {
                           {exportCenterLoading === "images"
                             ? "导出中..."
                             : "导出学生生成图片记录（TXT）"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="teacher-export-center-group">
+                      <h3>期末测试</h3>
+                      <p>
+                        {`导出"${exportCenterScopeLabel}"范围内的期末测试全过程痕迹。压缩包内同时包含 Excel 总表、CSV 总表，以及按学生拆分的中文明细 TXT 和 JSON。当前班级筛选：${
+                          exportCenterFinalTestClassName === "all"
+                            ? "全部班级"
+                            : exportCenterFinalTestClassName
+                        }。`}
+                      </p>
+                      <div className="teacher-export-center-actions">
+                        <button
+                          type="button"
+                          className="teacher-primary-btn"
+                          onClick={() => void onExportCenterFinalTestZip()}
+                          disabled={!!exportCenterLoading}
+                        >
+                          {exportCenterLoading === "final-test"
+                            ? "打包中..."
+                            : "导出期末测试痕迹（ZIP 含 Excel）"}
                         </button>
                       </div>
                     </div>

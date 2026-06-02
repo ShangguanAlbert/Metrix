@@ -385,6 +385,8 @@ export default function ModeSelectionPage() {
       variant: "disabled",
       durationMinutes: 20,
       entryLabel: "期末测试",
+      demoMode: false,
+      timingEnabled: false,
     },
     finalTestConfig: normalizeFinalTestContentConfig(null),
     teacherCoursePlans: [],
@@ -415,14 +417,20 @@ export default function ModeSelectionPage() {
           ? {
               enabled: data.experimentTask.enabled === true,
               variant: String(data.experimentTask.variant || "disabled"),
-              durationMinutes: Number(data.experimentTask.durationMinutes || 20),
+              durationMinutes: Number.isFinite(Number(data.experimentTask.durationMinutes))
+                ? Math.max(0, Number(data.experimentTask.durationMinutes))
+                : 20,
               entryLabel: String(data.experimentTask.entryLabel || "期末测试"),
+              demoMode: data.experimentTask.demoMode === true,
+              timingEnabled: data.experimentTask.timingEnabled === true,
             }
           : {
               enabled: false,
               variant: "disabled",
               durationMinutes: 20,
               entryLabel: "期末测试",
+              demoMode: false,
+              timingEnabled: false,
             },
       teacherCoursePlans: Array.isArray(data?.teacherCoursePlans)
         ? data.teacherCoursePlans

@@ -1,6 +1,7 @@
 import {
   buildAdminGroupChatsZipBundle,
 } from "../services/admin-group-chat-export.js";
+import { buildFinalTestExportBundle } from "../services/final-test-export.js";
 
 export function registerAdminRoutes(app, deps) {
   const {
@@ -213,6 +214,7 @@ export function registerAdminRoutes(app, deps) {
     AdminClassroomLessonFile,
     classroomHomeworkFileSchema,
     ClassroomHomeworkFile,
+    FinalTestSession,
     getDefaultRuntimeConfigByAgent,
     createDefaultAgentRuntimeConfigMap,
     normalizeMessages,
@@ -2901,6 +2903,20 @@ export function registerAdminRoutes(app, deps) {
     };
   }
 
+  function sanitizeFinalTestExportClassFilter(value) {
+    const safeValue = String(value || "").trim();
+    if (!safeValue || safeValue === "all") return "all";
+    if (safeValue === "810班" || safeValue === "811班") return safeValue;
+    return "";
+  }
+
+  function resolveFinalTestExportClassFilterLabel(value) {
+    const safeValue = sanitizeFinalTestExportClassFilter(value);
+    if (safeValue === "all") return "全部班级";
+    if (safeValue === "810班" || safeValue === "811班") return safeValue;
+    return "全部班级";
+  }
+
   function buildDateScopedUserExportReadme(payload = {}) {
     const exportedAt = payload?.exportedAt || new Date();
     const teacherScopeKey = sanitizeTeacherScopeKey(payload?.teacherScopeKey);
@@ -3649,6 +3665,73 @@ export function registerAdminRoutes(app, deps) {
     } catch (error) {
       res.status(500).json({
         error: error?.message || "导出全量记录失败，请稍后重试。",
+      });
+    }
+  });
+
+  app.get("/api/auth/admin/export/final-test-zip", async (req, res) => {
+    if (!(await authenticateAdminRequest(req, res))) return;
+    const teacherScopeKey = sanitizeTeacherScopeKey(req.query?.teacherScopeKey);
+    const classNameFilter = sanitizeFinalTestExportClassFilter(
+      req.query?.className,
+    );
+
+    if (req.query?.className != null && !classNameFilter) {
+      res.status(400).json({ error: "请选择有效的期末测试班级范围。" });
+      return;
+    }
+
+    try {
+      const [userContext, config] = await Promise.all([
+        readTeacherScopeExportUserContext(teacherScopeKey),
+        readAdminAgentConfig(),
+      ]);
+      const finalTestSessionQuery = {
+        key: ADMIN_CONFIG_KEY,
+        teacherScopeKey,
+      };
+      if (classNameFilter && classNameFilter !== "all") {
+        finalTestSessionQuery.className = classNameFilter;
+      }
+      const finalTestSessions = await FinalTestSession.find(
+        finalTestSessionQuery,
+      ).lean();
+
+      const bundle = buildFinalTestExportBundle(
+        {
+          teacherScopeKey,
+          classNameFilter,
+          users: userContext.scopedUsers,
+          sessions: finalTestSessions,
+          finalTestConfig: config?.finalTestConfig,
+          exportedAt: new Date(),
+        },
+        {
+          XLSX,
+          getTeacherScopeLabel,
+          formatDisplayTime,
+          formatFileStamp,
+          sanitizeId,
+          sanitizeText,
+          sanitizeUserProfile,
+          sanitizeZipEntryName,
+        },
+      );
+      const zipBuffer = buildZipBuffer(bundle.files);
+      const fileName =
+        bundle.fileName ||
+        `期末测试导出-${teacherScopeKey}-${resolveFinalTestExportClassFilterLabel(classNameFilter)}-${formatFileStamp(
+          new Date(),
+        )}.zip`;
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader(
+        "Content-Disposition",
+        buildAttachmentContentDisposition(fileName),
+      );
+      res.send(zipBuffer);
+    } catch (error) {
+      res.status(500).json({
+        error: error?.message || "导出期末测试痕迹失败，请稍后重试。",
       });
     }
   });

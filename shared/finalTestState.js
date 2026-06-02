@@ -39,12 +39,19 @@ export function createFinalTestSessionBase({
   variant = "disabled",
   startedAt = "",
   nowIso = "",
+  durationMinutes = FINAL_TEST_DURATION_MINUTES,
 } = {}) {
   const safeVariant = String(variant || "disabled").trim();
   const safeStartedAt = String(startedAt || nowIso || new Date().toISOString()).trim();
-  const deadlineAt = new Date(
-    Date.parse(safeStartedAt) + FINAL_TEST_DURATION_MINUTES * 60 * 1000,
-  ).toISOString();
+  const numericDurationMinutes = Number(durationMinutes);
+  const safeDurationMinutes = Number.isFinite(numericDurationMinutes)
+    ? Math.max(0, numericDurationMinutes)
+    : FINAL_TEST_DURATION_MINUTES;
+  const startedAtMs = Date.parse(safeStartedAt);
+  const deadlineAt =
+    safeDurationMinutes > 0 && Number.isFinite(startedAtMs)
+      ? new Date(startedAtMs + safeDurationMinutes * 60 * 1000).toISOString()
+      : "";
   return {
     key: "admin-config",
     studentUserId: String(studentUserId || "").trim(),
@@ -56,7 +63,7 @@ export function createFinalTestSessionBase({
     lockedAt: "",
     submittedAt: "",
     timeExpired: false,
-    durationMinutes: FINAL_TEST_DURATION_MINUTES,
+    durationMinutes: safeDurationMinutes,
     stage1: {
       ideas: [],
       lockedAt: "",
@@ -210,6 +217,7 @@ export function applyFinalTestPatch(session, patch = {}) {
 export function normalizeFinalTestSession(session) {
   const safe = session && typeof session === "object" ? session : {};
   const payload = safe.payload && typeof safe.payload === "object" ? safe.payload : {};
+  const numericDurationMinutes = Number(safe.durationMinutes);
   return {
     key: String(safe.key || "admin-config").trim(),
     studentUserId: String(safe.studentUserId || "").trim(),
@@ -221,7 +229,9 @@ export function normalizeFinalTestSession(session) {
     lockedAt: String(safe.lockedAt || "").trim(),
     submittedAt: String(safe.submittedAt || "").trim(),
     timeExpired: safe.timeExpired === true,
-    durationMinutes: Number(safe.durationMinutes || FINAL_TEST_DURATION_MINUTES),
+    durationMinutes: Number.isFinite(numericDurationMinutes)
+      ? Math.max(0, numericDurationMinutes)
+      : FINAL_TEST_DURATION_MINUTES,
     payload,
     stage1: payload.stage1 && typeof payload.stage1 === "object" ? payload.stage1 : safe.stage1 || {},
     stage2: payload.stage2 && typeof payload.stage2 === "object" ? payload.stage2 : safe.stage2 || {},

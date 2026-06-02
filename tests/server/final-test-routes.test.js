@@ -63,6 +63,30 @@ function createFinalTestSessionModelDouble() {
     async findOne(query) {
       return clone(store.get(normalizeKey(query)) || null);
     },
+    find(query = {}) {
+      const teacherScopeKey = String(query?.teacherScopeKey || "");
+      const keyValue = String(query?.key || "");
+      const classNameFilter = query?.className;
+      const classNameValues =
+        classNameFilter && typeof classNameFilter === "object" && Array.isArray(classNameFilter.$in)
+          ? new Set(classNameFilter.$in.map((item) => String(item || "")))
+          : null;
+      const results = Array.from(store.values()).filter((item) => {
+        if (teacherScopeKey && String(item?.teacherScopeKey || "") !== teacherScopeKey) {
+          return false;
+        }
+        if (keyValue && String(item?.key || "") !== keyValue) {
+          return false;
+        }
+        if (classNameValues && !classNameValues.has(String(item?.className || ""))) {
+          return false;
+        }
+        return true;
+      });
+      return {
+        lean: async () => clone(results),
+      };
+    },
     async findOneAndUpdate(query, update, options = {}) {
       const key = normalizeKey(query);
       const current = clone(store.get(key) || {});
@@ -76,6 +100,45 @@ function createFinalTestSessionModelDouble() {
       if (!next.className) next.className = String(query?.className || "");
       store.set(key, clone(next));
       return options?.lean ? clone(next) : next;
+    },
+  };
+}
+
+function createAuthUserModelDouble(initialUsers = []) {
+  const store = Array.isArray(initialUsers)
+    ? JSON.parse(JSON.stringify(initialUsers))
+    : [];
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  return {
+    find(query = {}) {
+      const teacherScopeKey = String(query?.lockedTeacherScopeKey || "");
+      const role = String(query?.role || "");
+      const usernameKeyFilter = query?.usernameKey;
+      const usernameKeyValues =
+        usernameKeyFilter &&
+        typeof usernameKeyFilter === "object" &&
+        Array.isArray(usernameKeyFilter.$in)
+          ? new Set(usernameKeyFilter.$in.map((item) => String(item || "")))
+          : null;
+      const results = store.filter((item) => {
+        if (teacherScopeKey && String(item?.lockedTeacherScopeKey || "") !== teacherScopeKey) {
+          return false;
+        }
+        if (role && String(item?.role || "") !== role) {
+          return false;
+        }
+        if (usernameKeyValues && !usernameKeyValues.has(String(item?.usernameKey || ""))) {
+          return false;
+        }
+        return true;
+      });
+      return {
+        lean: async () => clone(results),
+      };
     },
   };
 }
@@ -123,6 +186,56 @@ function createFinalTestDeps() {
       .trim()
       .slice(0, maxLength);
   const FinalTestSession = createFinalTestSessionModelDouble();
+  const AuthUser = createAuthUserModelDouble([
+    {
+      _id: "student-810",
+      username: "zhangsan810",
+      usernameKey: "zhangsan810",
+      role: "user",
+      lockedTeacherScopeKey: "shangguan-fuze",
+      profile: {
+        name: "张三",
+        studentId: "81001",
+        className: "810班",
+      },
+    },
+    {
+      _id: "student-810-2",
+      username: "lisi810",
+      usernameKey: "lisi810",
+      role: "user",
+      lockedTeacherScopeKey: "shangguan-fuze",
+      profile: {
+        name: "李四",
+        studentId: "81002",
+        className: "810班",
+      },
+    },
+    {
+      _id: "student-811",
+      username: "wangwu811",
+      usernameKey: "wangwu811",
+      role: "user",
+      lockedTeacherScopeKey: "shangguan-fuze",
+      profile: {
+        name: "王五",
+        studentId: "81101",
+        className: "811班",
+      },
+    },
+    {
+      _id: "student-other",
+      username: "otherclass",
+      usernameKey: "otherclass",
+      role: "user",
+      lockedTeacherScopeKey: "shangguan-fuze",
+      profile: {
+        name: "其他班学生",
+        studentId: "99901",
+        className: "999班",
+      },
+    },
+  ]);
   const AdminConfig = createAdminConfigModelDouble({
     shangguanClassTaskProductImprovementEnabled: false,
     seatLayoutsByClass: {},
@@ -182,6 +295,27 @@ function createFinalTestDeps() {
     SHANGGUAN_FUZE_TEACHER_SCOPE_KEY: "shangguan-fuze",
     DEFAULT_TEACHER_SCOPE_KEY: "default",
     ADMIN_CONFIG_KEY: "admin-config",
+    FIXED_STUDENT_ACCOUNTS: [
+      {
+        username: "zhangsan810",
+        studentId: "81001",
+        className: "810班",
+        requiredTeacherScopeKey: "shangguan-fuze",
+      },
+      {
+        username: "lisi810",
+        studentId: "81002",
+        className: "810班",
+        requiredTeacherScopeKey: "shangguan-fuze",
+      },
+      {
+        username: "wangwu811",
+        studentId: "81101",
+        className: "811班",
+        requiredTeacherScopeKey: "shangguan-fuze",
+      },
+    ],
+    FIXED_STUDENT_REQUIRED_TEACHER_SCOPE_KEY: "shangguan-fuze",
     CLASSROOM_FIRST_LESSON_DATE: "2026-03-11",
     CLASSROOM_QUESTIONNAIRE_URL: "",
     sanitizeTeacherScopeKey: (value) => String(value || "").trim().toLowerCase(),
@@ -216,6 +350,7 @@ function createFinalTestDeps() {
     }),
     readAdminAgentConfig: async () => AdminConfig.read(),
     AdminConfig,
+    AuthUser,
     ClassroomHomeworkFile: {
       find() {
         return {
@@ -261,6 +396,39 @@ test("classroom task settings expose final test variant and duration by class", 
   assert.equal(res.payload.finalTestConfig.taskTitle, "任务 1：改进普通书包");
   assert.match(res.payload.finalTestConfig.taskDescription, /普通书包/);
   assert.equal(res.payload.finalTestConfig.tasks.length, 2);
+});
+
+test("admin user sees final test in untimed demo mode", async () => {
+  const app = createAppDouble();
+  const deps = createFinalTestDeps();
+  registerAuthUserClassroomRoutes(app, deps);
+
+  const route = app.routes.find(
+    (item) => item.method === "get" && item.path === "/api/classroom/tasks/settings",
+  );
+  assert.ok(route, "expected classroom task settings route");
+
+  const handler = route.handlers[route.handlers.length - 1];
+  const res = createResponseDouble();
+  await handler(
+    {
+      authTeacherScopeKey: "shangguan-fuze",
+      authUser: {
+        _id: "admin-1",
+        username: "上官福泽",
+        role: "admin",
+        profile: {},
+      },
+    },
+    res,
+  );
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.payload.experimentTask.enabled, true);
+  assert.equal(res.payload.experimentTask.variant, "three-stage-guided");
+  assert.equal(res.payload.experimentTask.demoMode, true);
+  assert.equal(res.payload.experimentTask.timingEnabled, false);
+  assert.equal(res.payload.experimentTask.durationMinutes, 0);
 });
 
 test("admin final test config routes persist the teacher-authored test content", async () => {
@@ -323,6 +491,134 @@ test("admin final test config routes persist the teacher-authored test content",
   assert.equal(afterSaveRes.payload.finalTestConfig.tasks[1].mode, "offline");
 });
 
+test("admin final test submissions route exposes submitted and pending session states", async () => {
+  const app = createAppDouble();
+  const deps = createFinalTestDeps();
+  registerAuthUserClassroomRoutes(app, deps);
+
+  await deps.FinalTestSession.findOneAndUpdate(
+    {
+      key: "admin-config",
+      teacherScopeKey: "shangguan-fuze",
+      studentUserId: "student-810",
+      className: "810班",
+    },
+    {
+      $set: {
+        key: "admin-config",
+        teacherScopeKey: "shangguan-fuze",
+        studentUserId: "student-810",
+        className: "810班",
+        variant: "three-stage-guided",
+        status: "submitted",
+        startedAt: "2026-05-31T09:40:00.000Z",
+        submittedAt: "2026-05-31T09:58:00.000Z",
+        durationMinutes: 20,
+        payload: {
+          stage1: { ideas: [], lockedAt: "", submittedAt: "", pasteBlockedCount: 0 },
+          stage2: { messages: [], promptCardClicks: [], promptCardCopies: [], transfers: [], riskEvents: [], submittedAt: "" },
+          stage3: { draft: {}, pasteEvents: [], riskEvents: [], submittedAt: "" },
+          turnbackEvents: [],
+          riskLog: [],
+        },
+      },
+    },
+    { lean: true },
+  );
+
+  await deps.FinalTestSession.findOneAndUpdate(
+    {
+      key: "admin-config",
+      teacherScopeKey: "shangguan-fuze",
+      studentUserId: "student-811",
+      className: "811班",
+    },
+    {
+      $set: {
+        key: "admin-config",
+        teacherScopeKey: "shangguan-fuze",
+        studentUserId: "student-811",
+        className: "811班",
+        variant: "two-stage-free",
+        status: "stage2_active",
+        startedAt: "2026-05-31T09:45:00.000Z",
+        durationMinutes: 20,
+        payload: {
+          stage1: { ideas: [], lockedAt: "", submittedAt: "", pasteBlockedCount: 0 },
+          stage2: { messages: [], promptCardClicks: [], promptCardCopies: [], transfers: [], riskEvents: [], submittedAt: "" },
+          stage3: { draft: {}, pasteEvents: [], riskEvents: [], submittedAt: "" },
+          turnbackEvents: [],
+          riskLog: [],
+        },
+      },
+    },
+    { lean: true },
+  );
+
+  const route = app.routes.find(
+    (item) => item.method === "get" && item.path === "/api/auth/admin/final-test-submissions",
+  );
+  assert.ok(route, "expected admin final test submissions route");
+
+  const handler = route.handlers[route.handlers.length - 1];
+  const res = createResponseDouble();
+  await handler({}, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(Array.isArray(res.payload.sessions), true);
+  assert.equal(res.payload.sessions.length, 2);
+  assert.equal(res.payload.sessions[0].studentUserId, "student-810");
+  assert.equal(res.payload.sessions[0].status, "submitted");
+  assert.equal(res.payload.sessions[1].studentUserId, "student-811");
+  assert.equal(res.payload.sessions[1].status, "stage2_active");
+  assert.equal(Array.isArray(res.payload.classes), true);
+  assert.equal(res.payload.classes.length, 2);
+  assert.deepEqual(
+    res.payload.classes.map((item) => ({
+      className: item.className,
+      studentTotal: item.studentTotal,
+      submittedCount: item.submittedCount,
+      pendingCount: item.pendingCount,
+    })),
+    [
+      {
+        className: "810班",
+        studentTotal: 2,
+        submittedCount: 1,
+        pendingCount: 1,
+      },
+      {
+        className: "811班",
+        studentTotal: 1,
+        submittedCount: 0,
+        pendingCount: 1,
+      },
+    ],
+  );
+  assert.deepEqual(
+    res.payload.classes[0].students.map((item) => ({
+      studentUserId: item.studentUserId,
+      studentName: item.studentName,
+      submitted: item.submitted,
+      status: item.status,
+    })),
+    [
+      {
+        studentUserId: "student-810",
+        studentName: "张三",
+        submitted: true,
+        status: "submitted",
+      },
+      {
+        studentUserId: "student-810-2",
+        studentName: "李四",
+        submitted: false,
+        status: "",
+      },
+    ],
+  );
+});
+
 test("starting a final test session creates a 20-minute timed session", async () => {
   const app = createAppDouble();
   const deps = createFinalTestDeps();
@@ -354,6 +650,42 @@ test("starting a final test session creates a 20-minute timed session", async ()
   assert.equal(res.payload.session.durationMinutes, 20);
   assert.ok(res.payload.session.startedAt);
   assert.ok(res.payload.session.deadlineAt);
+});
+
+test("admin demo mode starts the full final test flow without a timer", async () => {
+  const app = createAppDouble();
+  const deps = createFinalTestDeps();
+  registerAuthUserClassroomRoutes(app, deps);
+
+  const route = app.routes.find(
+    (item) =>
+      item.method === "post" &&
+      item.path === "/api/classroom/final-test/session/start",
+  );
+  assert.ok(route, "expected final test start route");
+
+  const handler = route.handlers[route.handlers.length - 1];
+  const res = createResponseDouble();
+  await handler(
+    {
+      authTeacherScopeKey: "shangguan-fuze",
+      authUser: {
+        _id: "admin-1",
+        username: "上官福泽",
+        role: "admin",
+        profile: {},
+      },
+    },
+    res,
+  );
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.payload.experimentTask.demoMode, true);
+  assert.equal(res.payload.experimentTask.timingEnabled, false);
+  assert.equal(res.payload.session.variant, "three-stage-guided");
+  assert.equal(res.payload.session.status, "stage1_draft");
+  assert.equal(res.payload.session.durationMinutes, 0);
+  assert.equal(res.payload.session.deadlineAt, "");
 });
 
 test("turnback with the expected passphrase opens a new editable stage version", async () => {
@@ -587,4 +919,73 @@ test("debug-mode final test requests bypass automatic timeout locking", async ()
   assert.equal(res.statusCode, 200);
   assert.equal(res.payload.session.status, "stage1_draft");
   assert.equal(res.payload.session.timeExpired, false);
+});
+
+test("timed student sessions are locked automatically after the deadline", async () => {
+  const app = createAppDouble();
+  const deps = createFinalTestDeps();
+  registerAuthUserClassroomRoutes(app, deps);
+
+  const getRoute = app.routes.find(
+    (item) =>
+      item.method === "get" &&
+      item.path === "/api/classroom/final-test/session",
+  );
+  assert.ok(getRoute, "expected final test session route");
+
+  await deps.FinalTestSession.findOneAndUpdate(
+    {
+      key: "admin-config",
+      teacherScopeKey: "shangguan-fuze",
+      studentUserId: "student-810",
+      className: "810班",
+    },
+    {
+      $set: {
+        key: "admin-config",
+        teacherScopeKey: "shangguan-fuze",
+        studentUserId: "student-810",
+        className: "810班",
+        variant: "three-stage-guided",
+        status: "stage3_active",
+        startedAt: "2026-05-31T09:40:00.000Z",
+        deadlineAt: "2026-05-31T10:00:00.000Z",
+        durationMinutes: 20,
+        payload: {
+          stage1: { ideas: [], lockedAt: "", submittedAt: "", pasteBlockedCount: 0 },
+          stage2: { messages: [], promptCardClicks: [], promptCardCopies: [], transfers: [], riskEvents: [], submittedAt: "" },
+          stage3: { draft: {}, pasteEvents: [], riskEvents: [], submittedAt: "" },
+          turnbackEvents: [],
+          riskLog: [],
+        },
+      },
+    },
+    { lean: true },
+  );
+
+  const originalDateNow = Date.now;
+  Date.now = () => Date.parse("2026-05-31T10:00:05.000Z");
+  try {
+    const handler = getRoute.handlers[getRoute.handlers.length - 1];
+    const res = createResponseDouble();
+    await handler(
+      {
+        authTeacherScopeKey: "shangguan-fuze",
+        authUser: {
+          _id: "student-810",
+          username: "student-810",
+          role: "user",
+          profile: { className: "810班" },
+        },
+      },
+      res,
+    );
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.payload.session.status, "time_expired_locked");
+    assert.equal(res.payload.session.timeExpired, true);
+    assert.ok(res.payload.session.lockedAt);
+  } finally {
+    Date.now = originalDateNow;
+  }
 });

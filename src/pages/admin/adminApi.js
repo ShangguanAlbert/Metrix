@@ -46,6 +46,13 @@ function withExportDateQuery(path, exportDate) {
   return `${path}${joiner}exportDate=${encodeURIComponent(safeExportDate)}`;
 }
 
+function withClassNameQuery(path, className) {
+  const safeClassName = String(className || "").trim();
+  if (!safeClassName || safeClassName === "all") return path;
+  const joiner = path.includes("?") ? "&" : "?";
+  return `${path}${joiner}className=${encodeURIComponent(safeClassName)}`;
+}
+
 async function request(path, adminToken, options = {}) {
   const resp = await fetch(path, {
     method: "GET",
@@ -249,6 +256,10 @@ export function saveAdminFinalTestConfig(adminToken, payload) {
     method: "PUT",
     body: JSON.stringify(payload && typeof payload === "object" ? payload : {}),
   });
+}
+
+export function fetchAdminFinalTestSubmissions(adminToken) {
+  return request("/api/auth/admin/final-test-submissions", adminToken);
 }
 
 export function fetchAdminClassroomPlans(adminToken) {
@@ -663,6 +674,41 @@ export async function exportAdminAllRecordsZip(adminToken, teacherScopeKey) {
   const filename =
     readContentDispositionFilename(resp.headers.get("Content-Disposition")) ||
     "educhat-all-records.zip";
+  return { blob, filename };
+}
+
+export async function exportAdminFinalTestZip(
+  adminToken,
+  teacherScopeKey,
+  options = {},
+) {
+  const path = withClassNameQuery(
+    withTeacherScopeQuery("/api/auth/admin/export/final-test-zip", teacherScopeKey),
+    options?.className,
+  );
+  const resp = await fetch(path, {
+    headers: authHeader(adminToken),
+  });
+
+  if (!resp.ok) {
+    let message = "";
+    try {
+      const data = await resp.json();
+      message = data?.error || data?.message || "";
+    } catch {
+      try {
+        message = await resp.text();
+      } catch {
+        message = "";
+      }
+    }
+    throw new Error(message || `请求失败（${resp.status}）`);
+  }
+
+  const blob = await resp.blob();
+  const filename =
+    readContentDispositionFilename(resp.headers.get("Content-Disposition")) ||
+    "期末测试导出.zip";
   return { blob, filename };
 }
 

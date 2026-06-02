@@ -7,6 +7,7 @@
   overflow: hidden !important;
   padding: 0 !important;
   gap: 0 !important;
+  border-radius: 0 !important;
 }
 
 .final-test-shell {
@@ -80,6 +81,33 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 10px;
+}
+
+.final-test-runtime-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--ft-border-strong);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ft-ink);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.final-test-runtime-pill.timed {
+  border-color: rgba(193, 95, 60, 0.28);
+  background: rgba(193, 95, 60, 0.08);
+  color: var(--ft-accent-strong);
+}
+
+.final-test-runtime-pill.demo {
+  border-color: rgba(26, 108, 70, 0.26);
+  background: rgba(26, 108, 70, 0.08);
+  color: var(--ft-success);
 }
 
 .final-test-debug-toggle {

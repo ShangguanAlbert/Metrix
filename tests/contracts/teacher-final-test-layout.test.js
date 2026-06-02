@@ -71,3 +71,29 @@ test("teacher final test layout keeps the editing surface compact", () => {
   assert.doesNotMatch(teacherHomeStylesSource, /\.teacher-final-test-task-list\s*\{[^}]*gap:\s*12px;/);
   assert.doesNotMatch(teacherHomeStylesSource, /\.teacher-final-test-preview\s*\{[^}]*padding:\s*14px;/);
 });
+
+test("export center exposes final test export controls with class filtering", () => {
+  assert.match(teacherHomePageSource, /<span>期末测试班级<\/span>/);
+  assert.match(teacherHomePageSource, /exportCenterFinalTestClassName/);
+  assert.match(teacherHomePageSource, /导出期末测试痕迹（ZIP 含 Excel）/);
+});
+
+test("teacher final test panel exposes a submissions toggle and homework-style roster grid", () => {
+  assert.match(teacherHomePageSource, /编辑内容/);
+  assert.match(teacherHomePageSource, /提交情况/);
+  assert.match(teacherHomePageSource, /全班名单（已交/);
+  assert.match(teacherHomePageSource, /交卷状态/);
+  assert.match(teacherHomePageSource, /当前步骤/);
+  assert.match(teacherHomePageSource, /finalTestSubmissionDisplayMode/);
+  assert.match(teacherHomePageSource, /finalTestSubmissionClasses/);
+  assert.match(teacherHomePageSource, /fetchAdminFinalTestSubmissions/);
+  assert.match(teacherHomePageSource, /teacher-homework-card-grid/);
+  assert.match(teacherHomePageSource, /teacher-homework-student-card/);
+  assert.doesNotMatch(teacherHomePageSource, /按班级查看全班名单与交卷进度/);
+  assert.doesNotMatch(teacherHomePageSource, />显示内容</);
+  assert.doesNotMatch(teacherHomePageSource, />查看班级</);
+  assert.doesNotMatch(teacherHomePageSource, /teacher-final-test-status-summary/);
+  assert.doesNotMatch(teacherHomePageSource, /应测学生/);
+  assert.doesNotMatch(teacherHomePageSource, /谁已提交/);
+  assert.doesNotMatch(teacherHomePageSource, /谁未提交/);
+});
