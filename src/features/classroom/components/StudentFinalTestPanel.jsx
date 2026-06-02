@@ -71,12 +71,114 @@ function normalizePostSubmitFlow(postSubmit = {}) {
   };
 }
 
+function resolveProcessFieldLabel(fieldKey = "") {
+  const safe = String(fieldKey || "").trim();
+  if (safe === "stage1.draftText") return "第一阶段作答框";
+  if (safe === "stage2.draftText") return "第二阶段协作草稿";
+  if (safe === "stage3.finalText") return "第三阶段最终定稿";
+  if (safe === "postSubmit.flow") return "提交后流程";
+  return safe || "未标记字段";
+}
+
+function normalizeProcessLog(events = []) {
+  return (Array.isArray(events) ? events : []).map((item) => ({
+    eventId: String(item?.eventId || ""),
+    type: String(item?.type || ""),
+    stage: String(item?.stage || ""),
+    fieldKey: String(item?.fieldKey || ""),
+    fieldLabel: String(item?.fieldLabel || resolveProcessFieldLabel(item?.fieldKey)),
+    actionLabel: String(item?.actionLabel || ""),
+    createdAt: String(item?.createdAt || ""),
+    beforeText: String(item?.beforeText || ""),
+    afterText: String(item?.afterText || ""),
+    beforeLength: Number.isFinite(Number(item?.beforeLength)) ? Number(item.beforeLength) : 0,
+    afterLength: Number.isFinite(Number(item?.afterLength)) ? Number(item.afterLength) : 0,
+    charDelta: Number.isFinite(Number(item?.charDelta)) ? Number(item.charDelta) : 0,
+    selectionStart: Number.isFinite(Number(item?.selectionStart)) ? Number(item.selectionStart) : -1,
+    selectionEnd: Number.isFinite(Number(item?.selectionEnd)) ? Number(item.selectionEnd) : -1,
+    cursorPosition: Number.isFinite(Number(item?.cursorPosition)) ? Number(item.cursorPosition) : -1,
+    inputType: String(item?.inputType || ""),
+    pastedText: String(item?.pastedText || ""),
+    pastedTextPreview: String(item?.pastedTextPreview || ""),
+    pastedTextLength: Number.isFinite(Number(item?.pastedTextLength)) ? Number(item.pastedTextLength) : 0,
+    insertedText: String(item?.insertedText || ""),
+    insertedTextPreview: String(item?.insertedTextPreview || ""),
+    insertedTextLength: Number.isFinite(Number(item?.insertedTextLength)) ? Number(item.insertedTextLength) : 0,
+    sourceRole: String(item?.sourceRole || ""),
+    sourceMessageId: String(item?.sourceMessageId || ""),
+    note: String(item?.note || ""),
+  }));
+}
+
 function createPostSubmitEvent(type, createdAt, note = "") {
   return {
     eventId: `post-submit-${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     type,
     createdAt,
     note,
+  };
+}
+
+function createProcessEvent(type, stage, fieldKey, extra = {}) {
+  const nowIso = String(extra.createdAt || new Date().toISOString());
+  const beforeText = String(extra.beforeText || "");
+  const afterText = String(extra.afterText || "");
+  const pastedText = String(extra.pastedText || "");
+  const insertedText = String(extra.insertedText || "");
+  return {
+    eventId: `process-${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    type,
+    stage,
+    fieldKey,
+    fieldLabel: resolveProcessFieldLabel(fieldKey),
+    actionLabel: String(extra.actionLabel || ""),
+    createdAt: nowIso,
+    beforeText,
+    afterText,
+    beforeLength: beforeText.length,
+    afterLength: afterText.length,
+    charDelta: afterText.length - beforeText.length,
+    selectionStart: Number.isFinite(Number(extra.selectionStart)) ? Number(extra.selectionStart) : -1,
+    selectionEnd: Number.isFinite(Number(extra.selectionEnd)) ? Number(extra.selectionEnd) : -1,
+    cursorPosition: Number.isFinite(Number(extra.cursorPosition)) ? Number(extra.cursorPosition) : -1,
+    inputType: String(extra.inputType || ""),
+    pastedText,
+    pastedTextPreview: String(extra.pastedTextPreview || pastedText.slice(0, 300)),
+    pastedTextLength: Number.isFinite(Number(extra.pastedTextLength))
+      ? Number(extra.pastedTextLength)
+      : pastedText.length,
+    insertedText,
+    insertedTextPreview: String(extra.insertedTextPreview || insertedText.slice(0, 300)),
+    insertedTextLength: Number.isFinite(Number(extra.insertedTextLength))
+      ? Number(extra.insertedTextLength)
+      : insertedText.length,
+    sourceRole: String(extra.sourceRole || ""),
+    sourceMessageId: String(extra.sourceMessageId || ""),
+    note: String(extra.note || ""),
+  };
+}
+
+function createTextareaInputMeta(event) {
+  const target = event?.target || {};
+  return {
+    selectionStart: target.selectionStart,
+    selectionEnd: target.selectionEnd,
+    cursorPosition: target.selectionStart,
+    inputType: event?.nativeEvent?.inputType || "",
+  };
+}
+
+function createClipboardProcessMeta(event) {
+  const text = String(event?.clipboardData?.getData("text/plain") || "");
+  const target = event?.target || {};
+  return {
+    pastedText: text,
+    pastedTextPreview: text.slice(0, 300),
+    pastedTextLength: text.length,
+    selectionStart: target.selectionStart,
+    selectionEnd: target.selectionEnd,
+    cursorPosition: target.selectionStart,
+    inputType: "paste",
   };
 }
 
@@ -168,6 +270,9 @@ function normalizeSessionForView(session, fallbackVariant) {
     : Array.isArray(normalized.riskLog)
       ? normalized.riskLog
       : [];
+  const processLog = Array.isArray(raw.processLog)
+    ? normalizeProcessLog(raw.processLog)
+    : normalizeProcessLog(normalized.processLog);
   const postSubmit =
     raw.postSubmit && typeof raw.postSubmit === "object"
       ? normalizePostSubmitFlow(raw.postSubmit)
@@ -180,11 +285,12 @@ function normalizeSessionForView(session, fallbackVariant) {
     stage2,
     stage3,
     postSubmit,
+    processLog,
     turnbackEvents,
     riskLog,
     // 让 payload 与顶层 stage 数据保持一致，避免下一轮 commitSession 经 shared normalizer
     // 时被滞后的 payload 覆盖。
-    payload: { stage1, stage2, stage3, postSubmit, turnbackEvents, riskLog },
+    payload: { stage1, stage2, stage3, postSubmit, processLog, turnbackEvents, riskLog },
   };
 }
 
@@ -303,9 +409,24 @@ function buildSessionFingerprint(session) {
     stage2: safeSession.stage2 || {},
     stage3: safeSession.stage3 || {},
     postSubmit: normalizePostSubmitFlow(safeSession.postSubmit),
+    processLog: normalizeProcessLog(safeSession.processLog),
     turnbackEvents: Array.isArray(safeSession.turnbackEvents) ? safeSession.turnbackEvents : [],
     riskLog: Array.isArray(safeSession.riskLog) ? safeSession.riskLog : [],
   });
+}
+
+function appendProcessEvents(session, events = []) {
+  const current = session && typeof session === "object" ? session : null;
+  if (!current) return current;
+  const nextEvents = Array.isArray(events) ? events.filter(Boolean) : [];
+  if (nextEvents.length === 0) return current;
+  return {
+    ...current,
+    processLog: [
+      ...(Array.isArray(current.processLog) ? current.processLog : []),
+      ...nextEvents,
+    ],
+  };
 }
 
 function buildRiskLoggedSession(session, type, extra = {}) {
@@ -1026,9 +1147,28 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   }
 
   // Stage 1 为手动保存模式：编辑只更新本地输入并标记“未保存”，不自动写入会话/服务端。
-  function handleStage1Edit(value) {
+  function handleStage1Edit(value, meta = {}) {
+    const current = sessionRef.current;
+    const previousValue = String(stage1Input || "");
     setStage1Input(value);
     setStage1Dirty(true);
+    if (!current || resolveFinalTestStageFromStatus(current.status) !== "stage1" || isSubmitted) {
+      return;
+    }
+    commitSession(
+      appendProcessEvents(current, [
+        createProcessEvent("text_edit", "stage1", "stage1.draftText", {
+          actionLabel: "编辑文本",
+          beforeText: previousValue,
+          afterText: value,
+          selectionStart: meta.selectionStart,
+          selectionEnd: meta.selectionEnd,
+          cursorPosition: meta.cursorPosition,
+          inputType: meta.inputType,
+        }),
+      ]),
+      { immediate: false },
+    );
   }
 
   // 手动保存：把当前编辑框内容写入会话并立即持久化，记录一次输入风险快照。
@@ -1039,13 +1179,23 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     }
     const value = String(stage1Input || "");
     const previousValue = String(current.stage1?.draftText || "");
-    const baseNextSession = {
-      ...current,
-      stage1: {
-        ...(current.stage1 || {}),
-        draftText: value,
+    const baseNextSession = appendProcessEvents(
+      {
+        ...current,
+        stage1: {
+          ...(current.stage1 || {}),
+          draftText: value,
+        },
       },
-    };
+      [
+        createProcessEvent("manual_save", "stage1", "stage1.draftText", {
+          actionLabel: "保存草稿",
+          beforeText: previousValue,
+          afterText: value,
+          inputType: nativeInputType,
+        }),
+      ],
+    );
     const nextSession = applyMutationRisk(baseNextSession, {
       stage: "stage1",
       fieldKey: "stage1.draftText",
@@ -1059,9 +1209,26 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   }
 
   // Stage 2 协作草稿为手动保存：编辑只更新本地输入并标记“未保存”，不自动写入会话/服务端。
-  function handleStage2Edit(value) {
+  function handleStage2Edit(value, meta = {}) {
+    const current = sessionRef.current;
+    const previousValue = String(stage2Input || "");
     setStage2Input(value);
     setStage2Dirty(true);
+    if (!current || current.status !== "stage2_active") return;
+    commitSession(
+      appendProcessEvents(current, [
+        createProcessEvent("text_edit", "stage2", "stage2.draftText", {
+          actionLabel: "编辑文本",
+          beforeText: previousValue,
+          afterText: value,
+          selectionStart: meta.selectionStart,
+          selectionEnd: meta.selectionEnd,
+          cursorPosition: meta.cursorPosition,
+          inputType: meta.inputType,
+        }),
+      ]),
+      { immediate: false },
+    );
   }
 
   // 手动保存：把当前编辑框内容写入会话并立即持久化，记录一次输入风险快照。
@@ -1070,13 +1237,23 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     if (!current || current.status !== "stage2_active") return current;
     const value = String(stage2Input || "");
     const previousValue = String(current.stage2?.draftText || "");
-    const baseNextSession = {
-      ...current,
-      stage2: {
-        ...(current.stage2 || {}),
-        draftText: value,
+    const baseNextSession = appendProcessEvents(
+      {
+        ...current,
+        stage2: {
+          ...(current.stage2 || {}),
+          draftText: value,
+        },
       },
-    };
+      [
+        createProcessEvent("manual_save", "stage2", "stage2.draftText", {
+          actionLabel: "保存草稿",
+          beforeText: previousValue,
+          afterText: value,
+          inputType: nativeInputType,
+        }),
+      ],
+    );
     const nextSession = applyMutationRisk(baseNextSession, {
       stage: "stage2",
       fieldKey: "stage2.draftText",
@@ -1089,9 +1266,26 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     return normalized;
   }
 
-  function handleStage3Edit(value) {
+  function handleStage3Edit(value, meta = {}) {
+    const current = sessionRef.current;
+    const previousValue = String(stage3Input || "");
     setStage3Input(value);
     setStage3Dirty(true);
+    if (!current || current.status !== "stage3_active") return;
+    commitSession(
+      appendProcessEvents(current, [
+        createProcessEvent("text_edit", "stage3", "stage3.finalText", {
+          actionLabel: "编辑文本",
+          beforeText: previousValue,
+          afterText: value,
+          selectionStart: meta.selectionStart,
+          selectionEnd: meta.selectionEnd,
+          cursorPosition: meta.cursorPosition,
+          inputType: meta.inputType,
+        }),
+      ]),
+      { immediate: false },
+    );
   }
 
   function saveStage3Draft(nativeInputType = "manual_save") {
@@ -1099,13 +1293,23 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     if (!current || current.status !== "stage3_active") return current;
     const value = String(stage3Input || "");
     const previousValue = String(current.stage3?.finalText || "");
-    const baseNextSession = {
-      ...current,
-      stage3: {
-        ...(current.stage3 || {}),
-        finalText: value,
+    const baseNextSession = appendProcessEvents(
+      {
+        ...current,
+        stage3: {
+          ...(current.stage3 || {}),
+          finalText: value,
+        },
       },
-    };
+      [
+        createProcessEvent("manual_save", "stage3", "stage3.finalText", {
+          actionLabel: "保存草稿",
+          beforeText: previousValue,
+          afterText: value,
+          inputType: nativeInputType,
+        }),
+      ],
+    );
     const nextSession = applyMutationRisk(baseNextSession, {
       stage: "stage3",
       fieldKey: "stage3.finalText",
@@ -1129,7 +1333,8 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     }
     const nowIso = new Date().toISOString();
     const nextSession = normalizeSessionForView(
-      {
+      appendProcessEvents(
+        {
         ...current,
         status: "stage2_active",
         stage1: {
@@ -1143,7 +1348,16 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
           draftText,
           submittedAt: "",
         },
-      },
+        },
+        [
+          createProcessEvent("stage_submit", "stage1", "stage1.draftText", {
+            actionLabel: "提交独立思考阶段",
+            beforeText: String(current.stage1?.draftText || ""),
+            afterText: draftText,
+            note: "学生确认锁定独立思考内容，进入 AI 协作阶段。",
+          }),
+        ],
+      ),
       variant,
     );
     localSessionVersionRef.current += 1;
@@ -1168,8 +1382,10 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     // 进入定稿前强制保存当前协作草稿（手动保存模式）。
     const draftText = String(stage2Input || "");
     const nowIso = new Date().toISOString();
+    const nextFinalText = String(current.stage3?.finalText || draftText || current.stage1?.draftText || "");
     const nextSession = normalizeSessionForView(
-      {
+      appendProcessEvents(
+        {
         ...current,
         status: "stage3_active",
         stage2: {
@@ -1179,9 +1395,25 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
         },
         stage3: {
           ...(current.stage3 || {}),
-          finalText: String(current.stage3?.finalText || draftText || current.stage1?.draftText || ""),
+          finalText: nextFinalText,
         },
-      },
+        },
+        [
+          createProcessEvent("stage_submit", "stage2", "stage2.draftText", {
+            actionLabel: "提交AI协作阶段",
+            beforeText: String(current.stage2?.draftText || ""),
+            afterText: draftText,
+            note: "学生确认结束 AI 协作，进入独立定稿阶段。",
+          }),
+          createProcessEvent("internal_transfer", "stage3", "stage3.finalText", {
+            actionLabel: "协作草稿带入定稿框",
+            beforeText: String(current.stage3?.finalText || ""),
+            afterText: nextFinalText,
+            insertedText: nextFinalText,
+            note: "进入独立定稿阶段时，平台把协作草稿带入最终定稿框，允许学生继续编辑。",
+          }),
+        ],
+      ),
       variant,
     );
     localSessionVersionRef.current += 1;
@@ -1199,10 +1431,27 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   }
 
   async function confirmFinalSubmit() {
-    saveStage3Draft();
     setSubmitting(true);
     setLoadError("");
     try {
+      const current = saveStage3Draft();
+      if (current) {
+        const latest = sessionRef.current || current;
+        const submittedSnapshot = normalizeSessionForView(
+          appendProcessEvents(latest, [
+            createProcessEvent("final_submit", "stage3", "stage3.finalText", {
+              actionLabel: "提交测试",
+              beforeText: String(latest.stage3?.finalText || stage3Input || ""),
+              afterText: String(stage3Input || latest.stage3?.finalText || ""),
+              note: "学生点击确认提交期末测试。",
+            }),
+          ]),
+          variant,
+        );
+        sessionRef.current = submittedSnapshot;
+        setSession(submittedSnapshot);
+        await updateClassroomFinalTestSession(submittedSnapshot);
+      }
       const resp = await submitClassroomFinalTestSession();
       syncExperimentTask(resp?.experimentTask);
       const normalized = normalizeSessionForView(
@@ -1251,10 +1500,24 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
             events: nextEvents,
           };
     const nextSession = normalizeSessionForView(
-      {
+      appendProcessEvents(
+        {
         ...current,
         postSubmit: nextPostSubmit,
-      },
+        },
+        [
+          createProcessEvent("post_submit_step", "submitted", "postSubmit.flow", {
+            actionLabel:
+              actionType === "task1_survey_completed"
+                ? "确认完成任务1问卷"
+                : "确认完成线下任务2",
+            note:
+              actionType === "task1_survey_completed"
+                ? "学生确认已完成任务 1 问卷，进入线下任务 2 页面。"
+                : "学生确认已完成线下任务 2，进入任务 2 问卷。",
+          }),
+        ],
+      ),
       variant,
     );
     setSubmitting(true);
@@ -1355,13 +1618,24 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       userMessage,
       assistantDraft,
     ];
-    const seededSession = {
+    const seededSession = appendProcessEvents(
+      {
       ...current,
       stage2: {
         ...(current.stage2 || {}),
         messages: baseMessages,
       },
-    };
+      },
+      [
+        createProcessEvent("ai_message_sent", "stage2", "stage2.draftText", {
+          actionLabel: "向AI发送消息",
+          insertedText: safeText,
+          sourceRole: "user",
+          sourceMessageId: userMessage.id,
+          note: "学生在 AI 协作阶段向 AI 发送提问或提示词。",
+        }),
+      ],
+    );
 
     setStreaming(true);
     setStreamingAssistantId(assistantId);
@@ -1475,10 +1749,23 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
 
     setStreaming(true);
     setStreamingAssistantId(safeAssId);
-    commitSession({
-      ...current,
-      stage2: { ...current.stage2, messages: resetMessages },
-    });
+    commitSession(
+      appendProcessEvents(
+        {
+          ...current,
+          stage2: { ...current.stage2, messages: resetMessages },
+        },
+        [
+          createProcessEvent("ai_regenerate", "stage2", "stage2.draftText", {
+            actionLabel: "重新生成AI回复",
+            insertedText: promptText,
+            sourceRole: "assistant",
+            sourceMessageId: safeAssId,
+            note: `基于学生问题重新生成：${promptText}`,
+          }),
+        ],
+      ),
+    );
 
     const history = [
       {
@@ -1553,7 +1840,19 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       return { ...m, feedback: nextFeedback };
     });
     if (!changed) return;
-    commitSession({ ...current, stage2: { ...(current.stage2 || {}), messages: nextMessages } });
+    commitSession(
+      appendProcessEvents(
+        { ...current, stage2: { ...(current.stage2 || {}), messages: nextMessages } },
+        [
+          createProcessEvent("ai_feedback", "stage2", "stage2.draftText", {
+            actionLabel: safeFeedback === "up" ? "点赞AI回复" : "点踩AI回复",
+            sourceRole: "assistant",
+            sourceMessageId: safeMessageId,
+            note: `学生${safeFeedback === "up" ? "点赞" : "点踩"}了这条 AI 回复。`,
+          }),
+        ],
+      ),
+    );
   }
 
   function handleInsertMessageToAnswer(messageId) {
@@ -1578,7 +1877,40 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       const updatedText = currentText.trim() ? `${currentText.trim()}\n${content}` : content;
       setStage2Input(updatedText);
       setStage2Dirty(true);
-      commitSession({
+      commitSession(
+        appendProcessEvents(
+          {
+            ...current,
+            stage2: {
+              ...(current.stage2 || {}),
+              transfers: [
+                ...(Array.isArray(current.stage2?.transfers) ? current.stage2.transfers : []),
+                transferEvent,
+              ],
+            },
+          },
+          [
+            createProcessEvent("internal_transfer", "stage2", "stage2.draftText", {
+              actionLabel: "AI内容写入作答区",
+              beforeText: currentText,
+              afterText: updatedText,
+              insertedText: content,
+              sourceRole: "assistant",
+              sourceMessageId: messageId,
+              note: "学生点击 AI 回复的写入按钮，把 AI 内容追加到当前作答区。",
+            }),
+          ],
+        ),
+      );
+      setNotice("已追加到左侧答题区，记得点保存。");
+      return;
+    }
+
+    // Stage 3 定稿仍为即时写入。
+    const currentText = String(current.stage3?.finalText || "");
+    const updatedText = currentText.trim() ? `${currentText.trim()}\n${content}` : content;
+    const nextSession = appendProcessEvents(
+      {
         ...current,
         stage2: {
           ...(current.stage2 || {}),
@@ -1587,67 +1919,98 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
             transferEvent,
           ],
         },
-      });
-      setNotice("已追加到左侧答题区，记得点保存。");
-      return;
-    }
-
-    // Stage 3 定稿仍为即时写入。
-    const currentText = String(current.stage3?.finalText || "");
-    const updatedText = currentText.trim() ? `${currentText.trim()}\n${content}` : content;
-    const nextSession = {
-      ...current,
-      stage2: {
-        ...(current.stage2 || {}),
-        transfers: [
-          ...(Array.isArray(current.stage2?.transfers) ? current.stage2.transfers : []),
-          transferEvent,
-        ],
+        stage3: {
+          ...(current.stage3 || {}),
+          finalText: updatedText,
+        },
       },
-      stage3: {
-        ...(current.stage3 || {}),
-        finalText: updatedText,
-      },
-    };
+      [
+        createProcessEvent("internal_transfer", "stage3", "stage3.finalText", {
+          actionLabel: "AI内容写入作答区",
+          beforeText: currentText,
+          afterText: updatedText,
+          insertedText: content,
+          sourceRole: "assistant",
+          sourceMessageId: messageId,
+          note: "学生点击 AI 回复的写入按钮，把 AI 内容追加到最终定稿区。",
+        }),
+      ],
+    );
     commitSession(nextSession);
     setNotice("已追加到左侧答题区，平台会保留内部转移记录。");
   }
 
   function handleStage1Paste(event) {
-    const text = String(event.clipboardData?.getData("text/plain") || "");
+    const pasteMeta = createClipboardProcessMeta(event);
+    const text = pasteMeta.pastedText;
     event.preventDefault();
-    logRiskEvent(
-      "paste_blocked",
-      {
+    const current = sessionRef.current;
+    if (current) {
+      const riskSession = buildRiskLoggedSession(current, "paste_blocked", {
         stage: "stage1",
+        fieldKey: "stage1.draftText",
         chars: text.length,
-      },
-      { immediate: false },
-    );
+      });
+      commitSession(
+        appendProcessEvents(riskSession, [
+          createProcessEvent("paste_blocked", "stage1", "stage1.draftText", {
+            actionLabel: "粘贴被拦截",
+            beforeText: String(stage1Input || ""),
+            afterText: String(stage1Input || ""),
+            ...pasteMeta,
+            note: "独立思考阶段禁止粘贴，平台已拦截本次外部粘贴。",
+          }),
+        ]),
+        { immediate: false },
+      );
+    }
     setNotice("独立思考阶段已禁止粘贴外部内容，请独立输入你的原始想法。");
   }
 
   function handleStage2Paste(event) {
-    const text = String(event.clipboardData?.getData("text/plain") || "");
-    logRiskEvent(
-      "paste_allowed",
-      {
+    const pasteMeta = createClipboardProcessMeta(event);
+    const text = pasteMeta.pastedText;
+    const current = sessionRef.current;
+    if (!current) return;
+    const riskSession = buildRiskLoggedSession(current, "paste_allowed", {
         stage: "stage2",
+        fieldKey: "stage2.draftText",
         chars: text.length,
-      },
+    });
+    commitSession(
+      appendProcessEvents(riskSession, [
+        createProcessEvent("paste_allowed", "stage2", "stage2.draftText", {
+          actionLabel: "粘贴被记录",
+          beforeText: String(stage2Input || ""),
+          afterText: String(stage2Input || ""),
+          ...pasteMeta,
+          note: "AI 协作阶段允许粘贴，但平台记录本次粘贴来源位置和内容预览。",
+        }),
+      ]),
       { immediate: false },
     );
   }
 
   function handleStage3Paste(event, fieldKey) {
-    const text = String(event.clipboardData?.getData("text/plain") || "");
-    logRiskEvent(
-      "paste_allowed",
-      {
+    const pasteMeta = createClipboardProcessMeta(event);
+    const text = pasteMeta.pastedText;
+    const current = sessionRef.current;
+    if (!current) return;
+    const riskSession = buildRiskLoggedSession(current, "paste_allowed", {
         stage: "stage3",
         fieldKey,
         chars: text.length,
-      },
+    });
+    commitSession(
+      appendProcessEvents(riskSession, [
+        createProcessEvent("paste_allowed", "stage3", fieldKey, {
+          actionLabel: "粘贴被记录",
+          beforeText: String(stage3Input || ""),
+          afterText: String(stage3Input || ""),
+          ...pasteMeta,
+          note: "独立定稿阶段发生粘贴，平台记录本次粘贴位置和内容预览。",
+        }),
+      ]),
       { immediate: false },
     );
     setNotice("系统已标记本次独立定稿阶段粘贴行为。若内容来自右侧 AI，对应内容会被单独记录。");
@@ -2003,16 +2366,17 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                     }
                     onChange={(event) => {
                       const nextValue = event.target.value;
+                      const meta = createTextareaInputMeta(event);
                       if (stage === "stage1") {
-                        handleStage1Edit(nextValue);
+                        handleStage1Edit(nextValue, meta);
                         return;
                       }
                       if (stage === "stage2") {
-                        handleStage2Edit(nextValue);
+                        handleStage2Edit(nextValue, meta);
                         return;
                       }
                       if (stage === "stage3") {
-                        handleStage3Edit(nextValue);
+                        handleStage3Edit(nextValue, meta);
                       }
                     }}
                     onPaste={(event) => {
@@ -2095,18 +2459,29 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                         onClick={() => {
                           const current = sessionRef.current;
                           if (!current) return;
-                          commitSession({
-                            ...current,
-                            stage2: {
-                              ...(current.stage2 || {}),
-                              promptCardClicks: [
-                                ...(Array.isArray(current.stage2?.promptCardClicks)
-                                  ? current.stage2.promptCardClicks
-                                  : []),
-                                { prompt, createdAt: new Date().toISOString() },
+                          commitSession(
+                            appendProcessEvents(
+                              {
+                                ...current,
+                                stage2: {
+                                  ...(current.stage2 || {}),
+                                  promptCardClicks: [
+                                    ...(Array.isArray(current.stage2?.promptCardClicks)
+                                      ? current.stage2.promptCardClicks
+                                      : []),
+                                    { prompt, createdAt: new Date().toISOString() },
+                                  ],
+                                },
+                              },
+                              [
+                                createProcessEvent("prompt_card_click", "stage2", "stage2.draftText", {
+                                  actionLabel: "点击快捷提问",
+                                  insertedText: prompt,
+                                  note: `学生点击快捷提问：${prompt}`,
+                                }),
                               ],
-                            },
-                          });
+                            ),
+                          );
                           void sendStage2Message(prompt);
                         }}
                       >

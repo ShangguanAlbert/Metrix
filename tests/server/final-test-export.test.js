@@ -112,6 +112,53 @@ test("buildFinalTestExportBundle emits chinese zip entries, workbook sheets, and
               ],
               submittedAt: "2026-06-01T08:19:00.000Z",
             },
+            processLog: [
+              {
+                eventId: "process-1",
+                type: "text_edit",
+                stage: "stage1",
+                fieldKey: "stage1.draftText",
+                fieldLabel: "第一阶段作答框",
+                createdAt: "2026-06-01T08:00:30.000Z",
+                actionLabel: "编辑文本",
+                beforeText: "",
+                afterText: "先把书包减重",
+                beforeLength: 0,
+                afterLength: 7,
+                charDelta: 7,
+                selectionStart: 0,
+                selectionEnd: 0,
+                cursorPosition: 7,
+                inputType: "insertText",
+              },
+              {
+                eventId: "process-2",
+                type: "paste_blocked",
+                stage: "stage1",
+                fieldKey: "stage1.draftText",
+                fieldLabel: "第一阶段作答框",
+                createdAt: "2026-06-01T08:01:00.000Z",
+                actionLabel: "粘贴被拦截",
+                pastedTextPreview: "外部复制内容",
+                pastedTextLength: 6,
+                selectionStart: 2,
+                selectionEnd: 4,
+                cursorPosition: 2,
+              },
+              {
+                eventId: "process-3",
+                type: "internal_transfer",
+                stage: "stage2",
+                fieldKey: "stage2.draftText",
+                fieldLabel: "第二阶段协作草稿",
+                createdAt: "2026-06-01T08:07:00.000Z",
+                actionLabel: "AI内容写入作答区",
+                sourceRole: "assistant",
+                sourceMessageId: "msg-ai-1",
+                insertedTextPreview: "可以增加减压肩带和雨天防水层。",
+                insertedTextLength: 15,
+              },
+            ],
             turnbackEvents: [
               {
                 eventId: "turnback-1",
@@ -214,12 +261,21 @@ test("buildFinalTestExportBundle emits chinese zip entries, workbook sheets, and
   assert.match(String(textEntry.content || ""), /五、第二阶段/);
   assert.match(String(textEntry.content || ""), /AI 对话记录/);
   assert.match(String(textEntry.content || ""), /误点进入下一阶段/);
+  assert.match(String(textEntry.content || ""), /十、全过程时间线/);
+  assert.match(String(textEntry.content || ""), /第一阶段作答框/);
+  assert.match(String(textEntry.content || ""), /粘贴被拦截/);
+  assert.match(String(textEntry.content || ""), /外部复制内容/);
+  assert.match(String(textEntry.content || ""), /AI内容写入作答区/);
 
   const jsonEntry = bundle.files.find((item) => item.name.endsWith("-明细.json"));
   assert.ok(jsonEntry);
   const detail = JSON.parse(String(jsonEntry.content || "{}"));
   assert.equal(detail.基本信息.姓名, "王乐怡");
   assert.equal(detail.第二阶段.AI对话记录[1].角色, "AI");
+  assert.equal(detail.全过程时间线.length, 3);
+  assert.equal(detail.全过程时间线[0].字段, "第一阶段作答框");
+  assert.equal(detail.全过程时间线[1].粘贴文本预览, "外部复制内容");
+  assert.equal(detail.全过程时间线[2].写入文本预览, "可以增加减压肩带和雨天防水层。");
   assert.equal(detail.风险汇总.风险分, 7);
   assert.match(JSON.stringify(detail), /第一阶段/);
   assert.doesNotMatch(JSON.stringify(detail), /"stage1"/);

@@ -93,6 +93,7 @@ export function createFinalTestSessionBase({
       task2SurveyEnteredAt: "",
       events: [],
     },
+    processLog: [],
     turnbackEvents: [],
     riskLog: [],
   };
@@ -114,6 +115,36 @@ function normalizeFinalTestPostSubmit(value = {}) {
         }))
       : [],
   };
+}
+
+function normalizeFinalTestProcessLog(events = []) {
+  return (Array.isArray(events) ? events : []).map((item) => ({
+    eventId: String(item?.eventId || "").trim(),
+    type: String(item?.type || "").trim(),
+    stage: String(item?.stage || "").trim(),
+    fieldKey: String(item?.fieldKey || "").trim(),
+    fieldLabel: String(item?.fieldLabel || "").trim(),
+    actionLabel: String(item?.actionLabel || "").trim(),
+    createdAt: String(item?.createdAt || "").trim(),
+    beforeText: String(item?.beforeText || ""),
+    afterText: String(item?.afterText || ""),
+    beforeLength: Number.isFinite(Number(item?.beforeLength)) ? Number(item.beforeLength) : 0,
+    afterLength: Number.isFinite(Number(item?.afterLength)) ? Number(item.afterLength) : 0,
+    charDelta: Number.isFinite(Number(item?.charDelta)) ? Number(item.charDelta) : 0,
+    selectionStart: Number.isFinite(Number(item?.selectionStart)) ? Number(item.selectionStart) : -1,
+    selectionEnd: Number.isFinite(Number(item?.selectionEnd)) ? Number(item.selectionEnd) : -1,
+    cursorPosition: Number.isFinite(Number(item?.cursorPosition)) ? Number(item.cursorPosition) : -1,
+    inputType: String(item?.inputType || "").trim(),
+    pastedText: String(item?.pastedText || ""),
+    pastedTextPreview: String(item?.pastedTextPreview || ""),
+    pastedTextLength: Number.isFinite(Number(item?.pastedTextLength)) ? Number(item.pastedTextLength) : 0,
+    insertedText: String(item?.insertedText || ""),
+    insertedTextPreview: String(item?.insertedTextPreview || ""),
+    insertedTextLength: Number.isFinite(Number(item?.insertedTextLength)) ? Number(item.insertedTextLength) : 0,
+    sourceRole: String(item?.sourceRole || "").trim(),
+    sourceMessageId: String(item?.sourceMessageId || "").trim(),
+    note: String(item?.note || "").trim(),
+  }));
 }
 
 export function lockExpiredSession(session, nowIso) {
@@ -224,6 +255,10 @@ export function applyFinalTestPatch(session, patch = {}) {
     next.riskLog = safePatch.riskLog;
     next.payload.riskLog = safePatch.riskLog;
   }
+  if (Array.isArray(safePatch.processLog)) {
+    next.processLog = normalizeFinalTestProcessLog(safePatch.processLog);
+    next.payload.processLog = next.processLog;
+  }
   if (safePatch.stage1 && typeof safePatch.stage1 === "object") {
     next.stage1 = safePatch.stage1;
     next.payload.stage1 = safePatch.stage1;
@@ -269,6 +304,9 @@ export function normalizeFinalTestSession(session) {
       payload.postSubmit && typeof payload.postSubmit === "object"
         ? payload.postSubmit
         : safe.postSubmit,
+    ),
+    processLog: normalizeFinalTestProcessLog(
+      Array.isArray(payload.processLog) ? payload.processLog : safe.processLog,
     ),
     turnbackEvents: Array.isArray(payload.turnbackEvents)
       ? payload.turnbackEvents

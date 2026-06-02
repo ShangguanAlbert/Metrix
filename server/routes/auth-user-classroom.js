@@ -1006,6 +1006,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         stage2: normalized.stage2,
         stage3: normalized.stage3,
         postSubmit: normalized.postSubmit,
+        processLog: normalized.processLog,
         turnbackEvents: normalized.turnbackEvents,
         riskLog: normalized.riskLog,
       },

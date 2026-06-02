@@ -117,6 +117,23 @@ function resolveRiskTypeLabel(value) {
   return safe || "未知风险事件";
 }
 
+function resolveProcessActionLabel(value) {
+  const safe = String(value || "").trim();
+  if (safe === "text_edit") return "编辑文本";
+  if (safe === "manual_save") return "保存草稿";
+  if (safe === "paste_blocked") return "粘贴被拦截";
+  if (safe === "paste_allowed") return "粘贴被记录";
+  if (safe === "internal_transfer") return "AI内容写入作答区";
+  if (safe === "stage_submit") return "阶段提交";
+  if (safe === "final_submit") return "最终提交";
+  if (safe === "post_submit_step") return "提交后流程确认";
+  if (safe === "prompt_card_click") return "点击快捷提问";
+  if (safe === "ai_message_sent") return "向AI发送消息";
+  if (safe === "ai_feedback") return "评价AI回复";
+  if (safe === "ai_regenerate") return "重新生成AI回复";
+  return safe || "未标记动作";
+}
+
 function resolvePostSubmitEventLabel(value) {
   const safe = String(value || "").trim();
   if (safe === "task1_survey_completed") return "确认完成任务 1 问卷";
@@ -198,6 +215,49 @@ function mapRiskEvents(events = [], formatDisplayTime) {
     窗口失焦后毫秒: Number(item?.blurAgoMs || 0),
     可见性状态: String(item?.visibilityState || "").trim(),
   }));
+}
+
+function mapProcessLogEvents(events = [], formatDisplayTime) {
+  return (Array.isArray(events) ? events : []).map((item, index) => {
+    const beforeLength = Number.isFinite(Number(item?.beforeLength))
+      ? Number(item.beforeLength)
+      : String(item?.beforeText || "").length;
+    const afterLength = Number.isFinite(Number(item?.afterLength))
+      ? Number(item.afterLength)
+      : String(item?.afterText || "").length;
+    return {
+      序号: index + 1,
+      事件ID: String(item?.eventId || "").trim(),
+      时间: formatMaybeTime(formatDisplayTime, item?.createdAt),
+      阶段: resolveStageLabel(item?.stage),
+      字段: String(item?.fieldLabel || "").trim() || resolveTargetFieldLabel(item?.fieldKey),
+      动作: String(item?.actionLabel || "").trim() || resolveProcessActionLabel(item?.type),
+      输入类型: String(item?.inputType || "").trim(),
+      光标位置: Number.isFinite(Number(item?.cursorPosition)) ? Number(item.cursorPosition) : -1,
+      选区开始: Number.isFinite(Number(item?.selectionStart)) ? Number(item.selectionStart) : -1,
+      选区结束: Number.isFinite(Number(item?.selectionEnd)) ? Number(item.selectionEnd) : -1,
+      修改前字数: beforeLength,
+      修改后字数: afterLength,
+      字数变化: Number.isFinite(Number(item?.charDelta))
+        ? Number(item.charDelta)
+        : afterLength - beforeLength,
+      修改前文本: String(item?.beforeText || ""),
+      修改后文本: String(item?.afterText || ""),
+      粘贴文本预览: String(item?.pastedTextPreview || item?.pastedText || ""),
+      粘贴全文: String(item?.pastedText || ""),
+      粘贴字数: Number.isFinite(Number(item?.pastedTextLength))
+        ? Number(item.pastedTextLength)
+        : String(item?.pastedText || "").length,
+      写入文本预览: String(item?.insertedTextPreview || item?.insertedText || ""),
+      写入全文: String(item?.insertedText || ""),
+      写入字数: Number.isFinite(Number(item?.insertedTextLength))
+        ? Number(item.insertedTextLength)
+        : String(item?.insertedText || "").length,
+      来源角色: resolveRoleLabel(item?.sourceRole),
+      来源消息ID: String(item?.sourceMessageId || "").trim(),
+      备注: String(item?.note || "").trim(),
+    };
+  });
 }
 
 function mapTurnbackEvents(events = [], formatDisplayTime) {
@@ -459,6 +519,38 @@ function buildStudentDetailText(record) {
       );
     });
   }
+  lines.push("");
+  lines.push("十、全过程时间线");
+  if (record.全过程时间线.length === 0) {
+    lines.push("  无");
+  } else {
+    record.全过程时间线.forEach((item) => {
+      lines.push(
+        `  ${item.序号}. ${item.时间 || "-"}｜${item.阶段}｜${item.字段}｜${item.动作}`,
+      );
+      lines.push(
+        `    输入类型：${item.输入类型 || "-"}｜光标：${item.光标位置}｜选区：${item.选区开始}-${item.选区结束}｜字数：${item.修改前字数} -> ${item.修改后字数}（${item.字数变化 >= 0 ? "+" : ""}${item.字数变化}）`,
+      );
+      if (item.粘贴文本预览) {
+        lines.push(`    粘贴文本预览：${item.粘贴文本预览}`);
+      }
+      if (item.写入文本预览) {
+        lines.push(`    写入文本预览：${item.写入文本预览}`);
+      }
+      if (item.来源消息ID) {
+        lines.push(`    来源：${item.来源角色 || "-"} 消息 ${item.来源消息ID}`);
+      }
+      if (item.备注) {
+        lines.push(`    备注：${item.备注}`);
+      }
+      if (item.修改前文本 || item.修改后文本) {
+        lines.push("    修改前文本：");
+        appendIndentedBlock(lines, item.修改前文本, 6);
+        lines.push("    修改后文本：");
+        appendIndentedBlock(lines, item.修改后文本, 6);
+      }
+    });
+  }
   return lines.join("\n");
 }
 
@@ -555,6 +647,7 @@ export function buildFinalTestExportBundle(payload = {}, deps = {}) {
     const restartEvents = turnbackEvents.filter((item) => String(item?.kind || "").trim() === "restart");
     const turnbackOnlyEvents = turnbackEvents.filter((item) => String(item?.kind || "").trim() !== "restart");
     const riskLog = Array.isArray(session?.riskLog) ? session.riskLog : [];
+    const processLog = Array.isArray(session?.processLog) ? session.processLog : [];
     const stage2PasteCount = riskLog.filter(
       (item) => String(item?.stage || "").trim() === "stage2" && String(item?.type || "").trim() === "paste_allowed",
     ).length;
@@ -699,6 +792,7 @@ export function buildFinalTestExportBundle(payload = {}, deps = {}) {
         窗口失焦次数: Number(riskSummary?.windowBlurCount || 0),
       },
       全部风险日志: mapRiskEvents(riskLog, formatDisplayTime),
+      全过程时间线: mapProcessLogEvents(processLog, formatDisplayTime),
     };
 
     const studentBaseName = sanitizeStudentExportSegment(
