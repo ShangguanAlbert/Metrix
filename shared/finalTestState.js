@@ -1,4 +1,4 @@
-const FINAL_TEST_DURATION_MINUTES = 20;
+const FINAL_TEST_DURATION_MINUTES = 15;
 
 function createLocalEventId(prefix = "evt") {
   const nowPart = Date.now().toString(36);
@@ -86,8 +86,33 @@ export function createFinalTestSessionBase({
       riskEvents: [],
       submittedAt: "",
     },
+    postSubmit: {
+      task1SurveyCompletedAt: "",
+      task2PageEnteredAt: "",
+      task2ConfirmedAt: "",
+      task2SurveyEnteredAt: "",
+      events: [],
+    },
     turnbackEvents: [],
     riskLog: [],
+  };
+}
+
+function normalizeFinalTestPostSubmit(value = {}) {
+  const safe = value && typeof value === "object" ? value : {};
+  return {
+    task1SurveyCompletedAt: String(safe.task1SurveyCompletedAt || "").trim(),
+    task2PageEnteredAt: String(safe.task2PageEnteredAt || "").trim(),
+    task2ConfirmedAt: String(safe.task2ConfirmedAt || "").trim(),
+    task2SurveyEnteredAt: String(safe.task2SurveyEnteredAt || "").trim(),
+    events: Array.isArray(safe.events)
+      ? safe.events.map((item) => ({
+          eventId: String(item?.eventId || "").trim(),
+          type: String(item?.type || "").trim(),
+          createdAt: String(item?.createdAt || "").trim(),
+          note: String(item?.note || "").trim(),
+        }))
+      : [],
   };
 }
 
@@ -211,6 +236,10 @@ export function applyFinalTestPatch(session, patch = {}) {
     next.stage3 = safePatch.stage3;
     next.payload.stage3 = safePatch.stage3;
   }
+  if (safePatch.postSubmit && typeof safePatch.postSubmit === "object") {
+    next.postSubmit = normalizeFinalTestPostSubmit(safePatch.postSubmit);
+    next.payload.postSubmit = next.postSubmit;
+  }
   return next;
 }
 
@@ -236,6 +265,11 @@ export function normalizeFinalTestSession(session) {
     stage1: payload.stage1 && typeof payload.stage1 === "object" ? payload.stage1 : safe.stage1 || {},
     stage2: payload.stage2 && typeof payload.stage2 === "object" ? payload.stage2 : safe.stage2 || {},
     stage3: payload.stage3 && typeof payload.stage3 === "object" ? payload.stage3 : safe.stage3 || {},
+    postSubmit: normalizeFinalTestPostSubmit(
+      payload.postSubmit && typeof payload.postSubmit === "object"
+        ? payload.postSubmit
+        : safe.postSubmit,
+    ),
     turnbackEvents: Array.isArray(payload.turnbackEvents)
       ? payload.turnbackEvents
       : Array.isArray(safe.turnbackEvents)

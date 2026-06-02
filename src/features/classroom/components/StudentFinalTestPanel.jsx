@@ -4,7 +4,6 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
-  ExternalLink,
   RotateCcw,
 } from "lucide-react";
 import MessageList from "../../../components/MessageList.jsx";
@@ -40,7 +39,8 @@ const STAGE2_PROMPTS = [
   "如果放到校园里，可以怎么改",
 ];
 
-const SURVEY_URL = "https://wj.qq.com/s2/26868195/6777/";
+const TASK1_SURVEY_URL = "https://wj.qq.com/s2/26868195/6777/";
+const TASK2_SURVEY_URL = "https://wj.qq.com/s2/26868239/d762/";
 const FINAL_TEST_START_CONFIRM_MESSAGE =
   "期末测试会记录所有时间和操作，请各位同学诚信测试。确认参加后将立即开始考试并进入计时模式。";
 
@@ -51,6 +51,40 @@ function buildStage2DraftText(stage2 = {}) {
 
 function buildStage3FinalText(stage3 = {}) {
   return String(stage3?.finalText || "").trim();
+}
+
+function normalizePostSubmitFlow(postSubmit = {}) {
+  const safe = postSubmit && typeof postSubmit === "object" ? postSubmit : {};
+  return {
+    task1SurveyCompletedAt: String(safe.task1SurveyCompletedAt || ""),
+    task2PageEnteredAt: String(safe.task2PageEnteredAt || ""),
+    task2ConfirmedAt: String(safe.task2ConfirmedAt || ""),
+    task2SurveyEnteredAt: String(safe.task2SurveyEnteredAt || ""),
+    events: Array.isArray(safe.events)
+      ? safe.events.map((item) => ({
+          eventId: String(item?.eventId || ""),
+          type: String(item?.type || ""),
+          createdAt: String(item?.createdAt || ""),
+          note: String(item?.note || ""),
+        }))
+      : [],
+  };
+}
+
+function createPostSubmitEvent(type, createdAt, note = "") {
+  return {
+    eventId: `post-submit-${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    type,
+    createdAt,
+    note,
+  };
+}
+
+function resolvePostSubmitStep(session) {
+  const flow = normalizePostSubmitFlow(session?.postSubmit);
+  if (!flow.task1SurveyCompletedAt) return "task1-survey";
+  if (!flow.task2ConfirmedAt) return "task2-offline";
+  return "task2-survey";
 }
 
 function formatFinalTestCountdown(remainingMs = 0) {
@@ -134,6 +168,10 @@ function normalizeSessionForView(session, fallbackVariant) {
     : Array.isArray(normalized.riskLog)
       ? normalized.riskLog
       : [];
+  const postSubmit =
+    raw.postSubmit && typeof raw.postSubmit === "object"
+      ? normalizePostSubmitFlow(raw.postSubmit)
+      : normalizePostSubmitFlow(normalized.postSubmit);
 
   return {
     ...normalized,
@@ -141,11 +179,12 @@ function normalizeSessionForView(session, fallbackVariant) {
     stage1,
     stage2,
     stage3,
+    postSubmit,
     turnbackEvents,
     riskLog,
     // 让 payload 与顶层 stage 数据保持一致，避免下一轮 commitSession 经 shared normalizer
     // 时被滞后的 payload 覆盖。
-    payload: { stage1, stage2, stage3, turnbackEvents, riskLog },
+    payload: { stage1, stage2, stage3, postSubmit, turnbackEvents, riskLog },
   };
 }
 
@@ -263,6 +302,7 @@ function buildSessionFingerprint(session) {
     stage1: safeSession.stage1 || {},
     stage2: safeSession.stage2 || {},
     stage3: safeSession.stage3 || {},
+    postSubmit: normalizePostSubmitFlow(safeSession.postSubmit),
     turnbackEvents: Array.isArray(safeSession.turnbackEvents) ? safeSession.turnbackEvents : [],
     riskLog: Array.isArray(safeSession.riskLog) ? safeSession.riskLog : [],
   });
@@ -1181,6 +1221,70 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     }
   }
 
+  async function recordPostSubmitStep(actionType) {
+    const current = sessionRef.current;
+    if (!current || current.status !== "submitted") return;
+    const nowIso = new Date().toISOString();
+    const currentFlow = normalizePostSubmitFlow(current.postSubmit);
+    const nextEvents = [
+      ...(Array.isArray(currentFlow.events) ? currentFlow.events : []),
+      createPostSubmitEvent(
+        actionType,
+        nowIso,
+        actionType === "task1_survey_completed"
+          ? "学生确认已完成任务 1 问卷，进入线下任务 2 页面。"
+          : "学生确认已完成线下任务 2，进入任务 2 问卷。",
+      ),
+    ];
+    const nextPostSubmit =
+      actionType === "task1_survey_completed"
+        ? {
+            ...currentFlow,
+            task1SurveyCompletedAt: currentFlow.task1SurveyCompletedAt || nowIso,
+            task2PageEnteredAt: currentFlow.task2PageEnteredAt || nowIso,
+            events: nextEvents,
+          }
+        : {
+            ...currentFlow,
+            task2ConfirmedAt: currentFlow.task2ConfirmedAt || nowIso,
+            task2SurveyEnteredAt: currentFlow.task2SurveyEnteredAt || nowIso,
+            events: nextEvents,
+          };
+    const nextSession = normalizeSessionForView(
+      {
+        ...current,
+        postSubmit: nextPostSubmit,
+      },
+      variant,
+    );
+    setSubmitting(true);
+    setLoadError("");
+    try {
+      localSessionVersionRef.current += 1;
+      sessionRef.current = nextSession;
+      setSession(nextSession);
+      const resp = await updateClassroomFinalTestSession(nextSession);
+      syncExperimentTask(resp?.experimentTask);
+      const normalized = normalizeSessionForView(
+        resp?.session,
+        resp?.experimentTask?.variant || variant,
+      );
+      sessionRef.current = normalized;
+      setSession(normalized);
+      setNotice(
+        actionType === "task1_survey_completed"
+          ? "已进入任务 2 页面。"
+          : "已进入任务 2 问卷。",
+      );
+    } catch (error) {
+      setLoadError(error?.message || "保存任务进度失败。");
+      sessionRef.current = current;
+      setSession(current);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   function requestStage1Submit() {
     openConfirmDialog(
       "提交独立思考阶段",
@@ -1205,6 +1309,24 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       "确认提交当前最终方案吗？提交后将进入只读状态，不能继续编辑。",
       confirmFinalSubmit,
       "确认提交",
+    );
+  }
+
+  function requestEnterTask2() {
+    openConfirmDialog(
+      "进入任务 2",
+      "请确认你已经完成任务 1 的任务感受问卷。确认后将进入线下任务 2 页面，平台会记录这个时间。",
+      () => recordPostSubmitStep("task1_survey_completed"),
+      "我已完成任务 1 问卷，进入任务 2",
+    );
+  }
+
+  function requestEnterTask2Survey() {
+    openConfirmDialog(
+      "进入任务 2 问卷",
+      "请确认你已经在线下完成任务 2。确认后将进入任务 2 问卷，平台会记录这个时间。",
+      () => recordPostSubmitStep("task2_confirmed"),
+      "确认已完成线下任务 2，进入任务 2 问卷",
     );
   }
 
@@ -1545,6 +1667,15 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
             mode: "platform",
           },
         ];
+  const task2OfflineTask =
+    displayedTasks.find((task) => task.mode === "offline") ||
+    displayedTasks[1] ||
+    {
+      title: "任务 2：创新任务",
+      description: finalTestContent.task2OfflineText,
+      mode: "offline",
+    };
+  const postSubmitStep = isSubmitted ? resolvePostSubmitStep(session) : "";
   const finalTestTitle = "期末测试";
   const currentStageTitle =
     stage === "stage1"
@@ -2026,35 +2157,109 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
                 <>
                   <StageBadge active={false} muted index="1" name="AI 自由使用阶段" />
                   <StageBadge active={false} muted index="2" name="独立定稿阶段" />
-                  <StageBadge active index="3" name="任务感受" />
+                  <StageBadge
+                    active={postSubmitStep === "task1-survey"}
+                    muted={postSubmitStep !== "task1-survey"}
+                    index="3"
+                    name="任务 1 感受"
+                  />
+                  <StageBadge
+                    active={postSubmitStep === "task2-offline"}
+                    muted={postSubmitStep !== "task2-offline"}
+                    index="4"
+                    name="任务 2"
+                  />
+                  <StageBadge
+                    active={postSubmitStep === "task2-survey"}
+                    muted={postSubmitStep !== "task2-survey"}
+                    index="5"
+                    name="任务 2 感受"
+                  />
                 </>
               ) : (
                 <>
                   <StageBadge active={false} muted index="1" name="独立思考阶段" />
                   <StageBadge active={false} muted index="2" name="AI 协作阶段" />
                   <StageBadge active={false} muted index="3" name="独立定稿阶段" />
-                  <StageBadge active index="4" name="任务感受" />
+                  <StageBadge
+                    active={postSubmitStep === "task1-survey"}
+                    muted={postSubmitStep !== "task1-survey"}
+                    index="4"
+                    name="任务 1 感受"
+                  />
+                  <StageBadge
+                    active={postSubmitStep === "task2-offline"}
+                    muted={postSubmitStep !== "task2-offline"}
+                    index="5"
+                    name="任务 2"
+                  />
+                  <StageBadge
+                    active={postSubmitStep === "task2-survey"}
+                    muted={postSubmitStep !== "task2-survey"}
+                    index="6"
+                    name="任务 2 感受"
+                  />
                 </>
               )}
             </div>
-            <div className="final-test-survey-intro">
-              <p>测试已完成，感谢参与！请在下方填写任务感受问卷，分享你在本次测试中的体验。</p>
-              <a
-                href={SURVEY_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="final-test-ghost-btn"
-              >
-                <ExternalLink size={14} />
-                <span>在新标签页打开问卷</span>
-              </a>
-            </div>
-            <iframe
-              src={SURVEY_URL}
-              title="任务感受问卷"
-              className="final-test-survey-iframe"
-              sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation"
-            />
+            {postSubmitStep === "task1-survey" ? (
+              <>
+                <div className="final-test-survey-intro">
+                  <p>任务 1 平台作答已完成。请先填写任务 1 的任务感受问卷，填写完成后点击下方按钮进入任务 2。</p>
+                  <button
+                    type="button"
+                    className="final-test-secondary-btn"
+                    onClick={requestEnterTask2}
+                    disabled={submitting}
+                  >
+                    {submitting ? "正在记录…" : "我已完成任务 1 问卷，进入任务 2"}
+                  </button>
+                </div>
+                <iframe
+                  src={TASK1_SURVEY_URL}
+                  title="任务 1 感受问卷"
+                  className="final-test-survey-iframe"
+                  sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation"
+                />
+              </>
+            ) : null}
+            {postSubmitStep === "task2-offline" ? (
+              <section className="final-test-task2-offline-panel">
+                <div className="final-test-task2-offline-copy">
+                  <span>线下完成</span>
+                  <h3>{String(task2OfflineTask.title || "任务 2：创新任务")}</h3>
+                  <p>
+                    {String(
+                      task2OfflineTask.description ||
+                        finalTestContent.task2OfflineText ||
+                        "任务 2 在线下独立完成。",
+                    )}
+                  </p>
+                </div>
+                <div className="final-test-task2-empty-space" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="final-test-secondary-btn final-test-task2-confirm-btn"
+                  onClick={requestEnterTask2Survey}
+                  disabled={submitting}
+                >
+                  {submitting ? "正在记录…" : "确认已完成线下任务 2，进入任务 2 问卷"}
+                </button>
+              </section>
+            ) : null}
+            {postSubmitStep === "task2-survey" ? (
+              <>
+                <div className="final-test-survey-intro">
+                  <p>任务 2 已确认完成。请在下方填写任务 2 的任务感受问卷。</p>
+                </div>
+                <iframe
+                  src={TASK2_SURVEY_URL}
+                  title="任务 2 感受问卷"
+                  className="final-test-survey-iframe"
+                  sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation"
+                />
+              </>
+            ) : null}
           </div>
         </section>
       ) : null}

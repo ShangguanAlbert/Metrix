@@ -117,6 +117,13 @@ function resolveRiskTypeLabel(value) {
   return safe || "未知风险事件";
 }
 
+function resolvePostSubmitEventLabel(value) {
+  const safe = String(value || "").trim();
+  if (safe === "task1_survey_completed") return "确认完成任务 1 问卷";
+  if (safe === "task2_confirmed") return "确认完成线下任务 2";
+  return safe || "未知提交后事件";
+}
+
 function createEmptySession(studentUserId, className, variant) {
   return normalizeFinalTestSession({
     ...createFinalTestSessionBase({
@@ -139,6 +146,15 @@ function mapPromptEvents(events = [], formatDisplayTime) {
     序号: index + 1,
     提示词: String(item?.prompt || "").trim(),
     时间: formatMaybeTime(formatDisplayTime, item?.createdAt),
+  }));
+}
+
+function mapPostSubmitEvents(events = [], formatDisplayTime) {
+  return (Array.isArray(events) ? events : []).map((item, index) => ({
+    序号: index + 1,
+    事件: resolvePostSubmitEventLabel(item?.type),
+    时间: formatMaybeTime(formatDisplayTime, item?.createdAt),
+    备注: String(item?.note || "").trim(),
   }));
 }
 
@@ -242,6 +258,10 @@ function buildSummaryFieldGuideRows() {
     ["截止时间", "系统计算出的测试截止时间。"],
     ["锁定时间", "系统锁定作答的时间。"],
     ["提交时间", "学生最终提交的时间。"],
+    ["任务1问卷确认时间", "学生在平台内确认已完成任务 1 问卷的时间。"],
+    ["任务2页面进入时间", "学生进入线下任务 2 说明页的时间。"],
+    ["任务2完成确认时间", "学生确认已在线下完成任务 2 的时间。"],
+    ["任务2问卷进入时间", "学生进入任务 2 问卷页的时间。"],
     ["第一阶段字数", "第一阶段作答文本字数。"],
     ["第二阶段草稿字数", "第二阶段协作草稿字数。"],
     ["最终定稿字数", "第三阶段最终定稿字数。"],
@@ -383,7 +403,23 @@ function buildStudentDetailText(record) {
     });
   }
   lines.push("");
-  lines.push("七、回退与重新开始");
+  lines.push("七、提交后流程");
+  lines.push(`任务1问卷确认时间：${record.提交后流程.任务1问卷确认时间 || "-"}`);
+  lines.push(`任务2页面进入时间：${record.提交后流程.任务2页面进入时间 || "-"}`);
+  lines.push(`任务2完成确认时间：${record.提交后流程.任务2完成确认时间 || "-"}`);
+  lines.push(`任务2问卷进入时间：${record.提交后流程.任务2问卷进入时间 || "-"}`);
+  lines.push("流程事件：");
+  if (record.提交后流程.流程事件.length === 0) {
+    lines.push("  无");
+  } else {
+    record.提交后流程.流程事件.forEach((item) => {
+      lines.push(
+        `  ${item.序号}. ${item.事件}｜${item.时间 || "-"}｜备注：${item.备注 || "-"}`,
+      );
+    });
+  }
+  lines.push("");
+  lines.push("八、回退与重新开始");
   lines.push("回退记录：");
   if (record.回退与重新开始.回退记录.length === 0) {
     lines.push("  无");
@@ -405,7 +441,7 @@ function buildStudentDetailText(record) {
     });
   }
   lines.push("");
-  lines.push("八、风险汇总");
+  lines.push("九、风险汇总");
   Object.entries(record.风险汇总).forEach(([label, value]) => {
     if (Array.isArray(value)) {
       lines.push(`${label}：${value.length > 0 ? value.join("、") : "无"}`);
@@ -501,6 +537,10 @@ export function buildFinalTestExportBundle(payload = {}, deps = {}) {
     const stage1Text = String(session?.stage1?.draftText || "").trim();
     const stage2Text = String(session?.stage2?.draftText || "").trim();
     const stage3Text = String(session?.stage3?.finalText || "").trim();
+    const postSubmit =
+      session?.postSubmit && typeof session.postSubmit === "object"
+        ? session.postSubmit
+        : {};
     const stage2Messages = Array.isArray(session?.stage2?.messages) ? session.stage2.messages : [];
     const userMessageCount = stage2Messages.filter((item) => item?.role === "user").length;
     const assistantMessageCount = stage2Messages.filter((item) => item?.role === "assistant").length;
@@ -539,6 +579,10 @@ export function buildFinalTestExportBundle(payload = {}, deps = {}) {
       截止时间: formatMaybeTime(formatDisplayTime, session?.deadlineAt),
       锁定时间: formatMaybeTime(formatDisplayTime, session?.lockedAt),
       提交时间: formatMaybeTime(formatDisplayTime, session?.submittedAt),
+      任务1问卷确认时间: formatMaybeTime(formatDisplayTime, postSubmit.task1SurveyCompletedAt),
+      任务2页面进入时间: formatMaybeTime(formatDisplayTime, postSubmit.task2PageEnteredAt),
+      任务2完成确认时间: formatMaybeTime(formatDisplayTime, postSubmit.task2ConfirmedAt),
+      任务2问卷进入时间: formatMaybeTime(formatDisplayTime, postSubmit.task2SurveyEnteredAt),
       第一阶段字数: countTextLength(stage1Text),
       第二阶段草稿字数: countTextLength(stage2Text),
       最终定稿字数: countTextLength(stage3Text),
@@ -577,6 +621,10 @@ export function buildFinalTestExportBundle(payload = {}, deps = {}) {
         截止时间: formatMaybeTime(formatDisplayTime, session?.deadlineAt),
         锁定时间: formatMaybeTime(formatDisplayTime, session?.lockedAt),
         提交时间: formatMaybeTime(formatDisplayTime, session?.submittedAt),
+        任务1问卷确认时间: formatMaybeTime(formatDisplayTime, postSubmit.task1SurveyCompletedAt),
+        任务2页面进入时间: formatMaybeTime(formatDisplayTime, postSubmit.task2PageEnteredAt),
+        任务2完成确认时间: formatMaybeTime(formatDisplayTime, postSubmit.task2ConfirmedAt),
+        任务2问卷进入时间: formatMaybeTime(formatDisplayTime, postSubmit.task2SurveyEnteredAt),
         时长分钟: Number(session?.durationMinutes || 20),
       },
       任务内容: {
@@ -628,6 +676,13 @@ export function buildFinalTestExportBundle(payload = {}, deps = {}) {
         提交时间: formatMaybeTime(formatDisplayTime, session?.stage3?.submittedAt),
         粘贴记录: mapRiskEvents(session?.stage3?.pasteEvents || [], formatDisplayTime),
         风险事件: mapRiskEvents(session?.stage3?.riskEvents || [], formatDisplayTime),
+      },
+      提交后流程: {
+        任务1问卷确认时间: formatMaybeTime(formatDisplayTime, postSubmit.task1SurveyCompletedAt),
+        任务2页面进入时间: formatMaybeTime(formatDisplayTime, postSubmit.task2PageEnteredAt),
+        任务2完成确认时间: formatMaybeTime(formatDisplayTime, postSubmit.task2ConfirmedAt),
+        任务2问卷进入时间: formatMaybeTime(formatDisplayTime, postSubmit.task2SurveyEnteredAt),
+        流程事件: mapPostSubmitEvents(postSubmit.events || [], formatDisplayTime),
       },
       回退与重新开始: {
         回退记录: mapTurnbackEvents(turnbackEvents, formatDisplayTime),

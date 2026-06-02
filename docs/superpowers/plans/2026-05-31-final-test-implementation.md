@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a student-side `期末测试` workspace with class-based 810/811 flows, a 20-minute timed session, session recovery, Stage 1/Stage 3 paste controls, risk logging, and Stage 2-to-Stage 3 internal transfer.
+**Goal:** Add a student-side `期末测试` workspace with class-based 810/811 flows, a 15-minute timed session, session recovery, Stage 1/Stage 3 paste controls, risk logging, and Stage 2-to-Stage 3 internal transfer.
 
 **Architecture:** Keep the student shell in `ModeSelectionPage` and add a dedicated `final-test` panel there. Persist final-test session state through new classroom APIs and a dedicated session document, but reuse the existing `/api/chat/stream` endpoint for Stage 2 AI generation so the test UI stays custom while the model runtime stays shared.
 
@@ -41,7 +41,7 @@ test("classroom task settings expose final test variant and duration by class", 
 
   assert.equal(res.payload.experimentTask.enabled, true);
   assert.equal(res.payload.experimentTask.variant, "three-stage-guided");
-  assert.equal(res.payload.experimentTask.durationMinutes, 20);
+  assert.equal(res.payload.experimentTask.durationMinutes, 15);
 });
 ```
 
@@ -89,7 +89,7 @@ Expected: PASS for the settings payload assertion.
 - [ ] **Step 1: Write the failing API lifecycle tests**
 
 ```js
-test("starting a final test session creates a 20-minute timed session", async () => {
+test("starting a final test session creates a 15-minute timed session", async () => {
   const app = createAppDouble();
   const deps = createFinalTestDeps();
   registerAuthUserClassroomRoutes(app, deps);
@@ -109,7 +109,7 @@ test("starting a final test session creates a 20-minute timed session", async ()
   );
 
   assert.equal(res.payload.session.status, "stage1_draft");
-  assert.equal(res.payload.session.durationMinutes, 20);
+  assert.equal(res.payload.session.durationMinutes, 15);
   assert.ok(res.payload.session.deadlineAt);
 });
 ```
@@ -161,10 +161,10 @@ test("lockExpiredSession moves an active session into time_expired_locked", () =
   const session = {
     status: "stage3_active",
     startedAt: "2026-05-31T10:00:00.000Z",
-    deadlineAt: "2026-05-31T10:20:00.000Z",
+    deadlineAt: "2026-05-31T10:15:00.000Z",
   };
 
-  const next = lockExpiredSession(session, "2026-05-31T10:20:01.000Z");
+  const next = lockExpiredSession(session, "2026-05-31T10:15:01.000Z");
 
   assert.equal(next.status, "time_expired_locked");
   assert.equal(next.timeExpired, true);
@@ -328,7 +328,7 @@ Expected: PASS.
 Checklist:
 - `期末测试` left-nav entry exists
 - 810/811 auto routing exists
-- 20-minute timer exists
+- 15-minute timer exists
 - Stage 1 paste is blocked
 - Stage 3 paste is allowed and logged
 - internal Stage 2 transfer exists

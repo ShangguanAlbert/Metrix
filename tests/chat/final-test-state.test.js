@@ -24,14 +24,14 @@ test("lockExpiredSession switches an overdue active session into time_expired_lo
   const next = lockExpiredSession(
     {
       status: "stage3_active",
-      deadlineAt: "2026-05-31T10:20:00.000Z",
+      deadlineAt: "2026-05-31T10:15:00.000Z",
     },
-    "2026-05-31T10:20:01.000Z",
+    "2026-05-31T10:15:01.000Z",
   );
 
   assert.equal(next.status, "time_expired_locked");
   assert.equal(next.timeExpired, true);
-  assert.equal(next.lockedAt, "2026-05-31T10:20:01.000Z");
+  assert.equal(next.lockedAt, "2026-05-31T10:15:01.000Z");
 });
 
 test("buildInternalTransferEvent records the source text and target field", () => {

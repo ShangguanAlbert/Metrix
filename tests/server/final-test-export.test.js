@@ -30,11 +30,11 @@ test("buildFinalTestExportBundle emits chinese zip entries, workbook sheets, and
           variant: "three-stage-guided",
           status: "submitted",
           startedAt: "2026-06-01T08:00:00.000Z",
-          deadlineAt: "2026-06-01T08:20:00.000Z",
+          deadlineAt: "2026-06-01T08:15:00.000Z",
           lockedAt: "2026-06-01T08:18:00.000Z",
           submittedAt: "2026-06-01T08:19:00.000Z",
           timeExpired: false,
-          durationMinutes: 20,
+          durationMinutes: 15,
           payload: {
             stage1: {
               draftText: "先把书包减重，再增加夜间反光条。",

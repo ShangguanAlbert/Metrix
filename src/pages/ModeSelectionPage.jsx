@@ -383,7 +383,7 @@ export default function ModeSelectionPage() {
     experimentTask: {
       enabled: false,
       variant: "disabled",
-      durationMinutes: 20,
+      durationMinutes: 15,
       entryLabel: "期末测试",
       demoMode: false,
       timingEnabled: false,
@@ -419,7 +419,7 @@ export default function ModeSelectionPage() {
               variant: String(data.experimentTask.variant || "disabled"),
               durationMinutes: Number.isFinite(Number(data.experimentTask.durationMinutes))
                 ? Math.max(0, Number(data.experimentTask.durationMinutes))
-                : 20,
+                : 15,
               entryLabel: String(data.experimentTask.entryLabel || "期末测试"),
               demoMode: data.experimentTask.demoMode === true,
               timingEnabled: data.experimentTask.timingEnabled === true,
@@ -427,7 +427,7 @@ export default function ModeSelectionPage() {
           : {
               enabled: false,
               variant: "disabled",
-              durationMinutes: 20,
+              durationMinutes: 15,
               entryLabel: "期末测试",
               demoMode: false,
               timingEnabled: false,

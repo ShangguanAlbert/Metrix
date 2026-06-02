@@ -67,3 +67,14 @@ test("stage1 submission seeds stage2 draft with the independent-thinking content
     /status:\s*"stage2_active"[\s\S]*stage1:\s*\{[\s\S]*draftText[\s\S]*stage2:\s*\{[\s\S]*draftText,/,
   );
 });
+
+test("submitted final test flow shows task 1 survey, offline task 2, and task 2 survey", () => {
+  assert.match(studentFinalTestPanelSource, /TASK1_SURVEY_URL\s*=\s*"https:\/\/wj\.qq\.com\/s2\/26868195\/6777\/"/);
+  assert.match(studentFinalTestPanelSource, /TASK2_SURVEY_URL\s*=\s*"https:\/\/wj\.qq\.com\/s2\/26868239\/d762\/"/);
+  assert.match(studentFinalTestPanelSource, /postSubmitStep\s*===\s*"task1-survey"/);
+  assert.match(studentFinalTestPanelSource, /postSubmitStep\s*===\s*"task2-offline"/);
+  assert.match(studentFinalTestPanelSource, /postSubmitStep\s*===\s*"task2-survey"/);
+  assert.match(studentFinalTestPanelSource, /我已完成任务 1 问卷，进入任务 2/);
+  assert.match(studentFinalTestPanelSource, /确认已完成线下任务 2，进入任务 2 问卷/);
+  assert.match(studentFinalTestPanelSource, /recordPostSubmitStep/);
+});

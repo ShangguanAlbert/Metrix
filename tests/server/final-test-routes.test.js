@@ -392,7 +392,7 @@ test("classroom task settings expose final test variant and duration by class", 
   assert.equal(res.statusCode, 200);
   assert.equal(res.payload.experimentTask.enabled, true);
   assert.equal(res.payload.experimentTask.variant, "three-stage-guided");
-  assert.equal(res.payload.experimentTask.durationMinutes, 20);
+  assert.equal(res.payload.experimentTask.durationMinutes, 15);
   assert.equal(res.payload.finalTestConfig.taskTitle, "任务 1：改进普通书包");
   assert.match(res.payload.finalTestConfig.taskDescription, /普通书包/);
   assert.equal(res.payload.finalTestConfig.tasks.length, 2);
@@ -513,7 +513,7 @@ test("admin final test submissions route exposes submitted and pending session s
         status: "submitted",
         startedAt: "2026-05-31T09:40:00.000Z",
         submittedAt: "2026-05-31T09:58:00.000Z",
-        durationMinutes: 20,
+        durationMinutes: 15,
         payload: {
           stage1: { ideas: [], lockedAt: "", submittedAt: "", pasteBlockedCount: 0 },
           stage2: { messages: [], promptCardClicks: [], promptCardCopies: [], transfers: [], riskEvents: [], submittedAt: "" },
@@ -542,7 +542,7 @@ test("admin final test submissions route exposes submitted and pending session s
         variant: "two-stage-free",
         status: "stage2_active",
         startedAt: "2026-05-31T09:45:00.000Z",
-        durationMinutes: 20,
+        durationMinutes: 15,
         payload: {
           stage1: { ideas: [], lockedAt: "", submittedAt: "", pasteBlockedCount: 0 },
           stage2: { messages: [], promptCardClicks: [], promptCardCopies: [], transfers: [], riskEvents: [], submittedAt: "" },
@@ -619,7 +619,7 @@ test("admin final test submissions route exposes submitted and pending session s
   );
 });
 
-test("starting a final test session creates a 20-minute timed session", async () => {
+test("starting a final test session creates a 15-minute timed session", async () => {
   const app = createAppDouble();
   const deps = createFinalTestDeps();
   registerAuthUserClassroomRoutes(app, deps);
@@ -647,7 +647,7 @@ test("starting a final test session creates a 20-minute timed session", async ()
   assert.equal(res.statusCode, 200);
   assert.equal(res.payload.session.variant, "three-stage-guided");
   assert.equal(res.payload.session.status, "stage1_draft");
-  assert.equal(res.payload.session.durationMinutes, 20);
+  assert.equal(res.payload.session.durationMinutes, 15);
   assert.ok(res.payload.session.startedAt);
   assert.ok(res.payload.session.deadlineAt);
 });
@@ -950,7 +950,7 @@ test("timed student sessions are locked automatically after the deadline", async
         status: "stage3_active",
         startedAt: "2026-05-31T09:40:00.000Z",
         deadlineAt: "2026-05-31T10:00:00.000Z",
-        durationMinutes: 20,
+        durationMinutes: 15,
         payload: {
           stage1: { ideas: [], lockedAt: "", submittedAt: "", pasteBlockedCount: 0 },
           stage2: { messages: [], promptCardClicks: [], promptCardCopies: [], transfers: [], riskEvents: [], submittedAt: "" },
@@ -988,4 +988,92 @@ test("timed student sessions are locked automatically after the deadline", async
   } finally {
     Date.now = originalDateNow;
   }
+});
+
+test("student final test session update persists post-submit task 2 traces", async () => {
+  const app = createAppDouble();
+  const deps = createFinalTestDeps();
+  registerAuthUserClassroomRoutes(app, deps);
+
+  await deps.FinalTestSession.findOneAndUpdate(
+    {
+      key: "admin-config",
+      teacherScopeKey: "shangguan-fuze",
+      studentUserId: "student-810",
+      className: "810班",
+    },
+    {
+      $set: {
+        key: "admin-config",
+        teacherScopeKey: "shangguan-fuze",
+        studentUserId: "student-810",
+        className: "810班",
+        variant: "three-stage-guided",
+        status: "submitted",
+        startedAt: "2026-05-31T09:40:00.000Z",
+        submittedAt: "2026-05-31T09:58:00.000Z",
+        durationMinutes: 15,
+        payload: {
+          stage1: { ideas: [], lockedAt: "", submittedAt: "", pasteBlockedCount: 0 },
+          stage2: { messages: [], promptCardClicks: [], promptCardCopies: [], transfers: [], riskEvents: [], submittedAt: "" },
+          stage3: { draft: {}, pasteEvents: [], riskEvents: [], submittedAt: "" },
+          turnbackEvents: [],
+          riskLog: [],
+        },
+      },
+    },
+    { lean: true },
+  );
+
+  const updateRoute = app.routes.find(
+    (item) =>
+      item.method === "put" &&
+      item.path === "/api/classroom/final-test/session",
+  );
+  assert.ok(updateRoute, "expected final test update route");
+
+  const updateHandler = updateRoute.handlers[updateRoute.handlers.length - 1];
+  const updateRes = createResponseDouble();
+  await updateHandler(
+    {
+      authTeacherScopeKey: "shangguan-fuze",
+      authUser: {
+        _id: "student-810",
+        profile: { className: "810班" },
+      },
+      body: {
+        status: "submitted",
+        postSubmit: {
+          task1SurveyCompletedAt: "2026-05-31T10:01:00.000Z",
+          task2PageEnteredAt: "2026-05-31T10:01:00.000Z",
+          task2ConfirmedAt: "2026-05-31T10:10:00.000Z",
+          task2SurveyEnteredAt: "2026-05-31T10:10:00.000Z",
+          events: [
+            {
+              eventId: "post-submit-task1-survey-completed",
+              type: "task1_survey_completed",
+              createdAt: "2026-05-31T10:01:00.000Z",
+            },
+            {
+              eventId: "post-submit-task2-confirmed",
+              type: "task2_confirmed",
+              createdAt: "2026-05-31T10:10:00.000Z",
+            },
+          ],
+        },
+      },
+    },
+    updateRes,
+  );
+
+  assert.equal(updateRes.statusCode, 200);
+  assert.equal(
+    updateRes.payload.session.postSubmit.task1SurveyCompletedAt,
+    "2026-05-31T10:01:00.000Z",
+  );
+  assert.equal(
+    updateRes.payload.session.postSubmit.task2ConfirmedAt,
+    "2026-05-31T10:10:00.000Z",
+  );
+  assert.equal(updateRes.payload.session.postSubmit.events.length, 2);
 });
