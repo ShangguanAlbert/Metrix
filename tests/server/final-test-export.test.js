@@ -274,6 +274,9 @@ test("buildFinalTestExportBundle emits chinese zip entries, workbook sheets, and
   assert.equal(detail.第二阶段.AI对话记录[1].角色, "AI");
   assert.equal(detail.全过程时间线.length, 3);
   assert.equal(detail.全过程时间线[0].字段, "第一阶段作答框");
+  assert.equal(detail.全过程时间线[0].输入片段, "先把书包减重");
+  assert.equal(detail.全过程时间线[0].修改前文本, "");
+  assert.equal(detail.全过程时间线[0].修改后文本, "");
   assert.equal(detail.全过程时间线[1].粘贴文本预览, "外部复制内容");
   assert.equal(detail.全过程时间线[2].写入文本预览, "可以增加减压肩带和雨天防水层。");
   assert.equal(detail.风险汇总.风险分, 7);

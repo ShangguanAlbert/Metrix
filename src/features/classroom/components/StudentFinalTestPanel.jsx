@@ -30,6 +30,8 @@ import "../../../styles/final-test.css";
 const LARGE_INSERT_THRESHOLD = 60;
 const IDLE_INSERT_THRESHOLD_MS = 12000;
 const HIDDEN_INSERT_WINDOW_MS = 45000;
+const PROCESS_TEXT_CONTEXT_CHARS = 20;
+const PROCESS_TEXT_MERGE_WINDOW_MS = 1500;
 
 const STAGE2_PROMPTS = [
   "请帮我改进我的想法",
@@ -89,11 +91,18 @@ function normalizeProcessLog(events = []) {
     fieldLabel: String(item?.fieldLabel || resolveProcessFieldLabel(item?.fieldKey)),
     actionLabel: String(item?.actionLabel || ""),
     createdAt: String(item?.createdAt || ""),
+    endedAt: String(item?.endedAt || ""),
     beforeText: String(item?.beforeText || ""),
     afterText: String(item?.afterText || ""),
     beforeLength: Number.isFinite(Number(item?.beforeLength)) ? Number(item.beforeLength) : 0,
     afterLength: Number.isFinite(Number(item?.afterLength)) ? Number(item.afterLength) : 0,
     charDelta: Number.isFinite(Number(item?.charDelta)) ? Number(item.charDelta) : 0,
+    editStart: Number.isFinite(Number(item?.editStart)) ? Number(item.editStart) : -1,
+    editEnd: Number.isFinite(Number(item?.editEnd)) ? Number(item.editEnd) : -1,
+    inputText: String(item?.inputText || ""),
+    deletedText: String(item?.deletedText || ""),
+    beforeContext: String(item?.beforeContext || ""),
+    afterContext: String(item?.afterContext || ""),
     selectionStart: Number.isFinite(Number(item?.selectionStart)) ? Number(item.selectionStart) : -1,
     selectionEnd: Number.isFinite(Number(item?.selectionEnd)) ? Number(item.selectionEnd) : -1,
     cursorPosition: Number.isFinite(Number(item?.cursorPosition)) ? Number(item.cursorPosition) : -1,
@@ -135,9 +144,17 @@ function createProcessEvent(type, stage, fieldKey, extra = {}) {
     createdAt: nowIso,
     beforeText,
     afterText,
-    beforeLength: beforeText.length,
-    afterLength: afterText.length,
-    charDelta: afterText.length - beforeText.length,
+    beforeLength: Number.isFinite(Number(extra.beforeLength)) ? Number(extra.beforeLength) : beforeText.length,
+    afterLength: Number.isFinite(Number(extra.afterLength)) ? Number(extra.afterLength) : afterText.length,
+    charDelta: Number.isFinite(Number(extra.charDelta))
+      ? Number(extra.charDelta)
+      : afterText.length - beforeText.length,
+    editStart: Number.isFinite(Number(extra.editStart)) ? Number(extra.editStart) : -1,
+    editEnd: Number.isFinite(Number(extra.editEnd)) ? Number(extra.editEnd) : -1,
+    inputText: String(extra.inputText || ""),
+    deletedText: String(extra.deletedText || ""),
+    beforeContext: String(extra.beforeContext || ""),
+    afterContext: String(extra.afterContext || ""),
     selectionStart: Number.isFinite(Number(extra.selectionStart)) ? Number(extra.selectionStart) : -1,
     selectionEnd: Number.isFinite(Number(extra.selectionEnd)) ? Number(extra.selectionEnd) : -1,
     cursorPosition: Number.isFinite(Number(extra.cursorPosition)) ? Number(extra.cursorPosition) : -1,
@@ -156,6 +173,57 @@ function createProcessEvent(type, stage, fieldKey, extra = {}) {
     sourceMessageId: String(extra.sourceMessageId || ""),
     note: String(extra.note || ""),
   };
+}
+
+function buildTextEditDelta(previousValue = "", nextValue = "") {
+  const beforeText = String(previousValue || "");
+  const afterText = String(nextValue || "");
+  let prefixLength = 0;
+  while (
+    prefixLength < beforeText.length &&
+    prefixLength < afterText.length &&
+    beforeText[prefixLength] === afterText[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < beforeText.length - prefixLength &&
+    suffixLength < afterText.length - prefixLength &&
+    beforeText[beforeText.length - 1 - suffixLength] === afterText[afterText.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  const beforeChangeEnd = beforeText.length - suffixLength;
+  const afterChangeEnd = afterText.length - suffixLength;
+  const contextStart = Math.max(0, prefixLength - PROCESS_TEXT_CONTEXT_CHARS);
+  const beforeContextEnd = Math.min(beforeText.length, beforeChangeEnd + PROCESS_TEXT_CONTEXT_CHARS);
+  const afterContextEnd = Math.min(afterText.length, afterChangeEnd + PROCESS_TEXT_CONTEXT_CHARS);
+
+  return {
+    beforeLength: beforeText.length,
+    afterLength: afterText.length,
+    charDelta: afterText.length - beforeText.length,
+    editStart: prefixLength,
+    editEnd: afterChangeEnd,
+    inputText: afterText.slice(prefixLength, afterChangeEnd),
+    deletedText: beforeText.slice(prefixLength, beforeChangeEnd),
+    beforeContext: beforeText.slice(contextStart, beforeContextEnd),
+    afterContext: afterText.slice(contextStart, afterContextEnd),
+  };
+}
+
+function createTextEditProcessEvent(stage, fieldKey, previousValue, nextValue, meta = {}) {
+  return createProcessEvent("text_edit", stage, fieldKey, {
+    actionLabel: "编辑文本",
+    ...buildTextEditDelta(previousValue, nextValue),
+    selectionStart: meta.selectionStart,
+    selectionEnd: meta.selectionEnd,
+    cursorPosition: meta.cursorPosition,
+    inputType: meta.inputType,
+  });
 }
 
 function createTextareaInputMeta(event) {
@@ -415,17 +483,60 @@ function buildSessionFingerprint(session) {
   });
 }
 
+function canMergeTextEditProcessEvents(previousEvent, nextEvent) {
+  if (!previousEvent || !nextEvent) return false;
+  if (previousEvent.type !== "text_edit" || nextEvent.type !== "text_edit") return false;
+  if (previousEvent.fieldKey !== nextEvent.fieldKey || previousEvent.stage !== nextEvent.stage) return false;
+  const previousTime = Date.parse(String(previousEvent.createdAt || ""));
+  const nextTime = Date.parse(String(nextEvent.createdAt || ""));
+  if (!Number.isFinite(previousTime) || !Number.isFinite(nextTime)) return false;
+  return Math.abs(nextTime - previousTime) <= PROCESS_TEXT_MERGE_WINDOW_MS;
+}
+
+function mergeTextEditProcessEvents(previousEvent, nextEvent) {
+  return {
+    ...previousEvent,
+    eventId: previousEvent.eventId || nextEvent.eventId,
+    createdAt: previousEvent.createdAt || nextEvent.createdAt,
+    endedAt: nextEvent.createdAt || previousEvent.endedAt || previousEvent.createdAt || "",
+    afterLength: nextEvent.afterLength,
+    charDelta: Number(nextEvent.afterLength || 0) - Number(previousEvent.beforeLength || 0),
+    editEnd: nextEvent.editEnd,
+    inputText: `${String(previousEvent.inputText || "")}${String(nextEvent.inputText || "")}`.slice(0, 500),
+    deletedText: `${String(previousEvent.deletedText || "")}${String(nextEvent.deletedText || "")}`.slice(0, 500),
+    afterContext: String(nextEvent.afterContext || previousEvent.afterContext || ""),
+    selectionStart: nextEvent.selectionStart,
+    selectionEnd: nextEvent.selectionEnd,
+    cursorPosition: nextEvent.cursorPosition,
+    inputType:
+      previousEvent.inputType === nextEvent.inputType
+        ? previousEvent.inputType
+        : `${String(previousEvent.inputType || "")},${String(nextEvent.inputType || "")}`
+            .split(",")
+            .filter(Boolean)
+            .filter((value, index, list) => list.indexOf(value) === index)
+            .join(","),
+    note: "连续输入已合并记录。",
+  };
+}
+
 function appendProcessEvents(session, events = []) {
   const current = session && typeof session === "object" ? session : null;
   if (!current) return current;
   const nextEvents = Array.isArray(events) ? events.filter(Boolean) : [];
   if (nextEvents.length === 0) return current;
+  const mergedEvents = [...(Array.isArray(current.processLog) ? current.processLog : [])];
+  nextEvents.forEach((event) => {
+    const previousEvent = mergedEvents[mergedEvents.length - 1];
+    if (canMergeTextEditProcessEvents(previousEvent, event)) {
+      mergedEvents[mergedEvents.length - 1] = mergeTextEditProcessEvents(previousEvent, event);
+      return;
+    }
+    mergedEvents.push(event);
+  });
   return {
     ...current,
-    processLog: [
-      ...(Array.isArray(current.processLog) ? current.processLog : []),
-      ...nextEvents,
-    ],
+    processLog: mergedEvents,
   };
 }
 
@@ -754,9 +865,9 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
       if (!nextSession || nextSession.status === "not_started" || nextSession.status === "disabled") {
         return;
       }
-      writeShadowSession(shadowStorageKey, nextSession);
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = window.setTimeout(() => {
+        writeShadowSession(shadowStorageKey, nextSession);
         void persistSession(nextSession, { snapshotVersion });
       }, 600);
     },
@@ -771,17 +882,19 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
         source === "local" ? (localSessionVersionRef.current += 1) : localSessionVersionRef.current;
       sessionRef.current = normalized;
       if (mountedRef.current) setSession(normalized);
-      writeShadowSession(shadowStorageKey, normalized);
       if (persist && normalized.status !== "submitted") {
         if (immediate) {
           if (saveTimerRef.current) {
             window.clearTimeout(saveTimerRef.current);
             saveTimerRef.current = null;
           }
+          writeShadowSession(shadowStorageKey, normalized);
           void persistSession(normalized, { snapshotVersion });
         } else {
           queuePersist(normalized, snapshotVersion);
         }
+      } else {
+        writeShadowSession(shadowStorageKey, normalized);
       }
       return normalized;
     },
@@ -1157,15 +1270,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     }
     commitSession(
       appendProcessEvents(current, [
-        createProcessEvent("text_edit", "stage1", "stage1.draftText", {
-          actionLabel: "编辑文本",
-          beforeText: previousValue,
-          afterText: value,
-          selectionStart: meta.selectionStart,
-          selectionEnd: meta.selectionEnd,
-          cursorPosition: meta.cursorPosition,
-          inputType: meta.inputType,
-        }),
+        createTextEditProcessEvent("stage1", "stage1.draftText", previousValue, value, meta),
       ]),
       { immediate: false },
     );
@@ -1217,15 +1322,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     if (!current || current.status !== "stage2_active") return;
     commitSession(
       appendProcessEvents(current, [
-        createProcessEvent("text_edit", "stage2", "stage2.draftText", {
-          actionLabel: "编辑文本",
-          beforeText: previousValue,
-          afterText: value,
-          selectionStart: meta.selectionStart,
-          selectionEnd: meta.selectionEnd,
-          cursorPosition: meta.cursorPosition,
-          inputType: meta.inputType,
-        }),
+        createTextEditProcessEvent("stage2", "stage2.draftText", previousValue, value, meta),
       ]),
       { immediate: false },
     );
@@ -1274,15 +1371,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
     if (!current || current.status !== "stage3_active") return;
     commitSession(
       appendProcessEvents(current, [
-        createProcessEvent("text_edit", "stage3", "stage3.finalText", {
-          actionLabel: "编辑文本",
-          beforeText: previousValue,
-          afterText: value,
-          selectionStart: meta.selectionStart,
-          selectionEnd: meta.selectionEnd,
-          cursorPosition: meta.cursorPosition,
-          inputType: meta.inputType,
-        }),
+        createTextEditProcessEvent("stage3", "stage3.finalText", previousValue, value, meta),
       ]),
       { immediate: false },
     );

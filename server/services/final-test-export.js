@@ -217,6 +217,31 @@ function mapRiskEvents(events = [], formatDisplayTime) {
   }));
 }
 
+function buildSimpleTextDelta(beforeText = "", afterText = "") {
+  const previousText = String(beforeText || "");
+  const nextText = String(afterText || "");
+  let prefixLength = 0;
+  while (
+    prefixLength < previousText.length &&
+    prefixLength < nextText.length &&
+    previousText[prefixLength] === nextText[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+  let suffixLength = 0;
+  while (
+    suffixLength < previousText.length - prefixLength &&
+    suffixLength < nextText.length - prefixLength &&
+    previousText[previousText.length - 1 - suffixLength] === nextText[nextText.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+  return {
+    inputText: nextText.slice(prefixLength, nextText.length - suffixLength),
+    deletedText: previousText.slice(prefixLength, previousText.length - suffixLength),
+  };
+}
+
 function mapProcessLogEvents(events = [], formatDisplayTime) {
   return (Array.isArray(events) ? events : []).map((item, index) => {
     const beforeLength = Number.isFinite(Number(item?.beforeLength))
@@ -225,24 +250,34 @@ function mapProcessLogEvents(events = [], formatDisplayTime) {
     const afterLength = Number.isFinite(Number(item?.afterLength))
       ? Number(item.afterLength)
       : String(item?.afterText || "").length;
+    const eventType = String(item?.type || "").trim();
+    const isTextEdit = eventType === "text_edit";
+    const fallbackDelta = isTextEdit ? buildSimpleTextDelta(item?.beforeText, item?.afterText) : {};
     return {
       序号: index + 1,
       事件ID: String(item?.eventId || "").trim(),
       时间: formatMaybeTime(formatDisplayTime, item?.createdAt),
+      结束时间: formatMaybeTime(formatDisplayTime, item?.endedAt),
       阶段: resolveStageLabel(item?.stage),
       字段: String(item?.fieldLabel || "").trim() || resolveTargetFieldLabel(item?.fieldKey),
-      动作: String(item?.actionLabel || "").trim() || resolveProcessActionLabel(item?.type),
+      动作: String(item?.actionLabel || "").trim() || resolveProcessActionLabel(eventType),
       输入类型: String(item?.inputType || "").trim(),
       光标位置: Number.isFinite(Number(item?.cursorPosition)) ? Number(item.cursorPosition) : -1,
       选区开始: Number.isFinite(Number(item?.selectionStart)) ? Number(item.selectionStart) : -1,
       选区结束: Number.isFinite(Number(item?.selectionEnd)) ? Number(item.selectionEnd) : -1,
+      修改起点: Number.isFinite(Number(item?.editStart)) ? Number(item.editStart) : -1,
+      修改终点: Number.isFinite(Number(item?.editEnd)) ? Number(item.editEnd) : -1,
       修改前字数: beforeLength,
       修改后字数: afterLength,
       字数变化: Number.isFinite(Number(item?.charDelta))
         ? Number(item.charDelta)
         : afterLength - beforeLength,
-      修改前文本: String(item?.beforeText || ""),
-      修改后文本: String(item?.afterText || ""),
+      输入片段: String(item?.inputText || fallbackDelta.inputText || ""),
+      删除片段: String(item?.deletedText || fallbackDelta.deletedText || ""),
+      修改前上下文: String(item?.beforeContext || ""),
+      修改后上下文: String(item?.afterContext || ""),
+      修改前文本: isTextEdit ? "" : String(item?.beforeText || ""),
+      修改后文本: isTextEdit ? "" : String(item?.afterText || ""),
       粘贴文本预览: String(item?.pastedTextPreview || item?.pastedText || ""),
       粘贴全文: String(item?.pastedText || ""),
       粘贴字数: Number.isFinite(Number(item?.pastedTextLength))
@@ -529,8 +564,18 @@ function buildStudentDetailText(record) {
         `  ${item.序号}. ${item.时间 || "-"}｜${item.阶段}｜${item.字段}｜${item.动作}`,
       );
       lines.push(
-        `    输入类型：${item.输入类型 || "-"}｜光标：${item.光标位置}｜选区：${item.选区开始}-${item.选区结束}｜字数：${item.修改前字数} -> ${item.修改后字数}（${item.字数变化 >= 0 ? "+" : ""}${item.字数变化}）`,
+        `    输入类型：${item.输入类型 || "-"}｜结束时间：${item.结束时间 || "-"}｜光标：${item.光标位置}｜选区：${item.选区开始}-${item.选区结束}｜字数：${item.修改前字数} -> ${item.修改后字数}（${item.字数变化 >= 0 ? "+" : ""}${item.字数变化}）`,
       );
+      if (item.输入片段) {
+        lines.push(`    输入片段：${item.输入片段}`);
+      }
+      if (item.删除片段) {
+        lines.push(`    删除片段：${item.删除片段}`);
+      }
+      if (item.修改前上下文 || item.修改后上下文) {
+        lines.push(`    修改前上下文：${item.修改前上下文 || "-"}`);
+        lines.push(`    修改后上下文：${item.修改后上下文 || "-"}`);
+      }
       if (item.粘贴文本预览) {
         lines.push(`    粘贴文本预览：${item.粘贴文本预览}`);
       }
