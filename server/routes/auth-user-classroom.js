@@ -3043,17 +3043,17 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       reason: "管理员重新开放定稿阶段",
       createdAt: new Date().toISOString(),
     };
-    const persisted = await writeFinalTestSession(
-      query,
-      applyFinalTestPatch(session, {
-        status: "stage3_active",
-        submittedAt: "",
-        turnbackEvents: [
-          ...(Array.isArray(session.turnbackEvents) ? session.turnbackEvents : []),
-          reopenEvent,
-        ],
-      }),
-    );
+    const patched = applyFinalTestPatch(session, {
+      status: "stage3_active",
+      submittedAt: "",
+      timeExpired: false,
+      turnbackEvents: [
+        ...(Array.isArray(session.turnbackEvents) ? session.turnbackEvents : []),
+        reopenEvent,
+      ],
+    });
+    patched.deadlineAt = "";
+    const persisted = await writeFinalTestSession(query, patched);
     res.json({ ok: true, session: persisted });
   });
 

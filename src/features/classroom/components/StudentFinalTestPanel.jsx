@@ -739,16 +739,18 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
   const stage2AnswerText = buildStage2DraftText(session?.stage2 || {});
   const stage3FinalText = buildStage3FinalText(session?.stage3 || {});
   const stage3Locked = session?.status === "time_expired_locked" || isSubmitted;
+  const _deadlineCalcMs = Date.parse(String(session?.deadlineAt || ""));
   const liveRemainingMs =
     timingEnabled && isStarted
       ? Math.max(
           0,
-          remainingMs || Date.parse(String(session?.deadlineAt || "")) - Date.now(),
+          remainingMs ||
+            (Number.isFinite(_deadlineCalcMs) ? _deadlineCalcMs - Date.now() : 0),
         )
       : 0;
   const timerStatusText = isDemoMode
     ? "演示模式，不计时"
-    : timingEnabled && isStarted && !isSubmitted
+    : timingEnabled && isStarted && !isSubmitted && session?.deadlineAt
       ? `剩余时间 ${formatFinalTestCountdown(liveRemainingMs)}`
       : "";
   const stage1SyncKey =
