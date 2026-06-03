@@ -1755,10 +1755,10 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
 
     try {
       await ChatApiService.streamChatCompletion({
-        agentId: "A",
+        agentId: "D",
         formData: ChatApiService.createChatStreamFormData({
-          agentId: "A",
-          runtimeConfig: { temperature: 0.6, topP: 0.9 },
+          agentId: "D",
+          runtimeConfig: { creativityMode: "custom", temperature: 1, topP: 0.95, enableWebSearch: false, enableThinking: false },
           sessionId: `final-test-${studentUserId || className || "student"}`,
           messages: history,
         }),
@@ -1874,10 +1874,10 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
 
     try {
       await ChatApiService.streamChatCompletion({
-        agentId: "A",
+        agentId: "D",
         formData: ChatApiService.createChatStreamFormData({
-          agentId: "A",
-          runtimeConfig: { temperature: 0.6, topP: 0.9 },
+          agentId: "D",
+          runtimeConfig: { creativityMode: "custom", temperature: 1, topP: 0.95, enableWebSearch: false, enableThinking: false },
           sessionId: `final-test-${studentUserId || className || "student"}`,
           messages: history,
         }),
