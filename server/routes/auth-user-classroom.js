@@ -3039,14 +3039,18 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       eventId: `reopen-${Date.now().toString(36)}`,
       kind: "admin_reopen",
       fromStage: "submitted",
-      toStage: "stage3",
-      reason: "管理员重新开放定稿阶段",
+      toStage: "stage2",
+      reason: "管理员重新开放至 AI 协作阶段",
       createdAt: new Date().toISOString(),
     };
     const patched = applyFinalTestPatch(session, {
-      status: "stage3_active",
+      status: "stage2_active",
       submittedAt: "",
       timeExpired: false,
+      stage2: {
+        ...(session.stage2 || {}),
+        submittedAt: "",
+      },
       turnbackEvents: [
         ...(Array.isArray(session.turnbackEvents) ? session.turnbackEvents : []),
         reopenEvent,
