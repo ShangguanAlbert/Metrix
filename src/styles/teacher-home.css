@@ -1495,6 +1495,18 @@
   cursor: not-allowed;
 }
 
+.teacher-homework-student-card.teacher-final-test-student-tile.empty-stage3 {
+  border-color: #e6a817;
+  background-color: #fffbf0;
+}
+
+.teacher-final-test-empty-stage3-hint {
+  display: block;
+  font-size: 11px;
+  color: #b07d10;
+  margin-top: 2px;
+}
+
 .teacher-final-test-unlisted-block {
   display: grid;
   gap: 8px;

@@ -6946,6 +6946,8 @@ export default function TeacherHomePage() {
                                 <div className="teacher-homework-card-grid teacher-final-test-student-grid">
                                   {students.map((student) => {
                                     const submitted = student?.submitted === true;
+                                    const stage3HasContent = student?.stage3HasContent === true;
+                                    const emptyStage3 = submitted && !stage3HasContent;
                                     const detailStatusLabel =
                                       readFinalTestStatusLabel(student?.status);
                                     const statusLabel =
@@ -6959,12 +6961,12 @@ export default function TeacherHomePage() {
                                         key={`final-test-student-${student?.studentUserId || student?.studentId || student?.studentName}`}
                                         className={`teacher-homework-student-card teacher-final-test-student-tile${
                                           submitted ? " submitted" : " missing"
-                                        }`}
+                                        }${emptyStage3 ? " empty-stage3" : ""}`}
                                         title={`${student?.studentName || "未命名学生"} · ${detailStatusLabel}${
                                           student?.submittedAt
                                             ? ` · ${formatDisplayTime(student.submittedAt)}`
                                             : ""
-                                        }`}
+                                        }${emptyStage3 ? " · 定稿内容为空" : ""}`}
                                       >
                                         <span className="teacher-homework-student-card-name">
                                           {student?.studentName || "未命名学生"}
@@ -6972,6 +6974,11 @@ export default function TeacherHomePage() {
                                         <span className="teacher-homework-student-card-status">
                                           {statusLabel}
                                         </span>
+                                        {emptyStage3 ? (
+                                          <span className="teacher-final-test-empty-stage3-hint">
+                                            定稿为空，建议重新开放
+                                          </span>
+                                        ) : null}
                                         {submitted ? (
                                           <button
                                             type="button"

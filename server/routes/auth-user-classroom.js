@@ -2932,6 +2932,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           timeExpired: normalized.timeExpired === true,
           durationMinutes: normalized.durationMinutes,
           updatedAt: sanitizeIsoDate(item?.updatedAt),
+          stage3HasContent: Boolean(String(normalized.stage3?.finalText || "").trim()),
         };
       })
       .sort((a, b) => {
@@ -2973,6 +2974,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
           status,
           submittedAt: sanitizeIsoDate(session?.submittedAt) || "",
           updatedAt: sanitizeIsoDate(session?.updatedAt) || "",
+          stage3HasContent: session?.stage3HasContent === true,
         };
       });
       const submittedCount = students.filter((student) => student.submitted).length;
