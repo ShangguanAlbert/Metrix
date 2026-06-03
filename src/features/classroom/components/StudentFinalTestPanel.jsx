@@ -458,6 +458,15 @@ function recoverShadowSession(remoteSession, storageKey) {
     normalizedShadow.startedAt &&
     normalizedRemote.startedAt === normalizedShadow.startedAt
   ) {
+    const remoteIsActive = normalizedRemote.status === "stage3_active" || normalizedRemote.status === "stage2_active" || normalizedRemote.status === "stage1_active";
+    const shadowIsTerminal = normalizedShadow.status === "time_expired_locked" || normalizedShadow.status === "submitted";
+    if (remoteIsActive && shadowIsTerminal) {
+      clearShadowSession(storageKey);
+      return {
+        restored: false,
+        session: normalizedRemote,
+      };
+    }
     return {
       restored: true,
       session: normalizedShadow,
