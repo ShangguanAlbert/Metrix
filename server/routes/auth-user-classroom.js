@@ -3015,6 +3015,48 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     });
   });
 
+  app.post("/api/auth/admin/final-test-reopen", async (req, res) => {
+    if (!(await authenticateAdminRequest(req, res))) return;
+    const studentUserId = sanitizeId(req.body?.studentUserId, "");
+    const className = sanitizeClassroomUserClassName(req.body?.className || "");
+    if (!studentUserId) {
+      res.status(400).json({ error: "缺少 studentUserId。" });
+      return;
+    }
+    const teacherScopeKey = SHANGGUAN_FUZE_TEACHER_SCOPE_KEY;
+    const query = buildFinalTestSessionQuery({ teacherScopeKey, studentUserId, className });
+    const record = await resolveMaybeLean(FinalTestSession.findOne(query));
+    if (!record) {
+      res.status(404).json({ error: "未找到该学生的期末测试记录。" });
+      return;
+    }
+    const session = normalizeFinalTestSession(record);
+    if (session.status !== "submitted") {
+      res.status(400).json({ error: `当前状态为「${session.status}」，只有已提交的测试才能重新开放。` });
+      return;
+    }
+    const reopenEvent = {
+      eventId: `reopen-${Date.now().toString(36)}`,
+      kind: "admin_reopen",
+      fromStage: "submitted",
+      toStage: "stage3",
+      reason: "管理员重新开放定稿阶段",
+      createdAt: new Date().toISOString(),
+    };
+    const persisted = await writeFinalTestSession(
+      query,
+      applyFinalTestPatch(session, {
+        status: "stage3_active",
+        submittedAt: "",
+        turnbackEvents: [
+          ...(Array.isArray(session.turnbackEvents) ? session.turnbackEvents : []),
+          reopenEvent,
+        ],
+      }),
+    );
+    res.json({ ok: true, session: persisted });
+  });
+
   app.get("/api/auth/admin/classroom-plans", async (req, res) => {
     const admin = await authenticateAdminRequest(req, res);
     if (!admin) return;

@@ -262,6 +262,13 @@ export function fetchAdminFinalTestSubmissions(adminToken) {
   return request("/api/auth/admin/final-test-submissions", adminToken);
 }
 
+export function reopenAdminFinalTestSession(adminToken, { studentUserId, className }) {
+  return request("/api/auth/admin/final-test-reopen", adminToken, {
+    method: "POST",
+    body: JSON.stringify({ studentUserId, className }),
+  });
+}
+
 export function fetchAdminClassroomPlans(adminToken) {
   return request("/api/auth/admin/classroom-plans", adminToken);
 }

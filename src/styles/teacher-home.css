@@ -1473,6 +1473,28 @@
   justify-items: center;
 }
 
+.teacher-final-test-reopen-btn {
+  margin-top: 2px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid var(--teacher-border, #d1d5db);
+  background: transparent;
+  color: var(--teacher-text-soft, #6b7280);
+  cursor: pointer;
+  line-height: 1.6;
+}
+
+.teacher-final-test-reopen-btn:hover:not(:disabled) {
+  background: var(--teacher-bg-hover, #f3f4f6);
+  color: var(--teacher-text, #111827);
+}
+
+.teacher-final-test-reopen-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .teacher-final-test-unlisted-block {
   display: grid;
   gap: 8px;

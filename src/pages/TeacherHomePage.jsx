@@ -101,6 +101,7 @@ import {
   fetchAdminClassroomHomeworkOverview,
   fetchAdminClassroomPlans,
   fetchAdminFinalTestSubmissions,
+  reopenAdminFinalTestSession,
   fetchAdminMe,
   fetchAdminOnlinePresence,
   fetchAdminUserDirectory,
@@ -1469,6 +1470,7 @@ export default function TeacherHomePage() {
     useState("all");
   const [finalTestSubmissionDisplayMode, setFinalTestSubmissionDisplayMode] =
     useState("submission");
+  const [finalTestReopeningIds, setFinalTestReopeningIds] = useState(() => new Set());
   const [exportCenterDeleteDialogOpen, setExportCenterDeleteDialogOpen] =
     useState(false);
   const [seatLayoutsByClass, setSeatLayoutsByClass] = useState(() =>
@@ -1663,6 +1665,25 @@ export default function TeacherHomePage() {
       setFinalTestSubmissionLoading(false);
     }
   }, [adminToken, handleAuthError]);
+
+  const handleReopenFinalTest = useCallback(async (studentUserId, className) => {
+    if (!adminToken || !studentUserId) return;
+    const key = `${className}:${studentUserId}`;
+    setFinalTestReopeningIds((prev) => new Set([...prev, key]));
+    try {
+      await reopenAdminFinalTestSession(adminToken, { studentUserId, className });
+      await loadFinalTestSubmissions();
+    } catch (rawError) {
+      if (handleAuthError(rawError)) return;
+      setError(readErrorMessage(rawError));
+    } finally {
+      setFinalTestReopeningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }, [adminToken, handleAuthError, loadFinalTestSubmissions]);
 
   const loadPartyRoomManage = useCallback(async () => {
     if (!adminToken) return;
@@ -6951,6 +6972,16 @@ export default function TeacherHomePage() {
                                         <span className="teacher-homework-student-card-status">
                                           {statusLabel}
                                         </span>
+                                        {submitted ? (
+                                          <button
+                                            type="button"
+                                            className="teacher-final-test-reopen-btn"
+                                            disabled={finalTestReopeningIds.has(`${className}:${student?.studentUserId}`)}
+                                            onClick={() => handleReopenFinalTest(student?.studentUserId, className)}
+                                          >
+                                            {finalTestReopeningIds.has(`${className}:${student?.studentUserId}`) ? "开放中…" : "重新开放"}
+                                          </button>
+                                        ) : null}
                                       </article>
                                     );
                                   })}
