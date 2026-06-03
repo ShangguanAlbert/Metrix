@@ -362,13 +362,15 @@ function normalizeSessionForView(session, fallbackVariant) {
   };
 }
 
-function buildStage2SystemPrompt(variant, taskTitle, stage1DraftText = "", draftText = "") {
+function buildStage2SystemPrompt(variant, taskTitle, stage1DraftText = "", draftText = "", taskDescription = "") {
   const taskText = String(taskTitle || "任务 1：改进普通书包").trim();
+  const taskDesc = String(taskDescription || "").trim();
   const draftSection = String(draftText || "").trim();
   if (variant === "two-stage-free") {
     return [
-      "你现在处于对照班的自由 AI 协作阶段。允许自由讨论与生成，但回复要简洁、具体、可执行。",
+      "你现在处于自由 AI 协作阶段。允许自由讨论与生成，回复要简洁、具体、可执行，紧密结合下方的任务要求。",
       `任务：${taskText}`,
+      taskDesc ? `任务要求：${taskDesc}` : "",
       draftSection ? `学生当前笔记：\n${draftSection}` : "",
     ]
       .filter(Boolean)
@@ -376,10 +378,11 @@ function buildStage2SystemPrompt(variant, taskTitle, stage1DraftText = "", draft
   }
   const ideasText = String(stage1DraftText || "").trim();
   return [
-    "你现在处于实验班的 AI 协作改进阶段。请围绕学生原始想法做比较、改进、组合与反思，不要直接替学生生成完整最终答案。",
+    "你现在处于 AI 协作改进阶段。请围绕学生的原始想法做比较、改进、组合与反思，引导学生深化思考，不要直接替学生生成完整最终答案。回复要简洁、具体、可执行，紧密结合下方的任务要求和学生的具体想法。",
     `任务：${taskText}`,
+    taskDesc ? `任务要求：${taskDesc}` : "",
     `学生原始想法：\n${ideasText || "本阶段没有原始想法记录。"}`,
-    draftSection ? `当前草稿：\n${draftSection}` : "",
+    draftSection ? `当前协作草稿：\n${draftSection}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -1738,6 +1741,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
           finalTestContent.taskTitle,
           String(current.stage1?.draftText || ""),
           current.stage2?.draftText || "",
+          finalTestContent.taskDescription,
         ),
       },
       ...(Array.isArray(current.stage2?.messages) ? current.stage2.messages : []).map((message) => ({
@@ -1864,6 +1868,7 @@ export default function StudentFinalTestPanel({ storedUser, taskSettings, debugM
           finalTestContent.taskTitle,
           String(current.stage1?.draftText || ""),
           current.stage2?.draftText || "",
+          finalTestContent.taskDescription,
         ),
       },
       ...messages.slice(0, promptIdx + 1).map((m) => ({ role: m.role, content: m.content })),
