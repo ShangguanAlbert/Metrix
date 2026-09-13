@@ -121,6 +121,7 @@ import {
   updateAdminPersonalProfile,
 } from "./admin/adminApi.js";
 import { clearAdminToken, getAdminToken } from "./login/adminSession.js";
+import StudentPasswordResetDialog from "../features/admin/components/StudentPasswordResetDialog.jsx";
 import {
   clearUserAuthSession,
   resolveActiveAuthSlot,
@@ -1413,6 +1414,7 @@ export default function TeacherHomePage() {
   const [userDirectoryLoading, setUserDirectoryLoading] = useState(false);
   const [userDirectoryUpdatedAt, setUserDirectoryUpdatedAt] = useState("");
   const [userDirectoryItems, setUserDirectoryItems] = useState([]);
+  const [passwordResetStudent, setPasswordResetStudent] = useState(null);
   const [userDirectoryKeyword, setUserDirectoryKeyword] = useState("");
   const [userDirectorySearchInput, setUserDirectorySearchInput] = useState("");
   const [userDirectoryClassFilter, setUserDirectoryClassFilter] =
@@ -6010,8 +6012,17 @@ export default function TeacherHomePage() {
             }</td>
             <td>{formatDisplayTime(user?.updatedAt)}</td>
             <td>
-              {canManage || (isPendingStudent && canBindStudentAccounts) ? (
+              {canManage || user.canResetPassword || (isPendingStudent && canBindStudentAccounts) ? (
                 <div className="teacher-user-manage-row-actions">
+                  {user.canResetPassword ? (
+                    <button
+                      type="button"
+                      className="teacher-ghost-btn"
+                      onClick={() => setPasswordResetStudent(user)}
+                    >
+                      重置密码
+                    </button>
+                  ) : null}
                   {isPendingStudent && canBindStudentAccounts ? (
                     <button
                       type="button"
@@ -9126,7 +9137,7 @@ export default function TeacherHomePage() {
                           ? `授课教师与学生账号分开管理；平台管理员不出现在此目录 · 最近刷新：${formatDisplayTime(userDirectoryUpdatedAt)}`
                           : isTerminalAdmin
                             ? `最近刷新：${formatDisplayTime(userDirectoryUpdatedAt)}`
-                            : `仅显示本人授课班级的学生账号；既有账号仅可查看，可新增或批量导入学生 · 最近刷新：${formatDisplayTime(userDirectoryUpdatedAt)}`}
+                            : `仅显示本人授课班级的学生账号；可新增、批量导入学生或重置学生密码 · 最近刷新：${formatDisplayTime(userDirectoryUpdatedAt)}`}
                     </p>
                   </div>
                   <div className="teacher-panel-actions teacher-user-manage-head-actions">
@@ -10928,6 +10939,14 @@ export default function TeacherHomePage() {
                 </form>
               </div>
             </div>
+          ) : null}
+          {passwordResetStudent ? (
+            <StudentPasswordResetDialog
+              key={passwordResetStudent.id}
+              user={passwordResetStudent}
+              adminToken={adminToken}
+              onClose={() => setPasswordResetStudent(null)}
+            />
           ) : null}
           {userEditDialog.open ? (
             <div

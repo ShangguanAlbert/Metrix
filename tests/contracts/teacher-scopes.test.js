@@ -39,3 +39,10 @@ test("Shangguan Fuze remains a historical scope but is not student-selectable", 
   assert.equal(isStudentTeacherScopeSelectable(SHI_GAOJUN_TEACHER_SCOPE_KEY), true);
   assert.equal(isStudentTeacherScopeSelectable(DEFAULT_TEACHER_SCOPE_KEY), true);
 });
+
+test("empty and unknown scopes are not valid student bindings", () => {
+  for (const value of ["", " ", undefined, null, "unknown-teacher"]) {
+    assert.equal(isStudentTeacherScopeSelectable(value), false);
+  }
+  assert.equal(isStudentTeacherScopeSelectable(" SHI-GAOJUN "), true);
+});

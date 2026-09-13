@@ -439,6 +439,22 @@ export function registerAdminRoutes(app, deps) {
     return "";
   }
 
+  function canResetStudentPassword(admin, user) {
+    if (user?.role !== "user") return false;
+    if (isTerminalAdminAccount(admin)) return true;
+    if (!["admin", "teacher"].includes(admin?.role)) return false;
+    const teacherScopeKey = readTeacherAccountScopeKey(admin);
+    const classKey = normalizeClassNameKey(user?.profile?.className);
+    return Boolean(
+      teacherScopeKey &&
+      readLockedTeacherScopeKey(user?.lockedTeacherScopeKey) === teacherScopeKey &&
+      classKey &&
+      readAuthorizedClassNames(admin).some(
+        (className) => normalizeClassNameKey(className) === classKey,
+      ),
+    );
+  }
+
   async function resolveStudentImportTeacher(admin, requestedTeacherUserId = "") {
     if (!isTerminalAdminAccount(admin)) return admin;
     const teacherUserId = sanitizeId(requestedTeacherUserId, "");
@@ -829,9 +845,10 @@ export function registerAdminRoutes(app, deps) {
       const users = await AuthUser.find(userQuery)
         .sort({ role: 1, createdAt: 1, _id: 1 })
         .lean();
-      const items = (Array.isArray(users) ? users : []).map((user) =>
-        buildUserDirectoryItem(user, targetClassKeys),
-      );
+      const items = (Array.isArray(users) ? users : []).map((user) => ({
+        ...buildUserDirectoryItem(user, targetClassKeys),
+        canResetPassword: canResetStudentPassword(admin, user),
+      }));
 
       const summary = items.reduce(
         (acc, item) => {
@@ -1325,6 +1342,39 @@ export function registerAdminRoutes(app, deps) {
       }
     },
   );
+
+  app.post("/api/auth/admin/user-directory/users/:userId/reset-password", async (req, res) => {
+    const admin = await authenticateAdminRequest(req, res);
+    if (!admin) return;
+    const userId = sanitizeId(req.params?.userId, "");
+    if (!userId || !isMongoObjectIdLike(userId)) {
+      res.status(400).json({ error: "无效用户 ID。" });
+      return;
+    }
+    const password = String(req.body?.password || "");
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      res.status(400).json({ error: passwordError });
+      return;
+    }
+    try {
+      const user = await AuthUser.findById(userId);
+      if (!user || user.role !== "user") {
+        res.status(404).json({ error: "学生账号不存在。" });
+        return;
+      }
+      if (!canResetStudentPassword(admin, user)) {
+        res.status(403).json({ error: "只能重置本人课堂范围内已授权班级的学生密码。" });
+        return;
+      }
+      user.passwordHash = await hashPassword(password);
+      await user.save();
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: error?.message || "重置密码失败，请稍后重试。" });
+    }
+  });
 
   app.put("/api/auth/admin/user-directory/users/:userId", async (req, res) => {
     const admin = await authenticateAdminRequest(req, res);

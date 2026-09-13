@@ -205,6 +205,14 @@ export function bindAdminUserDirectoryStudent(adminToken, userId) {
   );
 }
 
+export function resetAdminStudentPassword(adminToken, userId, password) {
+  return request(
+    `/api/auth/admin/user-directory/users/${encodeURIComponent(String(userId || "").trim())}/reset-password`,
+    adminToken,
+    { method: "POST", body: JSON.stringify({ password }) },
+  );
+}
+
 export function deleteAdminUserDirectoryUser(adminToken, userId, payload = {}) {
   const safeUserId = String(userId || "").trim();
   return request(

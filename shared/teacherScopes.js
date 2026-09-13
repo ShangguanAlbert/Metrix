@@ -37,7 +37,8 @@ export function isDefaultTeacherScopeKey(value) {
 }
 
 export function isStudentTeacherScopeSelectable(value) {
-  return STUDENT_TEACHER_SCOPE_KEY_SET.has(sanitizeTeacherScopeKey(value));
+  const key = String(value || "").trim().toLowerCase();
+  return STUDENT_TEACHER_SCOPE_KEY_SET.has(key);
 }
 
 export function getTeacherScopeLabel(value) {
