@@ -242,8 +242,8 @@ function resolveLesson(coursePlans, className, boundaryAt) {
 }
 
 export function buildPairSubjectId(memberUserIds = []) {
-  const members = safeIdList(memberUserIds, 2).sort();
-  return members.length === 2 ? `pair-${stableKey(...members).slice(0, 24)}` : "";
+  const members = safeIdList(memberUserIds, 3).sort();
+  return members.length >= 2 && members.length <= 3 ? `pair-${stableKey(...members).slice(0, 24)}` : "";
 }
 
 export function resolveLongitudinalCourseContext({
@@ -256,7 +256,7 @@ export function resolveLongitudinalCourseContext({
   taskText = "",
 } = {}) {
   const roomId = safeText(room?._id || room?.id || workspace?.roomId, 100);
-  const memberUserIds = safeIdList(room?.memberUserIds, 2);
+  const memberUserIds = safeIdList(room?.memberUserIds, 3);
   const userById = new Map(
     (Array.isArray(users) ? users : []).map((user) => [safeText(user?._id, 100), user]),
   );
@@ -422,8 +422,8 @@ export function buildNightlyLongitudinalMemoryCandidates({
   const contributionCounts = Array.from(activityByUserId.values())
     .map((activity) => activity.chat + activity.edit + activity.preview);
   const contributionTotal = contributionCounts.reduce((sum, count) => sum + count, 0);
-  const balanceScore = contributionCounts.length === 2 && contributionTotal > 0
-    ? 1 - Math.abs(contributionCounts[0] - contributionCounts[1]) / contributionTotal
+  const balanceScore = contributionCounts.length >= 2 && contributionTotal > 0
+    ? 1 - contributionCounts.reduce((sum, count) => sum + Math.abs(count / contributionTotal - 1 / contributionCounts.length), 0) / (2 * (1 - 1 / contributionCounts.length))
     : 0;
 
   if (context.pairId) {
@@ -448,7 +448,7 @@ export function buildNightlyLongitudinalMemoryCandidates({
         subjectId: context.pairId,
         memoryType: "ability_judgment",
         conceptKey: "collaboration_balance",
-        summary: `这对搭档在作品“${context.projectName}”中的协作参与均衡较弱，当前需要角色协调支持；教师可回看讨论、代码修改和预览记录确认。`,
+        summary: `该小组在作品“${context.projectName}”中的协作参与均衡较弱，当前需要角色协调支持；教师可回看讨论、代码修改和预览记录确认。`,
         payload: {
           projectId: context.projectId,
           dimension: "collaboration_balance",
@@ -623,7 +623,7 @@ export async function consolidateEligibleLongitudinalMemories({
         } else if (candidate?.memoryType === "ability_judgment" && crossedProjectBoundary) {
           consolidatedSummary = `该能力判断已在至少 ${previousEvidenceCount + 1} 次可追溯记录中出现，并涉及不同作品。最新判断：${consolidatedSummary}`;
         } else if (candidate?.memoryType === "collaboration_pattern" && previousEvidenceCount > 0) {
-          consolidatedSummary = `这对搭档已有 ${previousEvidenceCount + 1} 次夜间协作记录。最新一次：${consolidatedSummary}`;
+          consolidatedSummary = `该小组已有 ${previousEvidenceCount + 1} 次夜间协作记录。最新一次：${consolidatedSummary}`;
         }
         const preserveTeacherSummary = Boolean(existing?.teacherEditedAt);
         await Memory.findOneAndUpdate(
@@ -722,6 +722,25 @@ async function readLearningEventsWindow({
   return events;
 }
 
+export function splitEventsByMembership(room, events, boundaryAt) {
+  const history = (room?.membershipHistory || []).slice()
+    .filter((item) => Number.isFinite(Date.parse(item.effectiveAt)))
+    .sort((a, b) => Date.parse(a.effectiveAt) - Date.parse(b.effectiveAt));
+  if (!history.length) return [{ room, events, boundaryAt }];
+  return history.map((entry, index) => {
+    const start = Date.parse(entry.effectiveAt);
+    const end = history[index + 1] ? Date.parse(history[index + 1].effectiveAt) : Infinity;
+    return {
+      room: { ...room, memberUserIds: entry.memberUserIds },
+      events: events.filter((event) => {
+        const at = Date.parse(event.occurredAt);
+        return at >= start && at < end;
+      }),
+      boundaryAt: new Date(Math.min(new Date(boundaryAt).getTime(), end - 1)),
+    };
+  }).filter((period) => period.events.length);
+}
+
 export async function compileEligibleLongitudinalMemories({
   LearningEvent,
   GroupChatRoom,
@@ -791,7 +810,7 @@ export async function compileEligibleLongitudinalMemories({
     ]);
     if (!room || !workspace) continue;
     const users = await AuthUser.find(
-      { _id: { $in: safeIdList(room.memberUserIds, 2) } },
+      { _id: { $in: safeIdList([...(room.memberUserIds || []), ...(room.membershipHistory || []).flatMap((entry) => entry.memberUserIds)], 100) } },
       { profile: 1, username: 1 },
     ).lean();
     const taskText = safeText(
@@ -799,20 +818,14 @@ export async function compileEligibleLongitudinalMemories({
         || room?.announcement,
       500,
     );
-    const context = resolveLongitudinalCourseContext({
-      room,
-      users,
-      workspace,
-      coursePlans,
-      courseConfig,
-      boundaryAt,
-      taskText,
-    });
-    const candidates = buildNightlyLongitudinalMemoryCandidates({
-      context,
-      events,
-      workspace,
-      boundaryAt,
+    const candidates = splitEventsByMembership(room, events, boundaryAt).flatMap((period) => {
+      const context = resolveLongitudinalCourseContext({
+        room: period.room, users, workspace, coursePlans, courseConfig,
+        boundaryAt: period.boundaryAt, taskText,
+      });
+      return buildNightlyLongitudinalMemoryCandidates({
+        context, events: period.events, workspace, boundaryAt: period.boundaryAt,
+      });
     });
     for (const candidate of candidates) {
       await Candidate.findOneAndUpdate(
@@ -865,7 +878,7 @@ export async function readLongitudinalMemoryBriefing({
   const subjectFilters = [
     context.roomId ? { subjectType: "project", roomId: context.roomId } : null,
     context.pairId ? { subjectType: "pair", subjectId: context.pairId, roomId: context.roomId } : null,
-    ...safeIdList(context.memberUserIds, 2).map((userId) => ({
+    ...safeIdList(context.memberUserIds, 3).map((userId) => ({
       subjectType: "student",
       subjectId: userId,
       roomId: context.roomId,

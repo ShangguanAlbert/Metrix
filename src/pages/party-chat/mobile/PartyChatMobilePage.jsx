@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import PartyChatDesktopPage from "../desktop/PartyChatDesktopPage.jsx";
 import "../../../styles/party-chat-mobile.css";
+import { getStoredAuthUser } from "../../../app/authStorage.js";
 
 export default function PartyChatMobilePage() {
   const shellRef = useRef(null);
   const [isSidebarDrawerOpen, setIsSidebarDrawerOpen] = useState(false);
+  const [activePane, setActivePane] = useState("chat");
+  const hasCoding = getStoredAuthUser()?.teacherScopeKey === "shi-gaojun";
 
   useEffect(() => {
     if (!isSidebarDrawerOpen) return undefined;
@@ -46,9 +49,16 @@ export default function PartyChatMobilePage() {
   return (
     <div
       ref={shellRef}
-      className={`party-mobile-shell${isSidebarDrawerOpen ? " is-drawer-open" : ""}`}
+      className={`party-mobile-shell${isSidebarDrawerOpen ? " is-drawer-open" : ""}${hasCoding ? " has-coding" : ""}${activePane === "coding" ? " is-coding-pane" : ""}`}
       data-layout="mobile"
     >
+      <nav className="party-mobile-workspace-tabs" aria-label="协作区域">
+        <button type="button" onClick={() => setIsSidebarDrawerOpen((open) => !open)} aria-expanded={isSidebarDrawerOpen}>小组与任务</button>
+        {hasCoding ? <>
+          <button type="button" aria-pressed={activePane === "chat"} onClick={() => setActivePane("chat")}>讨论</button>
+          <button type="button" aria-pressed={activePane === "coding"} onClick={() => setActivePane("coding")}>编程</button>
+        </> : null}
+      </nav>
       <PartyChatDesktopPage
         isMobileSidebarDrawer
         isSidebarDrawerOpen={isSidebarDrawerOpen}

@@ -1,3 +1,6 @@
+import { registerPartyTemplateAdminRoutes } from "../modules/party-coding/template-service.js";
+import { readNavigatorUserIds } from "../../shared/party-roles.js";
+import { registerPartyMemberRoutes } from "../modules/party-coding/member-routes.js";
 import {
   buildAdminGroupChatsZipBundle,
 } from "../services/admin-group-chat-export.js";
@@ -1846,7 +1849,8 @@ export function registerAdminRoutes(app, deps) {
   });
 
   app.get("/api/auth/admin/collaboration-classrooms", async (req, res) => {
-    if (!(await authenticateAdminRequest(req, res))) return;
+    const admin = await authenticateAdminRequest(req, res);
+    if (!admin) return;
 
     const adminDefaultOrder = 200;
     const adminFallbackOrder = 80;
@@ -1961,6 +1965,7 @@ export function registerAdminRoutes(app, deps) {
               taskStage: 1,
               driverUserId: 1,
               navigatorUserId: 1,
+              navigatorUserIds: 1,
               roleRotationCount: 1,
               revision: 1,
               lastPreviewAt: 1,
@@ -1974,9 +1979,10 @@ export function registerAdminRoutes(app, deps) {
       );
       const allUsers = await AuthUser.find(
         {},
-        { username: 1, usernameKey: 1, profile: 1, role: 1 },
+        { username: 1, usernameKey: 1, profile: 1, role: 1, lockedTeacherScopeKey: 1 },
       ).lean();
       const userOptions = (Array.isArray(allUsers) ? allUsers : [])
+        .filter((user) => user.role !== "user" || canResetStudentPassword(admin, user))
         .map((user) => {
           const userId = sanitizeId(user?._id, "");
           if (!userId) return null;
@@ -1987,10 +1993,7 @@ export function registerAdminRoutes(app, deps) {
             username || "未知用户",
             64,
           );
-          const role =
-            sanitizeText(user?.role, "user", 20).toLowerCase() === "admin"
-              ? "admin"
-              : "user";
+          const role = sanitizeText(user?.role, "user", 20).toLowerCase();
           return {
             id: userId,
             username,
@@ -2106,6 +2109,7 @@ export function registerAdminRoutes(app, deps) {
                   taskStage: sanitizeText(workspace?.taskStage, "understand", 20),
                   driverUserId: sanitizeId(workspace?.driverUserId, ""),
                   navigatorUserId: sanitizeId(workspace?.navigatorUserId, ""),
+                  navigatorUserIds: readNavigatorUserIds(workspace),
                   roleRotationCount: Math.max(0, Number(workspace?.roleRotationCount || 0)),
                   revision: Math.max(0, Number(workspace?.revision || 0)),
                   lastPreviewAt: sanitizeIsoDate(workspace?.lastPreviewAt),
@@ -2207,7 +2211,7 @@ export function registerAdminRoutes(app, deps) {
 
         const memberUserIds = sanitizeGroupChatMemberUserIds(
           room.memberUserIds,
-        ).slice(0, 2);
+        ).slice(0, 3);
         const [memberDocs, messageDocs] = await Promise.all([
           AuthUser.find(
             { _id: { $in: memberUserIds } },
@@ -2624,7 +2628,7 @@ export function registerAdminRoutes(app, deps) {
         const CollaborationMemory = getPartyCollaborationMemoryModel(mongoose);
         const CompilationState = getPartyMemoryCompilationStateModel(mongoose);
         const MemoryUse = getPartyMemoryUseModel(mongoose);
-        const memberUserIds = sanitizeGroupChatMemberUserIds(room?.memberUserIds).slice(0, 2);
+        const memberUserIds = sanitizeGroupChatMemberUserIds(room?.memberUserIds).slice(0, 3);
         const [memories, compilation, pendingCandidateCount, strategyMemories, uses, memberDocs] = await Promise.all([
           LongitudinalMemory.find({ roomId, expiresAt: { $gt: new Date() } })
             .sort({ lastBoundaryAt: -1, subjectType: 1 })
@@ -3252,6 +3256,20 @@ export function registerAdminRoutes(app, deps) {
     },
   );
 
+  registerPartyTemplateAdminRoutes(app, {
+    mongoose, AdminConfig, TeachingCourse, AuthUser, GroupChatRoom, authenticateAdminRequest,
+    canManageCourse: (admin, course) => isTerminalAdminAccount(admin) || String(course.ownerTeacherId) === String(admin._id),
+    broadcastGroupChatWsPayload: deps.broadcastGroupChatWsPayload,
+  });
+
+  registerPartyMemberRoutes(app, {
+    mongoose, GroupChatRoom, AuthUser, authenticateAdminRequest,
+    canManageStudent: canResetStudentPassword, sanitizeId, isMongoObjectIdLike,
+    normalizeGroupChatRoomDoc, broadcastGroupChatRoomUpdated,
+    broadcastGroupChatMemberJoined: deps.broadcastGroupChatMemberJoined,
+    broadcastGroupChatWsPayload: deps.broadcastGroupChatWsPayload,
+  });
+
   app.post("/api/auth/admin/collaboration-classrooms", async (req, res) => {
     const admin = await authenticateAdminRequest(req, res);
     if (!admin) return;
@@ -3282,7 +3300,7 @@ export function registerAdminRoutes(app, deps) {
     try {
       const selectedUsers = await AuthUser.find(
         { _id: { $in: studentUserIds } },
-        { username: 1, profile: 1, role: 1 },
+        { username: 1, profile: 1, role: 1, lockedTeacherScopeKey: 1 },
       ).lean();
       const usersById = new Map(
         (Array.isArray(selectedUsers) ? selectedUsers : []).map((user) => [
@@ -3293,7 +3311,7 @@ export function registerAdminRoutes(app, deps) {
       const selectedStudents = studentUserIds
         .map((userId) => usersById.get(userId))
         .filter(Boolean);
-      if (selectedStudents.length !== 2) {
+      if (selectedStudents.length !== studentUserIds.length) {
         res.status(400).json({ error: "所选学生中存在已失效账号，请刷新后重试。" });
         return;
       }
@@ -3303,6 +3321,16 @@ export function registerAdminRoutes(app, deps) {
         )
       ) {
         res.status(400).json({ error: "结对成员只能选择学生账号。" });
+        return;
+      }
+
+      if (selectedStudents.some((user) => !canResetStudentPassword(admin, user)
+        || user.lockedTeacherScopeKey !== SHI_GAOJUN_TEACHER_SCOPE_KEY)) {
+        res.status(403).json({ error: "只能安排自己授权班级和课堂范围内的学生。" });
+        return;
+      }
+      if (new Set(selectedStudents.map((user) => String(user.profile?.className || "").trim())).size !== 1) {
+        res.status(400).json({ error: "请选择同一班级的学生。" });
         return;
       }
 
@@ -3351,6 +3379,7 @@ export function registerAdminRoutes(app, deps) {
         ownerUserId: finalStudentUserIds[0],
         memberUserIds: finalStudentUserIds,
         memberCount: finalStudentUserIds.length,
+        membershipHistory: [{ memberUserIds: finalStudentUserIds, effectiveAt: monitoringUpdatedAt, changedByAdminId: String(admin._id) }],
         announcement: sanitizeText(
           latestLessonAnnouncement?.announcement,
           "",

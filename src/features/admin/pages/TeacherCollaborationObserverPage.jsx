@@ -335,6 +335,7 @@ export default function TeacherCollaborationObserverPage() {
 
         <WebCollabPanel
           roomId={roomId}
+          imageAccessToken={observerToken}
           me={observer}
           members={members}
           taskText={room?.announcement || ""}

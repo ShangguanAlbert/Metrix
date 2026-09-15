@@ -104,3 +104,18 @@ test("participant metrics and normalized payload contain server-derived evidence
   );
   assert.deepEqual(normalized.evidenceMessageIds, ["message-1"]);
 });
+
+
+test("三人分析包含第三人的指标和介入目标", () => {
+  const participants = [1, 2, 3].map((i) => ({ key: `student_${i}`, userId: `u${i}`, name: `学生${i}` }));
+  const prompt = buildParticipationAnalysisPrompt({ participants, messages: [] });
+  assert.ok(prompt.includes("student_3 | 空字符串"));
+  const result = parseParticipationAnalysisOutput(JSON.stringify({
+    shouldIntervene: true, participationStatus: "imbalanced", confidence: 0.9,
+    targetParticipantKey: "student_3", reasonCodes: ["silent_partner"],
+    evidenceSummary: "第三名学生尚未参与讨论", studentPrompt: "请每位同学分享一个检查点。",
+  }), participants.map((p) => p.key));
+  assert.equal(result.targetParticipantKey, "student_3");
+  const payload = normalizeParticipationAnalysisPayload({ ...result, participantMetrics: buildParticipantMetrics(participants, []) });
+  assert.equal(payload.participantMetrics.length, 3);
+});

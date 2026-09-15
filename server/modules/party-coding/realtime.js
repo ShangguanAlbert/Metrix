@@ -1,3 +1,5 @@
+import { normalizeWorkspace } from "./workspace-state.js";
+import { canDriveParty } from "../../../shared/party-roles.js";
 import * as Y from "yjs";
 import {
   Awareness,
@@ -35,32 +37,6 @@ function estimateChangedCharacters(beforeValue, afterValue) {
   return (before.length - prefix - suffix) + (after.length - prefix - suffix);
 }
 
-function normalizeWorkspace(doc) {
-  if (!doc) return null;
-  return {
-    roomId: String(doc.roomId || ""),
-    html: sanitizeDocument(doc.html),
-    css: sanitizeDocument(doc.css),
-    revision: Math.max(1, Number(doc.revision || 1)),
-    taskRevision: Math.max(1, Number(doc.taskRevision || 1)),
-    taskId: `${String(doc.roomId || "")}:${Math.max(1, Number(doc.taskRevision || 1))}`,
-    taskStage: String(doc.taskStage || "understand"),
-    driverUserId: String(doc.driverUserId || ""),
-    navigatorUserId: String(doc.navigatorUserId || ""),
-    roleRotationCount: Math.max(0, Number(doc.roleRotationCount || 0)),
-    rolesUpdatedAt: doc.rolesUpdatedAt ? new Date(doc.rolesUpdatedAt).toISOString() : "",
-    lastPreviewAt: doc.lastPreviewAt ? new Date(doc.lastPreviewAt).toISOString() : "",
-    lastPreviewByUserId: String(doc.lastPreviewByUserId || ""),
-    lastDiagnostics: Array.isArray(doc.lastDiagnostics) ? doc.lastDiagnostics.map(String).slice(0, 20) : [],
-    versions: (Array.isArray(doc.versions) ? doc.versions : []).map((item) => ({
-      revision: Number(item?.revision || 0),
-      html: sanitizeDocument(item?.html),
-      css: sanitizeDocument(item?.css),
-      savedByName: String(item?.savedByName || "成员").slice(0, 60),
-      createdAt: item?.createdAt ? new Date(item.createdAt).toISOString() : "",
-    })),
-  };
-}
 
 function encodeUpdate(update) {
   return Buffer.from(update).toString("base64");
@@ -95,6 +71,16 @@ export function createPartyCodingRealtime(deps) {
   const Workspace = getPartyWebWorkspaceModel(mongoose);
   const learning = createPartyLearningService(deps);
   const rooms = new Map();
+  const operations = new Map();
+
+  function withRoomLock(roomId, operation) {
+    const previous = operations.get(roomId) || Promise.resolve();
+    const next = previous.catch(() => {}).then(operation);
+    operations.set(roomId, next);
+    void next.finally(() => { if (operations.get(roomId) === next) operations.delete(roomId); }).catch(() => {});
+    return next;
+  }
+
 
   async function getRoom(roomId) {
     const safeRoomId = sanitizeId(roomId, "");
@@ -135,6 +121,7 @@ export function createPartyCodingRealtime(deps) {
     }
     const room = {
       roomId,
+      epoch: Number(workspace?.documentEpoch || 0),
       doc,
       htmlText,
       cssText,
@@ -239,7 +226,12 @@ export function createPartyCodingRealtime(deps) {
     };
   }
 
-  async function handleWsMessage({ socket, payload, meta }) {
+  async function handleWsMessage(input) {
+    if (!String(input.payload?.type || "").startsWith("coding_collab_")) return false;
+    return withRoomLock(sanitizeId(input.payload?.roomId, ""), () => handleLockedWsMessage(input));
+  }
+
+  async function handleLockedWsMessage({ socket, payload, meta }) {
     const type = String(payload?.type || "").trim().toLowerCase();
     if (!type.startsWith("coding_collab_")) return false;
     const roomId = sanitizeId(payload?.roomId, "");
@@ -266,6 +258,7 @@ export function createPartyCodingRealtime(deps) {
       sendGroupChatWsPayload(socket, {
         type: "coding_collab_sync",
         roomId,
+        documentEpoch: room.epoch,
         update: encodeUpdate(Y.encodeStateAsUpdate(room.doc)),
       });
       const awarenessClientIds = Array.from(room.awareness.getStates().keys());
@@ -310,7 +303,7 @@ export function createPartyCodingRealtime(deps) {
     if (type === "coding_collab_update") {
       const workspace = await Workspace.findOne(
         { roomId },
-        { driverUserId: 1, navigatorUserId: 1 },
+        { driverUserId: 1, navigatorUserId: 1, navigatorUserIds: 1 },
       ).lean();
       const driverUserId = sanitizeId(workspace?.driverUserId, "");
       const navigatorUserId = sanitizeId(workspace?.navigatorUserId, "");
@@ -322,12 +315,17 @@ export function createPartyCodingRealtime(deps) {
         });
         return true;
       }
-      if (driverUserId !== sanitizeId(meta.userId, "")) {
+      if (!canDriveParty(workspace, sanitizeId(meta.userId, ""))) {
         sendGroupChatWsPayload(socket, {
           type: "coding_collab_error",
           roomId,
           error: "当前由 Driver 操作代码，请以 Navigator 身份参与讨论和检查。",
         });
+        return true;
+      }
+      if (Number(payload.documentEpoch || 0) !== room.epoch) {
+        sendGroupChatWsPayload(socket, { type: "coding_collab_reset", roomId, documentEpoch: room.epoch,
+          error: "工作区已载入新版本，正在同步最新内容。" });
         return true;
       }
       const update = decodeUpdate(payload?.update);
@@ -336,6 +334,7 @@ export function createPartyCodingRealtime(deps) {
       broadcastGroupChatWsPayload(roomId, {
         type: "coding_collab_update",
         roomId,
+        documentEpoch: room.epoch,
         update: encodeUpdate(update),
       });
       return true;
@@ -358,25 +357,59 @@ export function createPartyCodingRealtime(deps) {
     return true;
   }
 
-  async function replaceRoomDocuments({ roomId, html, css, author }) {
-    const room = await getRoom(roomId);
-    const before = Y.encodeStateVector(room.doc);
-    room.doc.transact(() => {
-      room.htmlText.delete(0, room.htmlText.length);
-      room.cssText.delete(0, room.cssText.length);
-      room.htmlText.insert(0, sanitizeDocument(html));
-      room.cssText.insert(0, sanitizeDocument(css));
-    }, { partyCodingAuthor: author });
-    const update = Y.encodeStateAsUpdate(room.doc, before);
-    if (update.length) {
-      broadcastGroupChatWsPayload(room.roomId, {
-        type: "coding_collab_update",
-        roomId: room.roomId,
-        update: encodeUpdate(update),
+  async function replaceRoomDocuments(options) {
+    return withRoomLock(options.roomId, async () => {
+      const { roomId, html, css, author, expectedStateVector, expectedEpoch, template, requestId, requireDriver = false } = options;
+      const room = await getRoom(roomId);
+      const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
+      const current = await Workspace.findOne({ roomId }).lean();
+      if (requireDriver && !canDriveParty(current, author.userId)) fail(403, "角色已变化，仅当前 Driver 可以修改代码。");
+      if (template) {
+        if (current?.loadedTemplate?.requestId === requestId) return normalizeWorkspace(current);
+        if (!canDriveParty(current, author.userId)) fail(403, "角色已变化，仅当前 Driver 可以载入模板。");
+        if (expectedEpoch !== room.epoch || expectedStateVector !== encodeUpdate(Y.encodeStateVector(room.doc))) {
+          fail(409, "代码已变化，请等待同步完成后重新载入模板。");
+        }
+      }
+      // Flush the original shared document before creating its recovery snapshot.
+      const saved = await persistRoom(room);
+      if (!saved) fail(500, "保存原作品失败，未载入新内容。");
+      if (!(saved.versions || []).some((version) => Number(version.revision) === Number(saved.revision))) await Workspace.updateOne({ roomId }, { $push: { versions: { $each: [{
+        revision: saved.revision, html: saved.html, css: saved.css,
+        savedByUserId: author.userId, savedByName: author.name, createdAt: new Date(),
+      }], $slice: -VERSION_LIMIT } } });
+      const nextDoc = new Y.Doc();
+      nextDoc.getText("html").insert(0, sanitizeDocument(html));
+      nextDoc.getText("css").insert(0, sanitizeDocument(css));
+      const documentEpoch = room.epoch + 1;
+      const loadedTemplate = template ? { lessonId: template.lessonId, version: template.version, requestId, loadedAt: new Date(), loadedByUserId: author.userId } : current.loadedTemplate;
+      const workspace = await Workspace.findOneAndUpdate({ roomId }, {
+        $set: { html: sanitizeDocument(html), css: sanitizeDocument(css),
+          collaborationState: Buffer.from(Y.encodeStateAsUpdate(nextDoc)), documentEpoch, loadedTemplate },
+        $inc: { revision: 1 },
+      }, { new: true }).lean();
+      if (!workspace) { nextDoc.destroy(); fail(409, "工作区已变化，未载入新内容。"); }
+      room.doc.destroy();
+      room.awareness.destroy();
+      room.doc = nextDoc;
+      room.htmlText = nextDoc.getText("html");
+      room.cssText = nextDoc.getText("css");
+      room.awareness = new Awareness(nextDoc);
+      room.clientIdsBySocket.clear();
+      room.epoch = documentEpoch;
+      room.lastAuthor = author;
+      nextDoc.on("update", (_update, origin) => {
+        if (origin?.partyCodingAuthor) room.lastAuthor = origin.partyCodingAuthor;
+        schedulePersist(room);
       });
-    }
-    const workspace = await persistRoom(room, author);
-    return normalizeWorkspace(workspace);
+      broadcastGroupChatWsPayload(roomId, { type: "coding_collab_reset", roomId, documentEpoch });
+      await learning.recordEvent({ roomId, userId: author.userId, userName: author.name,
+        eventType: template ? "template_load" : "code_edit", workspace,
+        metadata: template ? { lessonId: template.lessonId, templateVersion: template.version, previousRevision: saved.revision }
+          : { revision: workspace.revision, previousRevision: saved.revision, documents: ["html", "css"] },
+      });
+      return normalizeWorkspace(workspace);
+    });
   }
 
   function handleSocketRoomLeft(socket, roomId) {
@@ -399,6 +432,7 @@ export function createPartyCodingRealtime(deps) {
   }
 
   return {
+    withRoomLock,
     handleWsMessage,
     handleSocketRoomLeft,
     handleSocketClosed,

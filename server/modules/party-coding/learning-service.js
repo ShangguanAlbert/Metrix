@@ -1,3 +1,5 @@
+import { normalizeWorkspace } from "./workspace-state.js";
+import { readNavigatorUserIds } from "../../../shared/party-roles.js";
 import {
   getPartyCollaborationMemoryCandidateModel,
   getPartyLearningEventModel,
@@ -62,14 +64,11 @@ function findParticipationImbalance(events, context) {
   const [dominantUserId, dominantCount] = ranked[0];
   const ratio = dominantCount / edits.length;
   if (ratio < 0.8) return null;
-  const targetUserId = dominantUserId === context.driverUserId
-    ? context.navigatorUserId
-    : context.driverUserId;
+  const targetUserId = [context.driverUserId, ...readNavigatorUserIds(context)]
+    .find((id) => id && id !== dominantUserId && !events.some(
+      (event) => event?.userId === id && event?.eventType === "chat_message",
+    ));
   if (!targetUserId) return null;
-  const targetContributed = events.some(
-    (event) => event?.userId === targetUserId && event?.eventType === "chat_message",
-  );
-  if (targetContributed) return null;
   const targetName = context.memberNames?.[targetUserId] || "另一位同学";
   return {
     triggerType: "participation_imbalance",
@@ -254,7 +253,7 @@ export function createPartyLearningService(deps) {
   function resolveRole(workspace, userId) {
     const safeUserId = safeText(userId, 100);
     if (safeUserId && safeUserId === safeText(workspace?.driverUserId, 100)) return "driver";
-    if (safeUserId && safeUserId === safeText(workspace?.navigatorUserId, 100)) return "navigator";
+    if (safeUserId && readNavigatorUserIds(workspace).includes(safeUserId)) return "navigator";
     return "observer";
   }
 
@@ -262,7 +261,9 @@ export function createPartyLearningService(deps) {
     const safeRoomId = safeText(roomId, 100);
     if (!safeRoomId || !eventType) return null;
     const [monitoringState, currentWorkspace] = await Promise.all([
-      readMonitoringState(safeRoomId),
+      eventType === "template_load"
+        ? GroupChatRoom.findOne({ _id: safeRoomId, teacherScopeKey: "shi-gaojun" }, { _id: 1 }).lean()
+        : readMonitoringState(safeRoomId),
       workspace ? Promise.resolve(workspace) : readWorkspace(safeRoomId),
     ]);
     if (!monitoringState) return null;
@@ -327,20 +328,7 @@ export function createPartyLearningService(deps) {
     deps.broadcastGroupChatWsPayload?.(safeRoomId, {
       type: "coding_collab_workspace_updated",
       roomId: safeRoomId,
-      workspace: {
-        roomId: safeRoomId,
-        revision: Math.max(1, Number(workspace.revision || 1)),
-        taskStage: workspace.taskStage,
-        taskRevision: workspace.taskRevision,
-        taskId: `${safeRoomId}:${workspace.taskRevision}`,
-        driverUserId: safeText(workspace.driverUserId, 100),
-        navigatorUserId: safeText(workspace.navigatorUserId, 100),
-        roleRotationCount: Math.max(0, Number(workspace.roleRotationCount || 0)),
-        rolesUpdatedAt: workspace.rolesUpdatedAt ? new Date(workspace.rolesUpdatedAt).toISOString() : "",
-        lastPreviewAt: workspace.lastPreviewAt ? new Date(workspace.lastPreviewAt).toISOString() : "",
-        lastPreviewByUserId: safeText(workspace.lastPreviewByUserId, 100),
-        lastDiagnostics: Array.isArray(workspace.lastDiagnostics) ? workspace.lastDiagnostics.map(String).slice(0, 20) : [],
-      },
+      workspace: normalizeWorkspace(workspace),
     });
     deps.broadcastGroupChatWsPayload?.(safeRoomId, {
       type: "coding_collab_intervention",

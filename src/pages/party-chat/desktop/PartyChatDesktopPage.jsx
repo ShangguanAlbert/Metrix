@@ -110,14 +110,14 @@ const PARTY_GUIDE_ITEMS = Object.freeze([
   ["加入协作", "通过左侧“+”创建派，或输入派号加入已有协作组。"],
   ["发布任务", "派主可在左栏发布任务并上传附件；群聊 AI 会据此理解当前协作目标。"],
   ["群聊与琳琳", "在消息框中输入 @AI 提问。琳琳会给出追问、概念解释和局部示例，不会替你完成整个网页。"],
-  ["网页结对编程", "两名同学以 Driver 和 Navigator 角色共同编写 HTML/CSS、刷新预览并按任务要求轮换角色。"],
+  ["网页结对编程", "组内同学以 Driver 和 Navigator 角色共同编写 HTML/CSS、刷新预览并按任务要求轮换角色。"],
   ["调整布局", "点击左下角边栏按钮可显示或隐藏“我的派”；拖动聊天区和网页编程区之间的分隔条可调整宽度。"],
 ]);
 const PAIA_CLASSROOM_GUIDE_ITEMS = Object.freeze([
-  ["进入小教室", "老师会提前安排两名学生进入同一间协作小教室，学生无需创建或加入。"],
+  ["进入小教室", "老师会提前安排小组全体学生进入同一间协作小教室，学生无需创建或加入。"],
   ["查看任务", "左侧任务发布栏展示老师布置的网页设计任务和附件。"],
   ["讨论与琳琳", "正常发送消息可与同伴讨论；需要帮助时点击“问琳琳”，无需输入 @AI。"],
-  ["网页结对编程", "两名同学轮流担任 Driver 和 Navigator，共同编写 HTML/CSS、检查代码并预览网页。"],
+  ["网页结对编程", "组内同学轮流担任 Driver 和 Navigator，共同编写 HTML/CSS、检查代码并预览网页。"],
   ["调整布局", "页面固定为协作信息、讨论区和编程区三栏；拖动讨论区与编程区之间的分隔条可调整宽度。"],
 ]);
 
@@ -2097,8 +2097,8 @@ export default function PartyChatDesktopPage({
     socketRef.current?.leaveCodingCollaboration(roomId);
   }, []);
 
-  const sendCodingCollaborationUpdate = useCallback((roomId, update) => {
-    socketRef.current?.sendCodingCollaborationUpdate(roomId, update);
+  const sendCodingCollaborationUpdate = useCallback((roomId, update, documentEpoch) => {
+    socketRef.current?.sendCodingCollaborationUpdate(roomId, update, documentEpoch);
   }, []);
 
   const sendCodingCollaborationAwareness = useCallback((roomId, update, clientIds) => {
@@ -4334,6 +4334,7 @@ export default function PartyChatDesktopPage({
         {String(getStoredAuthUser()?.teacherScopeKey || "").trim().toLowerCase() === SHI_GAOJUN_TEACHER_SCOPE_KEY ? (
           activeRoom ? <WebCollabPanel
             roomId={activeRoom.id}
+            ownerUserId={activeRoom.ownerUserId}
             me={me}
             members={activeMembers}
             taskText={activeRoom.announcement}

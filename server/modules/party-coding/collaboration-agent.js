@@ -124,10 +124,10 @@ export function buildFriendlySupportPrompt({
   const prompts = {
     goal_success_criteria: `${stageHint}请你们先用一句话对齐：这一步准备完成什么、怎样算完成；确认后再继续。`,
     goal_restate: `${stageHint}可以请一位同学复述当前目标，另一位补充一个容易遗漏的要求，再一起确认下一步。`,
-    explanation_round: `${stageHint}不妨轮流说一句“我这样建议，是因为……”。把两人的理由放在一起，再决定下一步。`,
+    explanation_round: `${stageHint}不妨轮流说一句“我这样建议，是因为……”。把各位同学的理由放在一起，再决定下一步。`,
     option_compare: `${stageHint}可以各自提出一个做法，并一起比较它们对当前任务的一个好处和一个限制，再作选择。`,
     driver_navigator_check: `${stageHint}可以把操作和观察配合起来：Driver先说准备修改哪里，Navigator补充一个检查点；确认后再动手。`,
-    two_voice_checkpoint: `${stageHint}可以先暂停修改，请两位同学各说一个下一步建议，再共同选出这轮先尝试的一项。`,
+    two_voice_checkpoint: `${stageHint}可以先暂停修改，请每位同学各说一个下一步建议，再共同选出这轮先尝试的一项。`,
     hypothesis_test: `${stageHint}可以先一起选一个最值得检查的问题：一人提出可能原因，另一人设计一个小验证，再看预览结果。`,
     smallest_reproduction: `${stageHint}不妨先把问题缩小到最小的一处：一位同学定位现象，另一位只改一个变量，然后一起核对结果。`,
     adopt_or_reject: `${stageHint}如果刚参考了琳琳的建议，请你们先各自指出一处准备采用或暂不采用的内容，并用预览验证。`,

@@ -1,3 +1,4 @@
+import { normalizeProgrammingTemplate } from "../../shared/party-template.js";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -1164,6 +1165,10 @@ const groupChatRoomSchema = new mongoose.Schema(
       type: [String],
       default: () => [],
     },
+    membershipHistory: {
+      type: [{ memberUserIds: [String], effectiveAt: Date, changedByAdminId: String }],
+      default: () => [],
+    },
     mutedMemberUserIds: {
       type: [String],
       default: () => [],
@@ -1563,6 +1568,7 @@ const adminClassroomCoursePlanSchema = new mongoose.Schema(
     notes: { type: String, default: "" },
     announcement: { type: String, default: "" },
     announcementUpdatedAt: { type: String, default: "" },
+    programmingTemplate: { type: new mongoose.Schema({ html: String, css: String }, { _id: false }), default: () => ({ html: "", css: "" }) },
     homeworkRequirementText: { type: String, default: "" },
     enabled: { type: Boolean, default: true },
     homeworkUploadEnabled: { type: Boolean, default: true },
@@ -7641,6 +7647,7 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
     notes,
     announcement,
     announcementUpdatedAt,
+    programmingTemplate: normalizeProgrammingTemplate(source.programmingTemplate),
     homeworkRequirementText,
     enabled,
     homeworkUploadEnabled,
@@ -12801,7 +12808,7 @@ async function handleGroupChatWsAuth(socket, payload) {
   if (
     observerRoomId &&
     (!isMongoObjectIdLike(observerRoomId) ||
-      String(user?.role || "").trim().toLowerCase() !== "admin")
+      !isTeacherAdminUser(user) || readAccountStatus(user) !== ACCOUNT_STATUS_ACTIVE)
   ) {
     sendGroupChatWsError(
       socket,

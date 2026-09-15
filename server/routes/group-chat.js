@@ -21,7 +21,7 @@ import {
 
 const GROUP_CHAT_TASK_ATTACHMENT_CONTEXT_MAX_CHARS = 8_000;
 const PAIA_TEACHER_SCOPE_KEY = "shi-gaojun";
-const PAIA_PAIR_MEMBER_LIMIT = 2;
+const PAIA_PAIR_MEMBER_LIMIT = 3;
 const PAIA_CLASSROOM_MANAGEMENT_ERROR = "协作小教室由施高俊老师统一分配，学生不能进行此操作。";
 
 function isPaiaClassroomStudentRequest(req) {

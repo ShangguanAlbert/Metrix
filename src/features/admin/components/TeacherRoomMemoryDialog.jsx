@@ -110,7 +110,7 @@ function readEventDetail(event) {
     return `${documents || "代码"}，修改约 ${Number(metadata.changedCharacters || 0)} 个字符，版本 ${Number(metadata.revision || 0)}`;
   }
   if (event?.eventType === "preview") return "学生刷新并检查了当前网页预览。";
-  if (event?.eventType === "role_rotation") return "两名学生进行了 Driver/Navigator 角色交接。";
+  if (event?.eventType === "role_rotation") return "小组成员进行了 Driver/Navigator 角色交接。";
   if (metadata.feedback) return `${metadata.feedback}${metadata.note ? `：${metadata.note}` : ""}`;
   return "已记录该过程事件。";
 }

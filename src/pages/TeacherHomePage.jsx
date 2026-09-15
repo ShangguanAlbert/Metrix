@@ -1,3 +1,5 @@
+import ProgrammingTemplateEditor from "../features/admin/components/ProgrammingTemplateEditor.jsx";
+import { readNavigatorUserIds } from "../../shared/party-roles.js";
 import {
   Fragment,
   memo,
@@ -76,6 +78,7 @@ import {
   backfillAdminGeneratedImageThumbnails,
   bindAdminUserDirectoryStudent,
   createAdminCollaborationClassroom,
+  addAdminCollaborationMember,
   createAdminTeachingCourseClass,
   createAdminTeachingCourse,
   deleteAdminTeachingCourse,
@@ -191,7 +194,7 @@ const USER_CREATE_DEFAULT_TEACHER_SCOPE_KEY =
     USER_CREATE_BINDABLE_TEACHER_SCOPE_OPTIONS[0]?.key ||
       DEFAULT_TEACHER_SCOPE_KEY,
   ).trim() || DEFAULT_TEACHER_SCOPE_KEY;
-const PAIR_CLASSROOM_STUDENT_LIMIT = 2;
+const PAIR_CLASSROOM_STUDENT_LIMIT = 3;
 
 function formatCourseKnowledgePointLines(points) {
   const safePoints = Array.isArray(points) ? points : [];
@@ -3261,12 +3264,7 @@ export default function TeacherHomePage() {
               item?.displayName || item?.username || "未命名用户",
             ).trim() || "未命名用户",
           username: String(item?.username || "").trim(),
-          role:
-            String(item?.role || "user")
-              .trim()
-              .toLowerCase() === "admin"
-              ? "admin"
-              : "user",
+          role: String(item?.role || "user").trim().toLowerCase(),
           className: String(item?.className || "").trim(),
           studentId: String(item?.studentId || "").trim(),
         }))
@@ -4887,15 +4885,17 @@ export default function TeacherHomePage() {
     });
   }
 
-  function openPairClassroomCreateDialog() {
-    if (pairClassroomStudentOptions.length < PAIR_CLASSROOM_STUDENT_LIMIT) {
+  function openPairClassroomCreateDialog(room = null) {
+    if (!room && pairClassroomStudentOptions.length < 2) {
       setError("系统内可选学生不足两人，请先在用户信息中创建学生账号。");
       return;
     }
     setPairClassroomCreateDialog({
       open: true,
-      name: "",
-      studentUserIds: [],
+      roomId: room?.id || "",
+      fixedStudentIds: room?.members?.map((member) => member.id) || [],
+      name: room?.name || "",
+      studentUserIds: room?.members?.map((member) => member.id) || [],
       studentKeyword: "",
       error: "",
       saving: false,
@@ -4904,7 +4904,7 @@ export default function TeacherHomePage() {
 
   function onTogglePairClassroomStudent(studentUserId) {
     const safeStudentUserId = String(studentUserId || "").trim();
-    if (!safeStudentUserId) return;
+    if (!safeStudentUserId || pairClassroomCreateDialog.fixedStudentIds?.includes(safeStudentUserId)) return;
     setPairClassroomCreateDialog((current) => {
       const nextStudentUserIds = Array.from(
         new Set(
@@ -4924,7 +4924,7 @@ export default function TeacherHomePage() {
       } else {
         return {
           ...current,
-          error: "每个结对小教室只能选择两名学生。",
+          error: "每个小教室最多选择三名学生。",
         };
       }
       return {
@@ -4956,14 +4956,18 @@ export default function TeacherHomePage() {
       }));
       return;
     }
-    if (studentUserIds.length !== PAIR_CLASSROOM_STUDENT_LIMIT) {
+    if (studentUserIds.length < 2 || studentUserIds.length > PAIR_CLASSROOM_STUDENT_LIMIT) {
       setPairClassroomCreateDialog((current) => ({
         ...current,
-        error: "请选择两名学生组成结对。",
+        error: "请选择 2～3 名学生组成小组。",
       }));
       return;
     }
 
+    if (pairClassroomCreateDialog.roomId && studentUserIds.length !== 3) {
+      setPairClassroomCreateDialog((current) => ({ ...current, error: "请选择一名新成员。" }));
+      return;
+    }
     setPairClassroomCreateDialog((current) => ({
       ...current,
       saving: true,
@@ -4971,10 +4975,12 @@ export default function TeacherHomePage() {
     }));
     setError("");
     try {
-      await createAdminCollaborationClassroom(adminToken, {
-        name: roomName,
-        studentUserIds,
-      });
+      if (pairClassroomCreateDialog.roomId) {
+        await addAdminCollaborationMember(adminToken, pairClassroomCreateDialog.roomId,
+          studentUserIds.find((id) => !pairClassroomCreateDialog.fixedStudentIds.includes(id)));
+      } else {
+        await createAdminCollaborationClassroom(adminToken, { name: roomName, studentUserIds });
+      }
       closePairClassroomCreateDialog();
       await loadPartyRoomManage();
     } catch (rawError) {
@@ -7113,6 +7119,8 @@ export default function TeacherHomePage() {
                           ) : null}
                         </section>
 
+                        <ProgrammingTemplateEditor key={selectedCourse.id} lesson={selectedCourse}
+                          onChange={onUpdateSelectedLesson} onSave={persistClassroomConfig} adminToken={adminToken} />
                         <div className="teacher-task-draft-head">
                           <div className="teacher-task-draft-title">
                             <strong>课时任务</strong>
@@ -9779,7 +9787,7 @@ export default function TeacherHomePage() {
                     <button
                       type="button"
                       className="teacher-primary-btn teacher-tooltip-btn teacher-action-icon-btn"
-                      onClick={openPairClassroomCreateDialog}
+                      onClick={() => openPairClassroomCreateDialog()}
                       disabled={partyRoomManageLoading}
                       aria-label="新建结对小教室"
                       title="新建结对小教室"
@@ -9873,7 +9881,7 @@ export default function TeacherHomePage() {
                                 .trim()
                                 .toLowerCase() === "user",
                           )
-                          .slice(0, 2);
+                          .slice(0, 3);
                         const codingProgress = room?.codingProgress || null;
                         const monitoringEnabled =
                           room?.paiaMonitoringEnabled === true;
@@ -9892,9 +9900,11 @@ export default function TeacherHomePage() {
                             <header className="teacher-party-room-head">
                               <div>
                                 <h3>{room?.name || "未命名小教室"}</h3>
-                                <p>{`学生 ${students.length}/2 · 最近更新 ${formatDisplayTime(room?.updatedAt)}`}</p>
+                                <p>{`学生 ${students.length} 人 · 最近更新 ${formatDisplayTime(room?.updatedAt)}`}</p>
                               </div>
                               <div className="teacher-collab-room-head-actions">
+                                {students.length === 2 ? <button type="button" className="teacher-ghost-btn"
+                                  onClick={() => openPairClassroomCreateDialog(room)}>添加成员</button> : null}
                                 <button
                                   type="button"
                                   className="teacher-ghost-btn teacher-collab-observe-btn"
@@ -9967,7 +9977,7 @@ export default function TeacherHomePage() {
                                 </div>
                                 <div>
                                   <span>{`Driver：${findStudentName(codingProgress.driverUserId)}`}</span>
-                                  <span>{`Navigator：${findStudentName(codingProgress.navigatorUserId)}`}</span>
+                                  <span>{`Navigator：${readNavigatorUserIds(codingProgress).map(findStudentName).join("、")}`}</span>
                                   <span>
                                     {codingProgress.lastPreviewAt
                                       ? `最近预览：${formatDisplayTime(codingProgress.lastPreviewAt)}`
@@ -10203,10 +10213,10 @@ export default function TeacherHomePage() {
                 className="teacher-time-card teacher-party-create-card"
                 role="dialog"
                 aria-modal="true"
-                aria-label="新建结对编程小教室"
+                aria-label={pairClassroomCreateDialog.roomId ? "添加小组成员" : "新建结对编程小教室"}
                 onClick={(event) => event.stopPropagation()}
               >
-                <h3>新建结对编程小教室</h3>
+                <h3>{pairClassroomCreateDialog.roomId ? "添加小组成员" : "新建结对编程小教室"}</h3>
                 <form
                   className="teacher-time-form"
                   onSubmit={onSubmitPairClassroomCreateDialog}
@@ -10216,6 +10226,7 @@ export default function TeacherHomePage() {
                       <span>小教室名称（必填）</span>
                       <input
                         type="text"
+                        disabled={Boolean(pairClassroomCreateDialog.roomId)}
                         value={pairClassroomCreateDialog.name}
                         onChange={(event) =>
                           setPairClassroomCreateDialog((current) => ({
@@ -10236,7 +10247,7 @@ export default function TeacherHomePage() {
                   <div className="teacher-party-create-members">
                     <div className="teacher-party-create-members-head">
                       <div className="teacher-party-create-members-head-left">
-                        <span>结对学生（必须选择两人）</span>
+                        <span>小组学生（选择 2～3 人）</span>
                         <span className="teacher-party-create-members-hint">
                           从系统现有学生账号中选择
                         </span>
@@ -10304,7 +10315,7 @@ export default function TeacherHomePage() {
                                 onChange={() =>
                                   onTogglePairClassroomStudent(student.id)
                                 }
-                                disabled={checkboxDisabled}
+                                disabled={checkboxDisabled || pairClassroomCreateDialog.saving || pairClassroomCreateDialog.fixedStudentIds?.includes(student.id)}
                               />
                               <div className="teacher-party-create-member-main">
                                 <strong>{student.displayName}</strong>
@@ -10347,7 +10358,7 @@ export default function TeacherHomePage() {
                       onClick={() =>
                         setPairClassroomCreateDialog((current) => ({
                           ...current,
-                          studentUserIds: [],
+                          studentUserIds: current.fixedStudentIds || [],
                           error: "",
                         }))
                       }
@@ -10367,8 +10378,8 @@ export default function TeacherHomePage() {
                       disabled={pairClassroomCreateDialog.saving}
                     >
                       {pairClassroomCreateDialog.saving
-                        ? "创建中..."
-                        : "创建小教室"}
+                        ? "保存中..."
+                        : pairClassroomCreateDialog.roomId ? "添加成员" : "创建小教室"}
                     </button>
                   </div>
                 </form>

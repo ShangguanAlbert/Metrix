@@ -1,3 +1,6 @@
+import { findImageSourceAtSelection } from "../../../../shared/party-images.js";
+import { resolvePartyPreviewImages } from "../../../features/party/previewImages.js";
+import { readNavigatorUserIds, canDriveParty } from "../../../../shared/party-roles.js";
 import { Bot, CircleAlert, Download, Eye, RefreshCcw, Repeat2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
@@ -8,6 +11,10 @@ import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import { yCollab } from "y-codemirror.next";
 import {
+  uploadPartyProgrammingImage,
+  restorePartyWebWorkspace,
+  fetchPartyProgrammingTemplate,
+  loadPartyProgrammingTemplate,
   recordPartyWebPreview,
   submitPartyPaiaFeedback,
   updatePartyCodingSession,
@@ -90,7 +97,16 @@ export default function WebCollabPanel({
   onCollaborationAwareness,
   subscribeToCollaboration,
   readOnlyObserver = false,
+  ownerUserId = "",
+  imageAccessToken = "",
 }) {
+  const [imageTarget, setImageTarget] = useState(null);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [restoreRevision, setRestoreRevision] = useState("");
+  const [syncGeneration, setSyncGeneration] = useState(0);
+  const [templateRefresh, setTemplateRefresh] = useState(0);
+  const [lessonTemplate, setLessonTemplate] = useState(null);
+  const [templateConfirmOpen, setTemplateConfirmOpen] = useState(false);
   const [activeDocument, setActiveDocument] = useState("html");
   const [ready, setReady] = useState(false);
   const [workspace, setWorkspace] = useState(null);
@@ -105,6 +121,21 @@ export default function WebCollabPanel({
   const editingRef = useRef(false);
   const sessionRef = useRef(null);
   const callbacksRef = useRef({});
+  const editorViewRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const imageSelectionRef = useRef(null);
+  const permissionRef = useRef(false);
+  const previewRequestRef = useRef(0);
+
+  const renderPreview = useCallback(async (html, css) => {
+    const request = ++previewRequestRef.current;
+    try {
+      const resolvedHtml = await resolvePartyPreviewImages(html, roomId, imageAccessToken);
+      if (request !== previewRequestRef.current) return;
+      setPreviewDocument(buildSafePreviewDocument(resolvedHtml, css));
+      setDiagnostics(analyzeWebCode(html, css));
+    } catch (error) { if (request === previewRequestRef.current) setActionError(error.message); }
+  }, [roomId, imageAccessToken]);
 
   useEffect(() => {
     callbacksRef.current = {
@@ -129,7 +160,7 @@ export default function WebCollabPanel({
     const cssText = doc.getText("css");
     const awareness = new Awareness(doc);
     const collaboratorColor = getCollaboratorColor(me?.id);
-    const session = { doc, htmlText, cssText, awareness, initialized: false };
+    const session = { doc, htmlText, cssText, awareness, initialized: false, documentEpoch: 0 };
     sessionRef.current = session;
     setReady(false);
     setWorkspace(null);
@@ -145,7 +176,7 @@ export default function WebCollabPanel({
 
     const handleDocumentUpdate = (update, origin) => {
       if (origin === REMOTE_DOCUMENT_ORIGIN || readOnlyObserver) return;
-      callbacksRef.current.onCollaborationUpdate?.(roomId, encodeBase64(update));
+      if (session.initialized) callbacksRef.current.onCollaborationUpdate?.(roomId, encodeBase64(update), session.documentEpoch);
     };
     const handleAwarenessUpdate = ({ added, updated, removed }, origin) => {
       if (origin === REMOTE_AWARENESS_ORIGIN || readOnlyObserver) return;
@@ -159,7 +190,19 @@ export default function WebCollabPanel({
     };
     const handleCollaborationMessage = (payload) => {
       const type = String(payload?.type || "").trim().toLowerCase();
+      if (type === "coding_collab_reset") {
+        session.initialized = false;
+        setReady(false);
+        setSyncGeneration((value) => value + 1);
+        return;
+      }
+      if (type === "coding_collab_template_published") {
+        setTemplateRefresh((value) => value + 1);
+        return;
+      }
       if (type === "coding_collab_sync" || type === "coding_collab_update") {
+        if (type === "coding_collab_sync") session.documentEpoch = Number(payload.documentEpoch || 0);
+        if (type === "coding_collab_update" && (!session.initialized || Number(payload.documentEpoch || 0) !== session.documentEpoch)) return;
         const update = decodeBase64(payload?.update);
         if (!update) return;
         Y.applyUpdate(doc, update, REMOTE_DOCUMENT_ORIGIN);
@@ -167,8 +210,7 @@ export default function WebCollabPanel({
           session.initialized = true;
           const initialHtml = htmlText.toString();
           const initialCss = cssText.toString();
-          setPreviewDocument(buildSafePreviewDocument(initialHtml, initialCss));
-          setDiagnostics(analyzeWebCode(initialHtml, initialCss));
+          void renderPreview(initialHtml, initialCss);
           setReady(true);
         }
         return;
@@ -204,6 +246,7 @@ export default function WebCollabPanel({
     const unsubscribe = callbacksRef.current.subscribeToCollaboration?.(roomId, handleCollaborationMessage) || (() => {});
     callbacksRef.current.onJoinCollaboration?.(roomId);
     return () => {
+      previewRequestRef.current += 1;
       if (editingRef.current) {
         editingRef.current = false;
         callbacksRef.current.onEditingChange?.(roomId, false);
@@ -216,17 +259,44 @@ export default function WebCollabPanel({
       doc.destroy();
       if (sessionRef.current === session) sessionRef.current = null;
     };
-  }, [me?.id, me?.name, readOnlyObserver, roomId]);
+  }, [me?.id, me?.name, readOnlyObserver, roomId, syncGeneration, renderPreview]);
 
-  const assignedStudentIds = [workspace?.driverUserId, workspace?.navigatorUserId]
+  useEffect(() => {
+    if (readOnlyObserver || !ready) return;
+    let active = true;
+    fetchPartyProgrammingTemplate(roomId).then((data) => {
+      if (active) setLessonTemplate(data.template || null);
+    }).catch((error) => { if (active) setActionError(error.message); });
+    return () => { active = false; };
+  }, [roomId, ready, readOnlyObserver, templateRefresh]);
+
+  async function loadTemplate() {
+    const session = sessionRef.current;
+    if (!isDriver || !ready || actionSubmitting || !lessonTemplate || !session?.initialized) return;
+    setActionSubmitting(true);
+    setActionError("");
+    try {
+      await loadPartyProgrammingTemplate(roomId, {
+        lessonId: lessonTemplate.lessonId, version: lessonTemplate.version,
+        requestId: crypto.randomUUID(), documentEpoch: session.documentEpoch,
+        stateVector: encodeBase64(Y.encodeStateVector(session.doc)),
+      });
+      setTemplateConfirmOpen(false);
+    } catch (error) { setActionError(error.message); }
+    finally { setActionSubmitting(false); }
+  }
+
+  const assignedStudentIds = [workspace?.driverUserId, ...readNavigatorUserIds(workspace)]
     .map((userId) => String(userId || ""))
     .filter(Boolean);
-  const pairReady = assignedStudentIds.length === 2
+  const pairReady = assignedStudentIds.length >= 2 && assignedStudentIds.length <= 3
     && assignedStudentIds.every((userId) => members.some((member) => String(member?.id || "") === userId));
-  const isDriver = pairReady && String(workspace.driverUserId) === String(me?.id || "");
-  const isNavigator = pairReady && String(workspace.navigatorUserId) === String(me?.id || "");
+  const isDriver = pairReady && canDriveParty(workspace, me?.id);
+  permissionRef.current = isDriver && !readOnlyObserver;
+  const isNavigator = pairReady && readNavigatorUserIds(workspace).includes(String(me?.id || ""));
   const driverName = resolveMemberName(members, workspace?.driverUserId, "等待分配");
-  const navigatorName = resolveMemberName(members, workspace?.navigatorUserId, "等待同伴加入");
+  const navigatorName = readNavigatorUserIds(workspace).map((id) => resolveMemberName(members, id, "等待同伴加入")).join("、") || "等待同伴加入";
+  const nextDriverName = resolveMemberName(members, readNavigatorUserIds(workspace)[0], "下一位同学");
   const feedbackByName = resolveMemberName(
     members,
     latestIntervention?.feedbackByUserId,
@@ -238,18 +308,76 @@ export default function WebCollabPanel({
     return [
       activeDocument === "html" ? htmlLanguage() : cssLanguage(),
       EditorView.lineWrapping,
+      EditorView.updateListener.of((update) => {
+        if (activeDocument !== "html") { setImageTarget(null); return; }
+        if (update.selectionSet || update.docChanged) setImageTarget(findImageSourceAtSelection(update.state.doc.toString(), update.state.selection.main.head));
+      }),
       EditorView.editable.of(!readOnlyObserver && pairReady && isDriver),
       yCollab(activeText, sessionRef.current.awareness),
     ];
   }, [activeDocument, activeText, isDriver, pairReady, readOnlyObserver, ready]);
 
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!ready || !session?.initialized || !workspace?.lastPreviewAt) return;
+    void renderPreview(session.htmlText.toString(), session.cssText.toString());
+  }, [ready, workspace?.lastPreviewAt, renderPreview]);
+
+  function selectImage() {
+    const session = sessionRef.current;
+    const view = editorViewRef.current;
+    if (!isDriver || readOnlyObserver || activeDocument !== "html" || !view || !session?.initialized) return;
+    const target = findImageSourceAtSelection(view.state.doc.toString(), view.state.selection.main.head);
+    if (!target) return;
+    imageSelectionRef.current = {
+      session, value: target.value,
+      from: Y.createRelativePositionFromTypeIndex(session.htmlText, target.from),
+      to: Y.createRelativePositionFromTypeIndex(session.htmlText, target.to),
+    };
+    imageInputRef.current?.click();
+  }
+
+  async function insertImage(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    const selected = imageSelectionRef.current;
+    if (!file || !selected || imageUploading) return;
+    setImageUploading(true);
+    setActionError("");
+    try {
+      const result = await uploadPartyProgrammingImage(roomId, file, selected.session.documentEpoch);
+      if (selected.session !== sessionRef.current || !permissionRef.current || !selected.session.initialized) {
+        throw new Error("角色或作品已变化，未插入图片。请由当前 Driver 重新选择。");
+      }
+      const start = Y.createAbsolutePositionFromRelativePosition(selected.from, selected.session.doc);
+      const end = Y.createAbsolutePositionFromRelativePosition(selected.to, selected.session.doc);
+      const text = selected.session.htmlText;
+      if (!start || !end || start.type !== text || end.type !== text || text.toString().slice(start.index, end.index) !== selected.value) {
+        throw new Error("图片位置已被修改，请重新选择插入位置。");
+      }
+      const target = findImageSourceAtSelection(text.toString(), start.index);
+      if (!target || target.from !== start.index || target.to !== end.index) throw new Error("原 src 已变化，请重新选择图片位置。");
+      selected.session.doc.transact(() => { text.delete(start.index, end.index - start.index); text.insert(start.index, result.path); });
+    } catch (error) { setActionError(error.message || "插入图片失败。"); }
+    finally { setImageUploading(false); }
+  }
+
+  async function restoreVersion() {
+    if (!restoreRevision || actionSubmitting) return;
+    if (!window.confirm("恢复将替换当前 HTML/CSS，当前作品会先保存为历史版本。")) return;
+    setActionSubmitting(true);
+    try { await restorePartyWebWorkspace(roomId, Number(restoreRevision)); setRestoreRevision(""); }
+    catch (error) { setActionError(error.message); }
+    finally { setActionSubmitting(false); }
+  }
+
   async function refreshPreview({ openPreview = false } = {}) {
-    if ((!readOnlyObserver && !isDriver) || actionSubmitting) return;
+    if (actionSubmitting) return;
+    if (!readOnlyObserver && !isDriver) { if (openPreview) setPreviewOpen(true); return; }
     const html = sessionRef.current?.htmlText.toString() || "";
     const css = sessionRef.current?.cssText.toString() || "";
     const nextDiagnostics = analyzeWebCode(html, css);
-    setPreviewDocument(buildSafePreviewDocument(html, css));
-    setDiagnostics(nextDiagnostics);
+    await renderPreview(html, css);
     if (openPreview) setPreviewOpen(true);
     if (readOnlyObserver) return;
     setActionSubmitting(true);
@@ -329,10 +457,20 @@ export default function WebCollabPanel({
           type="button"
           onClick={() => void updateSession({ action: "rotate" })}
           disabled={!pairReady || actionSubmitting}
-          title={`完成本轮并将 Driver 角色交给${navigatorName}`}
-        ><Repeat2 size={13} />完成本轮，交棒给{navigatorName}</button> : null}
+          title={`完成本轮并将 Driver 角色交给${nextDriverName}`}
+        ><Repeat2 size={13} />完成本轮，交棒给{nextDriverName}</button> : null}
       </div>
     </div>
+
+    {!readOnlyObserver && lessonTemplate ? <div className="party-web-template-bar">
+      <span>本课模板：{lessonTemplate.lessonName}{workspace?.loadedTemplate?.lessonId === lessonTemplate.lessonId && workspace?.loadedTemplate?.version === lessonTemplate.version ? "（已载入）" : "（可载入新模板）"}</span>
+      <button type="button" disabled={!ready || !isDriver || actionSubmitting} onClick={() => setTemplateConfirmOpen(true)}>载入本课模板</button>
+    </div> : null}
+    {templateConfirmOpen ? <div className="party-web-template-confirm" role="alertdialog" aria-label="确认载入模板">
+      <p>载入将替换当前 HTML 和 CSS。原作品会保存为可恢复的版本，所有组员同步切换。</p>
+      <button type="button" disabled={actionSubmitting} onClick={() => setTemplateConfirmOpen(false)}>取消</button>
+      <button type="button" disabled={!isDriver || actionSubmitting} onClick={() => void loadTemplate()}>{actionSubmitting ? "载入中..." : "保存原作品并载入"}</button>
+    </div> : null}
 
     <div className="party-coding-head party-web-coding-head">
       <div className="party-web-document-tabs" role="tablist" aria-label="网页代码文件">
@@ -349,12 +487,15 @@ export default function WebCollabPanel({
         >{item.label}</button>)}
       </div>
       <div className="party-coding-head-actions">
+        <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={(event) => void insertImage(event)} />
+        {activeDocument === "html" && imageTarget && isDriver && !readOnlyObserver ? <button type="button"
+          onClick={selectImage} disabled={imageUploading || !ready}>{imageUploading ? "上传中..." : "为 src 选择图片"}</button> : null}
         {codingEditors.length > 0 ? <div className="party-coding-editor-avatars" aria-label={`${codingEditors.map((editor) => editor.name).join("、")}正在编辑`}>
           {codingEditors.slice(0, 3).map((editor) => <span className="party-coding-editor-avatar" key={editor.userId} title={`${editor.name}正在编辑`}>{getEditorInitial(editor.name)}</span>)}
         </div> : null}
         <div className="party-coding-head-buttons">
           <button type="button" onClick={() => void refreshPreview()} disabled={!ready || (!readOnlyObserver && (!pairReady || !isDriver)) || actionSubmitting}><RefreshCcw size={14} />{readOnlyObserver ? "同步检查" : "运行检查"}</button>
-          <button type="button" onClick={() => void refreshPreview({ openPreview: true })} disabled={!ready || (!readOnlyObserver && (!pairReady || !isDriver)) || actionSubmitting}><Eye size={14} />{readOnlyObserver ? "查看预览" : "预览"}</button>
+          <button type="button" onClick={() => void refreshPreview({ openPreview: true })} disabled={!ready || actionSubmitting}><Eye size={14} />{readOnlyObserver ? "查看预览" : "预览"}</button>
           {!readOnlyObserver ? <button type="button" onClick={downloadWebPage} disabled={!ready} title="下载可独立打开的 HTML 文件"><Download size={14} /></button> : null}
         </div>
       </div>
@@ -362,7 +503,7 @@ export default function WebCollabPanel({
 
     {readOnlyObserver ? <div className="party-web-role-notice is-observer">教师旁观模式：代码、任务阶段和预览均为只读，您的访问不会改变学生角色或协作状态。</div>
       : !pairReady ? <div className="party-web-role-notice is-waiting">当前只有一名学生。第二名学生加入后，系统会分配 Driver 和 Navigator，随后才能开始共同编程。</div>
-      : isDriver ? <div className="party-web-role-notice is-driver">你当前是 Driver：根据两人的讨论输入 HTML/CSS、刷新预览；完成一轮后点击“交棒”。</div>
+      : isDriver ? <div className="party-web-role-notice is-driver">你当前是 Driver：根据小组讨论输入 HTML/CSS、刷新预览；完成一轮后点击“交棒”。</div>
         : isNavigator ? <div className="party-web-role-notice is-navigator">你当前是 Navigator：暂时不能输入代码，请在群聊中提出建议、发现问题，并和 Driver 一起检查预览。</div>
           : <div className="party-web-role-notice is-observer">你当前未分配结对角色，只能查看本轮过程。请联系老师调整小教室成员。</div>}
     <div className="party-code-editor party-web-code-editor">
@@ -370,6 +511,7 @@ export default function WebCollabPanel({
         key={`${roomId}:${activeDocument}:${isDriver ? "driver" : isNavigator ? "navigator" : "observer"}`}
         value={activeText.toString()}
         height="100%"
+        onCreateEditor={(view) => { editorViewRef.current = view; }}
         extensions={editorExtensions}
         onFocus={() => !readOnlyObserver && pairReady && isDriver && setEditingPresence(true)}
         onBlur={() => setEditingPresence(false)}
@@ -390,6 +532,15 @@ export default function WebCollabPanel({
         </li>)}
       </ul> : null}
     </section>
+
+    {!readOnlyObserver && String(ownerUserId) === String(me?.id) && workspace?.versions?.length ? <div className="party-web-template-bar">
+      <select aria-label="历史代码版本" value={restoreRevision} onChange={(event) => setRestoreRevision(event.target.value)}>
+        <option value="">选择要恢复的代码版本</option>
+        {[...new Map(workspace.versions.map((version) => [version.revision, version])).values()].reverse().map((version) =>
+          <option key={version.revision} value={version.revision}>版本 {version.revision} · {version.savedByName}</option>)}
+      </select>
+      <button type="button" disabled={!restoreRevision || actionSubmitting} onClick={() => void restoreVersion()}>恢复版本</button>
+    </div> : null}
 
     {latestIntervention ? <section className="party-paia-intervention has-intervention" aria-label="琳琳的协作提示">
       <div className="party-paia-intervention-head">

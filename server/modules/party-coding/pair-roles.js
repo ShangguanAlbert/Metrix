@@ -1,40 +1,12 @@
-function normalizeMemberIds(rawMemberIds) {
-  return Array.from(new Set(
-    (Array.isArray(rawMemberIds) ? rawMemberIds : [])
-      .map((item) => String(item || "").trim())
-      .filter(Boolean),
-  )).slice(0, 2);
-}
+import { resolvePartyRoles } from "../../../shared/party-roles.js";
 
 export function resolvePartyPairRoles(rawMemberIds, current = {}) {
-  const memberUserIds = normalizeMemberIds(rawMemberIds);
-  const currentDriverUserId = String(current?.driverUserId || "").trim();
-  const currentNavigatorUserId = String(current?.navigatorUserId || "").trim();
-  const currentRolesAreValid = memberUserIds.length === 2
-    && memberUserIds.includes(currentDriverUserId)
-    && memberUserIds.includes(currentNavigatorUserId)
-    && currentDriverUserId !== currentNavigatorUserId;
-
-  if (currentRolesAreValid) {
-    return {
-      memberUserIds,
-      pairReady: true,
-      driverUserId: currentDriverUserId,
-      navigatorUserId: currentNavigatorUserId,
-      changed: false,
-    };
-  }
-
-  const driverUserId = memberUserIds.includes(currentDriverUserId)
-    ? currentDriverUserId
-    : (memberUserIds[0] || "");
-  const navigatorUserId = memberUserIds.find((userId) => userId !== driverUserId) || "";
+  const roles = resolvePartyRoles(rawMemberIds, current);
   return {
-    memberUserIds,
-    pairReady: memberUserIds.length === 2 && !!driverUserId && !!navigatorUserId,
-    driverUserId,
-    navigatorUserId,
-    changed: driverUserId !== currentDriverUserId || navigatorUserId !== currentNavigatorUserId,
+    ...roles,
+    changed: roles.driverUserId !== String(current?.driverUserId || "")
+      || roles.navigatorUserId !== String(current?.navigatorUserId || "")
+      || JSON.stringify(roles.navigatorUserIds) !== JSON.stringify(current?.navigatorUserIds || []),
   };
 }
 
@@ -46,15 +18,17 @@ export async function ensurePartyPairRoles({ Workspace, roomId, memberUserIds })
   ).lean();
   const roles = resolvePartyPairRoles(memberUserIds, current);
   if (!roles.changed) return current;
-  return Workspace.findOneAndUpdate(
-    { roomId },
+  const updated = await Workspace.findOneAndUpdate(
+    { roomId, driverUserId: current.driverUserId, roleRotationCount: current.roleRotationCount || 0 },
     {
       $set: {
         driverUserId: roles.driverUserId,
         navigatorUserId: roles.navigatorUserId,
+        navigatorUserIds: roles.navigatorUserIds,
         rolesUpdatedAt: roles.pairReady ? new Date() : null,
       },
     },
     { new: true },
   ).lean();
+  return updated || Workspace.findOne({ roomId }).lean();
 }

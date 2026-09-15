@@ -346,3 +346,31 @@ function parseFileNameFromContentDisposition(disposition) {
   if (!plainMatch || !plainMatch[1]) return "";
   return String(plainMatch[1]).trim();
 }
+
+export function fetchPartyProgrammingTemplate(roomId) {
+  return request(`/api/group-chat/rooms/${encodeURIComponent(roomId)}/coding/template`);
+}
+
+export function loadPartyProgrammingTemplate(roomId, payload) {
+  return request(`/api/group-chat/rooms/${encodeURIComponent(roomId)}/coding/template/load`, {
+    method: "POST", body: JSON.stringify(payload),
+  });
+}
+
+export async function uploadPartyProgrammingImage(roomId, file, documentEpoch) {
+  const form = new FormData();
+  form.append("image", file);
+  form.append("documentEpoch", String(documentEpoch));
+  const response = await fetch(`/api/group-chat/rooms/${encodeURIComponent(roomId)}/coding/images`, {
+    method: "POST", headers: authHeaders(), body: form,
+  });
+  const data = await readJson(response);
+  if (!response.ok) throw new Error(data.error || "上传图片失败。");
+  return data;
+}
+
+export function fetchPartyProgrammingImage(roomId, imageId, token) {
+  return request(`/api/group-chat/rooms/${encodeURIComponent(roomId)}/coding/images/${encodeURIComponent(imageId)}`, {
+    ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+  });
+}

@@ -1,3 +1,7 @@
+import { registerPartyImageRoutes } from "./image-routes.js";
+import { getPartyTemplateModel, readRoomTemplate } from "./template-service.js";
+import { normalizeWorkspace } from "./workspace-state.js";
+import { canDriveParty, rotatePartyRoles } from "../../../shared/party-roles.js";
 import { createPartyLearningService } from "./learning-service.js";
 import { getPartyWebWorkspaceModel } from "./model.js";
 import { ensurePartyPairRoles } from "./pair-roles.js";
@@ -19,32 +23,6 @@ function sanitizeDiagnostics(value) {
     .slice(0, 20);
 }
 
-function normalizeWorkspace(doc) {
-  if (!doc) return null;
-  return {
-    roomId: String(doc.roomId || ""),
-    html: sanitizeDocument(doc.html),
-    css: sanitizeDocument(doc.css),
-    revision: Math.max(1, Number(doc.revision || 1)),
-    taskRevision: Math.max(1, Number(doc.taskRevision || 1)),
-    taskId: `${String(doc.roomId || "")}:${Math.max(1, Number(doc.taskRevision || 1))}`,
-    taskStage: String(doc.taskStage || "understand"),
-    driverUserId: String(doc.driverUserId || ""),
-    navigatorUserId: String(doc.navigatorUserId || ""),
-    roleRotationCount: Math.max(0, Number(doc.roleRotationCount || 0)),
-    rolesUpdatedAt: doc.rolesUpdatedAt ? new Date(doc.rolesUpdatedAt).toISOString() : "",
-    lastPreviewAt: doc.lastPreviewAt ? new Date(doc.lastPreviewAt).toISOString() : "",
-    lastPreviewByUserId: String(doc.lastPreviewByUserId || ""),
-    lastDiagnostics: sanitizeDiagnostics(doc.lastDiagnostics),
-    versions: (Array.isArray(doc.versions) ? doc.versions : []).map((item) => ({
-      revision: Number(item?.revision || 0),
-      html: sanitizeDocument(item?.html),
-      css: sanitizeDocument(item?.css),
-      savedByName: String(item?.savedByName || "成员").slice(0, 60),
-      createdAt: item?.createdAt ? new Date(item.createdAt).toISOString() : "",
-    })),
-  };
-}
 
 export function registerPartyCodingRoutes(app, deps) {
   const {
@@ -85,7 +63,7 @@ export function registerPartyCodingRoutes(app, deps) {
       memberUserIds: (Array.isArray(room.memberUserIds) ? room.memberUserIds : [])
         .map((item) => sanitizeId(item, ""))
         .filter(Boolean)
-        .slice(0, 2),
+        .slice(0, 3),
       taskText: String(room.announcement || "").trim().slice(0, 500),
     };
   }
@@ -97,6 +75,42 @@ export function registerPartyCodingRoutes(app, deps) {
       memberUserIds: member.memberUserIds,
     });
   }
+
+  registerPartyImageRoutes(app, deps, { requireCodingMember, collaboration });
+
+  const Template = getPartyTemplateModel(deps.mongoose);
+  async function readTemplate(member) {
+    return readRoomTemplate({ Template, AuthUser: deps.AuthUser, memberUserIds: member.memberUserIds });
+  }
+
+  app.get("/api/group-chat/rooms/:roomId/coding/template", requireChatAuth, async (req, res) => {
+    try {
+      const member = await requireCodingMember(req, res);
+      if (!member) return;
+      res.json({ ok: true, template: await readTemplate(member) });
+    } catch (error) { res.status(500).json({ error: error?.message || "读取本课模板失败。" }); }
+  });
+
+  app.post("/api/group-chat/rooms/:roomId/coding/template/load", requireChatAuth, async (req, res) => {
+    try {
+      const member = await requireCodingMember(req, res);
+      if (!member) return;
+      const template = await readTemplate(member);
+      if (!template || template.lessonId !== req.body?.lessonId || template.version !== req.body?.version) {
+        res.status(409).json({ error: "模板已更新，请刷新后确认本课模板。" }); return;
+      }
+      const requestId = String(req.body?.requestId || "");
+      if (!/^[a-zA-Z0-9-]{16,80}$/.test(requestId)) {
+        res.status(400).json({ error: "无效的模板载入请求。" }); return;
+      }
+      const workspace = await collaboration.replaceRoomDocuments({
+        roomId: member.roomId, html: template.html, css: template.css, template, requestId,
+        expectedEpoch: req.body?.documentEpoch, expectedStateVector: req.body?.stateVector,
+        author: { userId: member.userId, name: member.userName },
+      });
+      res.json({ ok: true, workspace });
+    } catch (error) { res.status(error.status || 500).json({ error: error?.message || "载入本课模板失败。" }); }
+  });
 
   app.get("/api/group-chat/rooms/:roomId/coding", requireChatAuth, async (req, res) => {
     try {
@@ -126,12 +140,13 @@ export function registerPartyCodingRoutes(app, deps) {
         res.status(409).json({ error: "请等待第二名学生加入，结对角色分配后再开始编程。" });
         return;
       }
-      if (sanitizeId(current?.driverUserId, "") && sanitizeId(current.driverUserId, "") !== member.userId) {
+      if (!canDriveParty(current, member.userId)) {
         res.status(403).json({ error: "当前由 Driver 操作代码。" });
         return;
       }
       const workspace = await collaboration.replaceRoomDocuments({
         roomId: member.roomId,
+        requireDriver: true,
         html: sanitizeDocument(req.body?.html),
         css: sanitizeDocument(req.body?.css),
         author: { userId: member.userId, name: member.userName },
@@ -173,6 +188,7 @@ export function registerPartyCodingRoutes(app, deps) {
     try {
       const member = await requireCodingMember(req, res);
       if (!member) return;
+      return await collaboration.withRoomLock(member.roomId, async () => {
       const current = await ensurePairRoles(member);
       const action = String(req.body?.action || "").trim().toLowerCase();
       const nextStage = String(req.body?.taskStage || "").trim().toLowerCase();
@@ -181,17 +197,19 @@ export function registerPartyCodingRoutes(app, deps) {
       let metadata = {};
       if (action === "rotate") {
         if (!current?.driverUserId || !current?.navigatorUserId) {
-          res.status(409).json({ error: "两名学生到齐后才能轮换角色。" });
+          res.status(409).json({ error: "至少安排两名学生后才能轮换角色。" });
           return;
         }
         if (sanitizeId(current.driverUserId, "") !== member.userId) {
           res.status(403).json({ error: "当前只有 Driver 可以完成本轮并交棒。" });
           return;
         }
+        const nextRoles = rotatePartyRoles(member.memberUserIds, current);
         update = {
           $set: {
-            driverUserId: current.navigatorUserId,
-            navigatorUserId: current.driverUserId,
+            driverUserId: nextRoles.driverUserId,
+            navigatorUserId: nextRoles.navigatorUserId,
+            navigatorUserIds: nextRoles.navigatorUserIds,
             rolesUpdatedAt: new Date(),
           },
           $inc: { roleRotationCount: 1 },
@@ -199,7 +217,8 @@ export function registerPartyCodingRoutes(app, deps) {
         eventType = "role_rotation";
         metadata = {
           previousDriverUserId: current.driverUserId,
-          nextDriverUserId: current.navigatorUserId,
+          nextDriverUserId: nextRoles.driverUserId,
+          memberUserIds: member.memberUserIds,
         };
       } else if (action === "stage" && TASK_STAGES.has(nextStage)) {
         update = { $set: { taskStage: nextStage } };
@@ -210,17 +229,21 @@ export function registerPartyCodingRoutes(app, deps) {
         return;
       }
       const workspace = await Workspace.findOneAndUpdate(
-        { roomId: member.roomId },
+        { roomId: member.roomId, ...(action === "rotate" ? { driverUserId: current.driverUserId, roleRotationCount: current.roleRotationCount || 0 } : {}) },
         update,
         { new: true },
       ).lean();
+      if (!workspace) {
+        res.status(409).json({ error: "角色已发生变化，请刷新后重试。" });
+        return;
+      }
       await learning.recordEvent({
         roomId: member.roomId,
         userId: member.userId,
         userName: member.userName,
         eventType,
         metadata,
-        workspace,
+        workspace: action === "rotate" ? current : workspace,
       });
       const normalized = normalizeWorkspace(workspace);
       broadcastGroupChatWsPayload(member.roomId, {
@@ -229,6 +252,7 @@ export function registerPartyCodingRoutes(app, deps) {
         workspace: normalized,
       });
       res.json({ ok: true, workspace: normalized });
+      });
     } catch (error) {
       res.status(500).json({ error: error?.message || "更新协作角色或阶段失败。" });
     }
@@ -243,7 +267,7 @@ export function registerPartyCodingRoutes(app, deps) {
         res.status(409).json({ error: "请等待第二名学生加入，结对角色分配后再刷新预览。" });
         return;
       }
-      if (sanitizeId(current?.driverUserId, "") && sanitizeId(current.driverUserId, "") !== member.userId) {
+      if (!canDriveParty(current, member.userId)) {
         res.status(403).json({ error: "当前由 Driver 刷新网页预览。" });
         return;
       }

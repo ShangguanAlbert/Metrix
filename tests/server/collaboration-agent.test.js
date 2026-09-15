@@ -51,7 +51,7 @@ test("an older rejected strategy changes the next public support action", () => 
   assert.equal(plan.shouldDeliver, true);
   assert.equal(plan.strategyKey, "two_voice_checkpoint");
   assert.equal(plan.memoryPolicy, "avoid_rejected_strategy");
-  assert.match(plan.publicPrompt, /两位同学各说一个下一步建议/);
+  assert.match(plan.publicPrompt, /每位同学各说一个下一步建议/);
 });
 
 test("a validated strategy is reused in a similar support situation", () => {

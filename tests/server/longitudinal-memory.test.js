@@ -348,3 +348,18 @@ test("nightly consolidation preserves a teacher edited judgment summary", async 
     /系统形成的新判断/,
   );
 });
+
+
+test("成员变更按时间切分记忆证据，不把原两人事件归入三人组", async () => {
+  const { splitEventsByMembership, buildPairSubjectId } = await import("../../server/modules/party-coding/longitudinal-memory.js");
+  const room = { memberUserIds: ["a", "b", "c"], membershipHistory: [
+    { memberUserIds: ["a", "b"], effectiveAt: "2026-09-15T01:00:00Z" },
+    { memberUserIds: ["a", "b", "c"], effectiveAt: "2026-09-15T02:00:00Z" },
+  ] };
+  const events = [{ userId: "a", occurredAt: "2026-09-15T01:30:00Z" }, { userId: "c", occurredAt: "2026-09-15T02:00:00Z" }];
+  const periods = splitEventsByMembership(room, events, new Date("2026-09-15T03:00:00Z"));
+  assert.equal(periods.length, 2);
+  assert.deepEqual(periods[0].room.memberUserIds, ["a", "b"]);
+  assert.deepEqual(periods[1].events, [events[1]]);
+  assert.notEqual(buildPairSubjectId(periods[0].room.memberUserIds), buildPairSubjectId(periods[1].room.memberUserIds));
+});

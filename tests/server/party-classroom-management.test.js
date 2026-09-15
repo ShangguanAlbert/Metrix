@@ -27,13 +27,15 @@ test("pair classroom monitoring fields start and stop one monitoring session", (
   });
 });
 
-test("pair classroom keeps exactly two distinct student ids", () => {
+test("pair classroom preserves distinct student ids and allows up to three", () => {
   const result = validatePairClassroomStudentUserIds(
     ["student-a", "student-b", "student-a"],
     { isValidUserId: (value) => value.startsWith("student-") },
   );
 
-  assert.equal(PAIR_CLASSROOM_STUDENT_LIMIT, 2);
+  assert.equal(PAIR_CLASSROOM_STUDENT_LIMIT, 3);
+  assert.equal(validatePairClassroomStudentUserIds(["a", "b", "c"]).valid, true);
+  assert.equal(validatePairClassroomStudentUserIds(["a", "b", "c", "d"]).valid, false);
   assert.deepEqual(result, {
     valid: true,
     userIds: ["student-a", "student-b"],

@@ -28,7 +28,8 @@ test("角色轮换后不会因为派主身份恢复初始角色", () => {
   assert.equal(roles.pairReady, true);
   assert.equal(roles.driverUserId, "member");
   assert.equal(roles.navigatorUserId, "owner");
-  assert.equal(roles.changed, false);
+  assert.equal(roles.changed, true); // Older room receives the navigator array without changing its Driver.
+  assert.equal(resolvePartyPairRoles(["owner", "member"], roles).changed, false);
 });
 
 test("成员变化时清理离开者并重新生成有效角色", () => {
@@ -41,4 +42,25 @@ test("成员变化时清理离开者并重新生成有效角色", () => {
   assert.equal(roles.driverUserId, "owner");
   assert.equal(roles.navigatorUserId, "new-member");
   assert.equal(roles.changed, true);
+});
+
+
+test("补入第三人保留 Driver，随后依次覆盖所有学生", async () => {
+  const { rotatePartyRoles, canDriveParty } = await import("../../shared/party-roles.js");
+  const ids = ["a", "b", "c"];
+  let roles = resolvePartyPairRoles(ids, { driverUserId: "b", navigatorUserId: "a" });
+  assert.equal(roles.driverUserId, "b");
+  assert.deepEqual(roles.navigatorUserIds, ["c", "a"]);
+  for (const next of ["c", "a", "b"]) {
+    roles = rotatePartyRoles(ids, roles);
+    assert.equal(roles.driverUserId, next);
+    assert.equal(ids.filter((id) => canDriveParty(roles, id)).length, 1);
+    assert.equal(roles.navigatorUserIds.includes(next), false);
+  }
+});
+
+test("超员小组不能交棒，单人没有编辑权限", async () => {
+  const { rotatePartyRoles, canDriveParty } = await import("../../shared/party-roles.js");
+  assert.throws(() => rotatePartyRoles(["a", "b", "c", "d"], {}));
+  assert.equal(canDriveParty(resolvePartyPairRoles(["a"]), "a"), false);
 });

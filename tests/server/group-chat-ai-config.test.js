@@ -68,3 +68,10 @@ test("group-chat AI config migrates the verbose legacy PAIA prompt", () => {
   assert.match(config.systemPrompt, /使用简洁的纯文本输出/);
   assert.doesNotMatch(config.systemPrompt, /同伴协作：/);
 });
+
+test("two-student default migrates while teacher-customized prompts remain unchanged", () => {
+  const previousDefault = DEFAULT_GROUP_CHAT_AI_CONFIG.systemPrompt.replace("小组全体学生", "两名学生");
+  assert.equal(sanitizeGroupChatAiConfig({ systemPrompt: previousDefault }).systemPrompt, DEFAULT_GROUP_CHAT_AI_CONFIG.systemPrompt);
+  const custom = `${previousDefault}\n教师补充：本课讨论段落标签。`;
+  assert.equal(sanitizeGroupChatAiConfig({ systemPrompt: custom }).systemPrompt, custom);
+});

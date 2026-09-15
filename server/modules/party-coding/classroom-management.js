@@ -1,4 +1,6 @@
-export const PAIR_CLASSROOM_STUDENT_LIMIT = 2;
+import { PARTY_MAX_STUDENTS, PARTY_MIN_STUDENTS } from "../../../shared/party-roles.js";
+
+export const PAIR_CLASSROOM_STUDENT_LIMIT = PARTY_MAX_STUDENTS;
 
 export function buildPairClassroomMonitoringFields(
   enabled,
@@ -37,11 +39,11 @@ export function validatePairClassroomStudentUserIds(
     ...(typeof sanitizeId === "function" ? { sanitizeId } : {}),
   });
   const valid =
-    userIds.length === PAIR_CLASSROOM_STUDENT_LIMIT &&
+    userIds.length >= PARTY_MIN_STUDENTS && userIds.length <= PAIR_CLASSROOM_STUDENT_LIMIT &&
     userIds.every((userId) => isValidUserId(userId));
   return {
     valid,
     userIds,
-    error: valid ? "" : "请选择两名不同的有效学生。",
+    error: valid ? "" : "请选择 2～3 名不同的有效学生。",
   };
 }

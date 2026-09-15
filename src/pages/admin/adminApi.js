@@ -436,6 +436,12 @@ export function updateAdminCollaborationCourseAnnouncement(
   );
 }
 
+export function addAdminCollaborationMember(adminToken, roomId, studentUserId) {
+  return request(`/api/auth/admin/collaboration-classrooms/${encodeURIComponent(roomId)}/members`, adminToken, {
+    method: "POST", body: JSON.stringify({ studentUserId }),
+  });
+}
+
 export function createAdminCollaborationClassroom(adminToken, payload = {}) {
   return request("/api/auth/admin/collaboration-classrooms", adminToken, {
     method: "POST",
@@ -1190,4 +1196,8 @@ function handleSseEvent(evt, handlers) {
   if (evt.event === "done") {
     handlers.onDone?.(evt.data || {});
   }
+}
+
+export function publishAdminProgrammingTemplate(adminToken, lessonId) {
+  return request(`/api/auth/admin/collaboration-lessons/${encodeURIComponent(lessonId)}/template/publish`, adminToken, { method: "POST" });
 }

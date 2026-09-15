@@ -297,11 +297,11 @@ export function createPartySocketClient({
     desiredCodingCollaborationRooms.delete(safeRoomId);
   }
 
-  function sendCodingCollaborationUpdate(roomId, update) {
+  function sendCodingCollaborationUpdate(roomId, update, documentEpoch = 0) {
     const safeRoomId = sanitizeRoomId(roomId);
     const safeUpdate = String(update || "").trim();
     if (!safeRoomId || !safeUpdate || !authed) return false;
-    return send({ type: "coding_collab_update", roomId: safeRoomId, update: safeUpdate });
+    return send({ type: "coding_collab_update", roomId: safeRoomId, update: safeUpdate, documentEpoch });
   }
 
   function sendCodingCollaborationAwareness(roomId, update, clientIds) {
