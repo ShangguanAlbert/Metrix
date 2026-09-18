@@ -1568,7 +1568,7 @@ const adminClassroomCoursePlanSchema = new mongoose.Schema(
     notes: { type: String, default: "" },
     announcement: { type: String, default: "" },
     announcementUpdatedAt: { type: String, default: "" },
-    programmingTemplate: { type: new mongoose.Schema({ html: String, css: String }, { _id: false }), default: () => ({ html: "", css: "" }) },
+    programmingTemplate: { type: new mongoose.Schema({ html: String, css: String, editMode: String, editableRanges: mongoose.Schema.Types.Mixed }, { _id: false }), default: () => ({ html: "", css: "" }) },
     homeworkRequirementText: { type: String, default: "" },
     enabled: { type: Boolean, default: true },
     homeworkUploadEnabled: { type: Boolean, default: true },

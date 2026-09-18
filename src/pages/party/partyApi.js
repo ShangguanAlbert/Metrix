@@ -106,10 +106,10 @@ export function fetchPartyCodingWorkspace(roomId) {
   return request(`/api/group-chat/rooms/${encodeURIComponent(String(roomId || "").trim())}/coding`);
 }
 
-export function savePartyCodingWorkspace(roomId, { html, css }) {
+export function savePartyCodingWorkspace(roomId, { html, css, documentEpoch }) {
   return request(`/api/group-chat/rooms/${encodeURIComponent(String(roomId || "").trim())}/coding`, {
     method: "PUT",
-    body: JSON.stringify({ html: String(html || ""), css: String(css || "") }),
+    body: JSON.stringify({ html: String(html || ""), css: String(css || ""), documentEpoch }),
   });
 }
 
@@ -120,10 +120,10 @@ export function updatePartyCodingSession(roomId, payload) {
   });
 }
 
-export function recordPartyWebPreview(roomId, diagnostics = []) {
+export function recordPartyWebPreview(roomId, diagnostics = [], documentEpoch) {
   return request(`/api/group-chat/rooms/${encodeURIComponent(String(roomId || "").trim())}/coding/preview`, {
     method: "POST",
-    body: JSON.stringify({ diagnostics: Array.isArray(diagnostics) ? diagnostics : [] }),
+    body: JSON.stringify({ diagnostics: Array.isArray(diagnostics) ? diagnostics : [], documentEpoch }),
   });
 }
 
@@ -137,10 +137,10 @@ export function submitPartyPaiaFeedback(roomId, interventionId, { feedback, note
   );
 }
 
-export function restorePartyWebWorkspace(roomId, revision) {
+export function restorePartyWebWorkspace(roomId, revision, documentEpoch) {
   return request(`/api/group-chat/rooms/${encodeURIComponent(String(roomId || "").trim())}/coding/restore`, {
     method: "POST",
-    body: JSON.stringify({ revision: Number(revision) || 0 }),
+    body: JSON.stringify({ revision: Number(revision) || 0, documentEpoch }),
   });
 }
 
@@ -372,5 +372,11 @@ export async function uploadPartyProgrammingImage(roomId, file, documentEpoch) {
 export function fetchPartyProgrammingImage(roomId, imageId, token) {
   return request(`/api/group-chat/rooms/${encodeURIComponent(roomId)}/coding/images/${encodeURIComponent(imageId)}`, {
     ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+  });
+}
+
+export function saveOrSwitchPartyWorkspace(roomId, payload) {
+  return request(`/api/group-chat/rooms/${encodeURIComponent(roomId)}/coding/workspace`, {
+    method: "POST", body: JSON.stringify(payload),
   });
 }

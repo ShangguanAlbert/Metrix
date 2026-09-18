@@ -348,6 +348,7 @@ export function buildGroupChatAiPromptText(snapshot, attachmentLabels = [], codi
   }
   if (codingContext?.html || codingContext?.css) {
     const codingLines = [
+      `当前编程区域：${codingContext.activeWorkspace === "lesson" ? "本课练习（围绕课时模板学习知识点）" : "长期任务（持续完善小组作品）"}。两个区域的代码独立保存。`,
       "当前多人实时协作的网页代码（用于诊断与引导；不要直接改写或补全整份作品）：",
       "```html",
       codingContext.html,
@@ -393,6 +394,7 @@ export async function resolvePartyCodingContext(roomId, memoryUseType = "student
       {
         html: 1,
         css: 1,
+        activeWorkspace: 1,
         lastDiagnostics: 1,
         revision: 1,
         taskRevision: 1,
@@ -443,6 +445,7 @@ export async function resolvePartyCodingContext(roomId, memoryUseType = "student
   return {
     html,
     css,
+    activeWorkspace: workspace?.activeWorkspace || "project",
     diagnostics: Array.isArray(workspace?.lastDiagnostics)
       ? workspace.lastDiagnostics.map((item) => clipContextText(item, 300)).filter(Boolean).slice(0, 10)
       : [],

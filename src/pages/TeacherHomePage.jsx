@@ -1,3 +1,4 @@
+import ClassroomAiSettings from "../features/admin/components/ClassroomAiSettings.jsx";
 import ProgrammingTemplateEditor from "../features/admin/components/ProgrammingTemplateEditor.jsx";
 import { readNavigatorUserIds } from "../../shared/party-roles.js";
 import {
@@ -142,6 +143,7 @@ const FINAL_TEST_EXPORT_CLASS_OPTIONS = Object.freeze([
 const TEACHER_HOME_PANEL_KEYS = Object.freeze(
   new Set([
     "classroom",
+    "agent",
     "class-manage",
     "course",
     "discipline",
@@ -1335,11 +1337,6 @@ export default function TeacherHomePage() {
   const [disciplineSearchQuery, setDisciplineSearchQuery] = useState("");
   const [homeworkSearchQuery, setHomeworkSearchQuery] = useState("");
   const [pageRefreshState, setPageRefreshState] = useState("idle");
-  const [featureTransition, setFeatureTransition] = useState({
-    active: false,
-    label: "",
-  });
-
   const [adminProfile, setAdminProfile] = useState({
     id: "",
     username: "",
@@ -1366,6 +1363,8 @@ export default function TeacherHomePage() {
   const [teacherCoursePlans, setTeacherCoursePlans] = useState([]);
   const [authorizedClassNames, setAuthorizedClassNames] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [classroomAiDirty, setClassroomAiDirty] = useState(false);
+  const [lessonEditorTab, setLessonEditorTab] = useState("tasks");
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [taskUploadDraftsByScope, setTaskUploadDraftsByScope] = useState({});
   const [newTaskType, setNewTaskType] = useState("link");
@@ -2503,7 +2502,7 @@ export default function TeacherHomePage() {
         label: "教学准备",
         items: [
           { key: "course", label: "课程管理", icon: BookCheck },
-          { key: "classroom", label: "课时任务", icon: ClipboardList },
+          { key: "classroom", label: "课时管理", icon: ClipboardList },
           { key: "party-manage", label: "协作课堂", icon: Activity },
         ],
       },
@@ -2525,7 +2524,7 @@ export default function TeacherHomePage() {
         external: true,
         dividerBefore: true,
         items: [
-          { key: "agent", label: "AI 教学配置", icon: Bot, external: true },
+          { key: "agent", label: "AI 教学配置", icon: Bot },
         ],
       },
     ];
@@ -2549,6 +2548,9 @@ export default function TeacherHomePage() {
   }, [activePanel, availablePanelKeys]);
 
   function confirmLeaveWithUnsavedClassroomConfig() {
+    if (classroomAiDirty) {
+      if (!window.confirm("AI 教学配置尚未保存，确定放弃修改并离开吗？")) return false;
+    }
     const hasClassroomChanges = classroomConfigHasUnsavedChanges;
     const hasFinalTestChanges = finalTestConfigHasUnsavedChanges;
     if (!hasClassroomChanges && !hasFinalTestChanges) return true;
@@ -2571,14 +2573,7 @@ export default function TeacherHomePage() {
     const safeItemKey = String(itemKey || "").trim();
     if (safeItemKey === String(activePanel || "").trim()) return;
     if (!confirmLeaveWithUnsavedClassroomConfig()) return;
-    if (safeItemKey === "agent") {
-      setFeatureTransition({
-        active: true,
-        label: "正在进入智能体管理...",
-      });
-      navigate(withAuthSlot("/admin/agent-settings", activeSlot));
-      return;
-    }
+    setClassroomAiDirty(false);
     setActivePanel(safeItemKey);
   }
 
@@ -6693,7 +6688,7 @@ export default function TeacherHomePage() {
               <div className="teacher-panel-stack teacher-classroom-stack">
                 <header className="teacher-panel-head">
                   <div>
-                    <h2>课时任务</h2>
+                    <h2>课时管理</h2>
                     <p className="teacher-panel-save-time">
                       {`最近保存：${formatDisplayTime(classroomUpdatedAt)}`}
                     </p>
@@ -6728,9 +6723,9 @@ export default function TeacherHomePage() {
                     <button
                       type="button"
                       className="teacher-ghost-btn"
-                      onClick={() =>
-                        setLessonListVisible((current) => !current)
-                      }
+                      aria-expanded={lessonListVisible}
+                      aria-controls="teacher-lesson-list"
+                      onClick={() => setLessonListVisible((current) => !current)}
                     >
                       {lessonListVisible ? "收起列表" : "展开列表"}
                     </button>
@@ -6759,6 +6754,8 @@ export default function TeacherHomePage() {
                   }`}
                 >
                   <div
+                    id="teacher-lesson-list"
+                    hidden={!lessonListVisible}
                     className={`teacher-lesson-list-panel${lessonListVisible ? "" : " collapsed"}`}
                   >
                     <div className="teacher-lesson-list-head">
@@ -6966,84 +6963,20 @@ export default function TeacherHomePage() {
                   </div>
 
                   <div className="teacher-lesson-detail-panel">
-                    <div className="teacher-task-draft-head">
-                      <div className="teacher-lesson-title-row">
-                        <strong>课时设置</strong>
-                        {selectedCourse ? (
-                          <div className="teacher-lesson-title-controls">
-                            <div
-                              className="teacher-lesson-switch-row"
-                              role="switch"
-                              aria-checked={selectedCourse.enabled !== false}
-                              title={selectedCourse.enabled === false ? "课时未开放，点击开放" : "课时已开放，点击关闭"}
-                              onClick={() => onUpdateSelectedLesson({ enabled: selectedCourse.enabled === false })}
-                            >
-                              <span className="teacher-lesson-switch-label">开放课时</span>
-                              <span className="teacher-ios-switch" aria-hidden="true">
-                                <span className={`teacher-ios-switch-track${selectedCourse.enabled !== false ? " checked" : ""}`}>
-                                  <span className="teacher-ios-switch-thumb" />
-                                </span>
-                              </span>
-                            </div>
-                            <div
-                              className="teacher-lesson-switch-row"
-                              role="switch"
-                              aria-checked={selectedCourse.homeworkUploadEnabled !== false}
-                              title={selectedCourse.homeworkUploadEnabled === false ? "本课无需交作业，点击开启" : "本课需要交作业，点击关闭"}
-                              onClick={() => onUpdateSelectedLesson({ homeworkUploadEnabled: selectedCourse.homeworkUploadEnabled === false })}
-                            >
-                              <span className="teacher-lesson-switch-label">提交作业</span>
-                              <span className="teacher-ios-switch" aria-hidden="true">
-                                <span className={`teacher-ios-switch-track${selectedCourse.homeworkUploadEnabled !== false ? " checked" : ""}`}>
-                                  <span className="teacher-ios-switch-thumb" />
-                                </span>
-                              </span>
-                            </div>
-                            {selectedCourse.homeworkUploadEnabled !== false && (
-                              <div
-                                className="teacher-lesson-switch-row"
-                                role="switch"
-                                aria-checked={selectedCourse.lateSubmissionEnabled === true}
-                                title={selectedCourse.lateSubmissionEnabled ? "已允许补交，点击关闭" : "未允许补交，点击开启"}
-                                onClick={() => onUpdateSelectedLesson({ lateSubmissionEnabled: !selectedCourse.lateSubmissionEnabled })}
-                              >
-                                <span className="teacher-lesson-switch-label">允许补交</span>
-                                <span className="teacher-ios-switch" aria-hidden="true">
-                                  <span className={`teacher-ios-switch-track${selectedCourse.lateSubmissionEnabled ? " checked" : ""}`}>
-                                    <span className="teacher-ios-switch-thumb" />
-                                  </span>
-                                </span>
-                              </div>
-                            )}
-                            <PortalSelect
-                              className="teacher-lesson-class-select"
-                              value={normalizeLessonClassName(
-                                selectedCourse.className,
-                              )}
-                              compact
-                              ariaLabel="选择授课班级"
-                              options={authorizedClassOptions}
-                              onChange={(value) => {
-                                onUpdateSelectedLesson({ className: value });
-                              }}
-                            />
-                            <button
-                              type="button"
-                              className="teacher-ghost-btn teacher-lesson-time-trigger"
-                              onClick={onOpenTimeEditorDialog}
-                            >
-                              <CalendarDays size={14} />
-                              <span>
-                                {buildLessonScheduleChipText(
-                                  selectedCourse.courseStartAt,
-                                  selectedCourse.courseEndAt,
-                                )}
-                              </span>
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
+                    <header className="teacher-lesson-editor-head">
+                      <h3>{selectedCourse?.courseName || "请选择课时"}</h3>
+                      {selectedCourse ? <span>{normalizeLessonClassName(selectedCourse.className)}</span> : null}
+                    </header>
+                    {selectedCourse ? <div className="teacher-lesson-editor-tabs" role="tablist" aria-label="课时内容">
+                      {[
+                        { key: "tasks", label: "课时任务" },
+                        { key: "practice", label: "本课编程练习" },
+                        { key: "settings", label: "课时设置" },
+                      ].map((tab) => <button key={tab.key} type="button" role="tab"
+                        id={`lesson-editor-tab-${tab.key}`} aria-controls={`lesson-editor-panel-${tab.key}`}
+                        aria-selected={lessonEditorTab === tab.key} onClick={() => setLessonEditorTab(tab.key)}
+                      >{tab.label}</button>)}
+                    </div> : null}
 
                     {!selectedCourse ? (
                       <p className="teacher-empty-text">
@@ -7051,6 +6984,8 @@ export default function TeacherHomePage() {
                       </p>
                     ) : (
                       <div className="teacher-lesson-detail-scroll">
+                        <div className="teacher-lesson-tab-panel" role="tabpanel" id="lesson-editor-panel-tasks"
+                          aria-labelledby="lesson-editor-tab-tasks" hidden={lessonEditorTab !== "tasks"}>
                         <section className="teacher-course-announcement teacher-lesson-announcement">
                           <header>
                             <div>
@@ -7119,8 +7054,6 @@ export default function TeacherHomePage() {
                           ) : null}
                         </section>
 
-                        <ProgrammingTemplateEditor key={selectedCourse.id} lesson={selectedCourse}
-                          onChange={onUpdateSelectedLesson} onSave={persistClassroomConfig} adminToken={adminToken} />
                         <div className="teacher-task-draft-head">
                           <div className="teacher-task-draft-title">
                             <strong>课时任务</strong>
@@ -7586,6 +7519,41 @@ export default function TeacherHomePage() {
                             )}
                           </div>
                         </section>
+                        </div>
+                        <div className="teacher-lesson-tab-panel" role="tabpanel" id="lesson-editor-panel-practice"
+                          aria-labelledby="lesson-editor-tab-practice" hidden={lessonEditorTab !== "practice"}>
+                          <ProgrammingTemplateEditor key={selectedCourse.id} lesson={selectedCourse}
+                            onChange={onUpdateSelectedLesson} onSave={persistClassroomConfig} adminToken={adminToken} />
+                        </div>
+                        <div className="teacher-lesson-tab-panel teacher-lesson-settings-panel" role="tabpanel" id="lesson-editor-panel-settings"
+                          aria-labelledby="lesson-editor-tab-settings" hidden={lessonEditorTab !== "settings"}>
+                          <div className="teacher-lesson-settings-fields">
+                            {[
+                              { key: "enabled", label: "开放课时", checked: selectedCourse.enabled !== false },
+                              { key: "homeworkUploadEnabled", label: "提交作业", checked: selectedCourse.homeworkUploadEnabled !== false },
+                              ...(selectedCourse.homeworkUploadEnabled !== false ? [{ key: "lateSubmissionEnabled", label: "允许补交", checked: selectedCourse.lateSubmissionEnabled === true }] : []),
+                            ].map((setting) => (
+                              <button key={setting.key} type="button" className="teacher-lesson-setting-row" role="switch"
+                                aria-checked={setting.checked} onClick={() => onUpdateSelectedLesson({ [setting.key]: !setting.checked })}>
+                                <span>{setting.label}</span>
+                                <span className={`teacher-ios-switch-track${setting.checked ? " checked" : ""}`} aria-hidden="true"><span className="teacher-ios-switch-thumb" /></span>
+                              </button>
+                            ))}
+                            <div className="teacher-lesson-setting-row">
+                              <span>授课班级</span>
+                              <PortalSelect className="teacher-lesson-class-select" value={normalizeLessonClassName(selectedCourse.className)}
+                                compact ariaLabel="选择授课班级" options={authorizedClassOptions}
+                                onChange={(value) => onUpdateSelectedLesson({ className: value })} />
+                            </div>
+                            <div className="teacher-lesson-setting-row">
+                              <span>上课时间</span>
+                              <button type="button" className="teacher-ghost-btn teacher-lesson-time-trigger" onClick={onOpenTimeEditorDialog}>
+                                <CalendarDays size={14} /><span>{buildLessonScheduleChipText(selectedCourse.courseStartAt, selectedCourse.courseEndAt)}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                        </div>
                       </div>
                     )}
                   </div>
@@ -9774,6 +9742,8 @@ export default function TeacherHomePage() {
               </div>
             ) : null}
 
+            {activePanel === "agent" ? <ClassroomAiSettings adminToken={adminToken} onAuthError={handleAuthError} onDirtyChange={setClassroomAiDirty} /> : null}
+
             {activePanel === "party-manage" ? (
               <div className="teacher-panel-stack teacher-party-manage-stack">
                 <header className="teacher-panel-head">
@@ -11480,21 +11450,6 @@ export default function TeacherHomePage() {
             </div>
           ) : null}
         </main>
-        {featureTransition.active ? (
-          <div
-            className="teacher-home-route-transition"
-            role="status"
-            aria-live="polite"
-          >
-            <div className="teacher-home-route-transition-card">
-              <div className="teacher-home-route-transition-spinner">
-                <RefreshCw size={18} className="is-spinning" />
-              </div>
-              <strong>{featureTransition.label || "正在切换页面..."}</strong>
-              <span>正在准备页面内容，请稍候。</span>
-            </div>
-          </div>
-        ) : null}
         {error ||
         uploadingFiles ||
         downloadingFileId ||

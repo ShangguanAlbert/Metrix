@@ -3928,3 +3928,60 @@
 .party-web-template-bar button, .party-web-template-confirm button { padding: 5px 10px; border: 1px solid #d6dce5; border-radius: 6px; background: #fff; cursor: pointer; }
 .party-web-template-confirm button + button { margin-left: 8px; }
 .party-web-template-bar button:disabled, .party-web-template-confirm button:disabled { opacity: .5; cursor: default; }
+
+.party-web-workspace-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 6px;
+  flex-shrink: 0;
+}
+.party-web-workspace-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--party-surface-muted, #eee9df);
+}
+.party-web-workspace-tabs button {
+  border: 0;
+  padding: 7px 13px;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.party-web-workspace-tabs button[aria-pressed="true"] {
+  background: #fff;
+  color: #a94d34;
+  box-shadow: 0 1px 3px #45342115;
+  font-weight: 600;
+}
+.party-web-workspace-tabs button:disabled { cursor: default; }
+.party-web-save-actions { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #767267; }
+.party-web-save-actions button {
+  border: 1px solid var(--party-border, #e2e5eb);
+  border-radius: 6px;
+  padding: 5px 9px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+}
+.party-web-save-actions button:disabled { opacity: .5; cursor: default; }
+.party-web-workspace-description {
+  padding: 0 12px 9px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--party-border, #e2e5eb);
+  font-size: 11px;
+  line-height: 1.5;
+  color: #767267;
+}
+
+.party-exercise-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 7px 10px; font-size: 12px; color: #386650; background: #f0f8f3; border-bottom: 1px solid #d6e7dc; }
+.party-exercise-notice button { border: 0; background: transparent; color: #286b4b; text-decoration: underline; cursor: pointer; padding: 3px; }
+.party-exercise-fill { background: #e1f3e8; border-bottom: 2px solid #3e9470; }
+.party-exercise-empty { color: #528369; background: #e1f3e8; font-size: 12px; padding: 0 4px; }

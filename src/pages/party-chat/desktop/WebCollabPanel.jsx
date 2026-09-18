@@ -1,3 +1,5 @@
+import { createExerciseEditor } from "../../../features/classroom/coding/exerciseEditor.js";
+import { readExercise, resolveExerciseRanges } from "../../../../shared/party-exercise.js";
 import { findImageSourceAtSelection } from "../../../../shared/party-images.js";
 import { resolvePartyPreviewImages } from "../../../features/party/previewImages.js";
 import { readNavigatorUserIds, canDriveParty } from "../../../../shared/party-roles.js";
@@ -11,6 +13,7 @@ import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import { yCollab } from "y-codemirror.next";
 import {
+  saveOrSwitchPartyWorkspace,
   uploadPartyProgrammingImage,
   restorePartyWebWorkspace,
   fetchPartyProgrammingTemplate,
@@ -100,6 +103,7 @@ export default function WebCollabPanel({
   ownerUserId = "",
   imageAccessToken = "",
 }) {
+  const [saveStatus, setSaveStatus] = useState("同步中");
   const [imageTarget, setImageTarget] = useState(null);
   const [imageUploading, setImageUploading] = useState(false);
   const [restoreRevision, setRestoreRevision] = useState("");
@@ -163,6 +167,11 @@ export default function WebCollabPanel({
     const session = { doc, htmlText, cssText, awareness, initialized: false, documentEpoch: 0 };
     sessionRef.current = session;
     setReady(false);
+    setSaveStatus("同步中");
+    setTemplateConfirmOpen(false);
+    setRestoreRevision("");
+    setPreviewOpen(false);
+    setImageTarget(null);
     setWorkspace(null);
     setLatestIntervention(null);
     setActionError("");
@@ -176,7 +185,10 @@ export default function WebCollabPanel({
 
     const handleDocumentUpdate = (update, origin) => {
       if (origin === REMOTE_DOCUMENT_ORIGIN || readOnlyObserver) return;
-      if (session.initialized) callbacksRef.current.onCollaborationUpdate?.(roomId, encodeBase64(update), session.documentEpoch);
+      if (session.initialized) {
+        setSaveStatus("正在保存…");
+        callbacksRef.current.onCollaborationUpdate?.(roomId, encodeBase64(update), session.documentEpoch);
+      }
     };
     const handleAwarenessUpdate = ({ added, updated, removed }, origin) => {
       if (origin === REMOTE_AWARENESS_ORIGIN || readOnlyObserver) return;
@@ -201,7 +213,15 @@ export default function WebCollabPanel({
         return;
       }
       if (type === "coding_collab_sync" || type === "coding_collab_update") {
-        if (type === "coding_collab_sync") session.documentEpoch = Number(payload.documentEpoch || 0);
+        if (type === "coding_collab_sync") {
+          if (session.initialized && session.documentEpoch !== Number(payload.documentEpoch || 0)) {
+            session.initialized = false;
+            setReady(false);
+            setSyncGeneration((value) => value + 1);
+            return;
+          }
+          session.documentEpoch = Number(payload.documentEpoch || 0);
+        }
         if (type === "coding_collab_update" && (!session.initialized || Number(payload.documentEpoch || 0) !== session.documentEpoch)) return;
         const update = decodeBase64(payload?.update);
         if (!update) return;
@@ -222,6 +242,9 @@ export default function WebCollabPanel({
       }
       if (type === "coding_collab_workspace_updated") {
         const nextWorkspace = payload?.workspace || null;
+        if (session.initialized && Number(nextWorkspace?.documentEpoch || 0) !== session.documentEpoch) return;
+        const matches = nextWorkspace?.html === htmlText.toString() && nextWorkspace?.css === cssText.toString();
+        setSaveStatus(matches ? (nextWorkspace?.savedAt ? "已保存" : "已同步") : "正在保存…");
         setWorkspace((previousWorkspace) => {
           if (previousWorkspace?.taskId && nextWorkspace?.taskId !== previousWorkspace.taskId) {
             setLatestIntervention(null);
@@ -237,6 +260,7 @@ export default function WebCollabPanel({
         return;
       }
       if (type === "coding_collab_error") {
+        setSaveStatus("请重试保存");
         setActionError(String(payload?.error || "协作操作失败。"));
       }
     };
@@ -270,6 +294,21 @@ export default function WebCollabPanel({
     return () => { active = false; };
   }, [roomId, ready, readOnlyObserver, templateRefresh]);
 
+  async function saveOrSwitch(target) {
+    const session = sessionRef.current;
+    if (!isDriver || readOnlyObserver || !ready || actionSubmitting || !session?.initialized) return;
+    setActionSubmitting(true);
+    setActionError("");
+    try {
+      await saveOrSwitchPartyWorkspace(roomId, {
+        ...(target ? { target } : {}), documentEpoch: session.documentEpoch,
+        stateVector: encodeBase64(Y.encodeStateVector(session.doc)),
+        html: session.htmlText.toString(), css: session.cssText.toString(),
+      });
+    } catch (error) { setActionError(error.message); setSaveStatus("请重试保存"); }
+    finally { setActionSubmitting(false); }
+  }
+
   async function loadTemplate() {
     const session = sessionRef.current;
     if (!isDriver || !ready || actionSubmitting || !lessonTemplate || !session?.initialized) return;
@@ -280,6 +319,7 @@ export default function WebCollabPanel({
         lessonId: lessonTemplate.lessonId, version: lessonTemplate.version,
         requestId: crypto.randomUUID(), documentEpoch: session.documentEpoch,
         stateVector: encodeBase64(Y.encodeStateVector(session.doc)),
+        html: session.htmlText.toString(), css: session.cssText.toString(),
       });
       setTemplateConfirmOpen(false);
     } catch (error) { setActionError(error.message); }
@@ -303,6 +343,8 @@ export default function WebCollabPanel({
     "小组成员",
   );
   const activeText = activeDocument === "html" ? sessionRef.current?.htmlText : sessionRef.current?.cssText;
+  const imageTargetWritable = !ready || !readExercise(sessionRef.current?.doc) || (imageTarget && resolveExerciseRanges(sessionRef.current.doc, "html")
+    .some((range) => range && imageTarget.from >= range.from && imageTarget.to <= range.to));
   const editorExtensions = useMemo(() => {
     if (!ready || !activeText || !sessionRef.current?.awareness) return [];
     return [
@@ -312,10 +354,13 @@ export default function WebCollabPanel({
         if (activeDocument !== "html") { setImageTarget(null); return; }
         if (update.selectionSet || update.docChanged) setImageTarget(findImageSourceAtSelection(update.state.doc.toString(), update.state.selection.main.head));
       }),
-      EditorView.editable.of(!readOnlyObserver && pairReady && isDriver),
+      EditorView.editable.of(!readOnlyObserver && pairReady && isDriver && !actionSubmitting),
       yCollab(activeText, sessionRef.current.awareness),
+      ...createExerciseEditor({ doc: sessionRef.current.doc, file: activeDocument,
+        onBlocked: () => setActionError("只能修改高亮填写区；老师提供的其他代码已锁定。"),
+      }),
     ];
-  }, [activeDocument, activeText, isDriver, pairReady, readOnlyObserver, ready]);
+  }, [activeDocument, activeText, isDriver, pairReady, readOnlyObserver, ready, actionSubmitting]);
 
   useEffect(() => {
     const session = sessionRef.current;
@@ -329,6 +374,7 @@ export default function WebCollabPanel({
     if (!isDriver || readOnlyObserver || activeDocument !== "html" || !view || !session?.initialized) return;
     const target = findImageSourceAtSelection(view.state.doc.toString(), view.state.selection.main.head);
     if (!target) return;
+    if (!imageTargetWritable) { setActionError("这个 src 不在填写区内，老师已锁定，不能替换图片。"); return; }
     imageSelectionRef.current = {
       session, value: target.value,
       from: Y.createRelativePositionFromTypeIndex(session.htmlText, target.from),
@@ -357,6 +403,9 @@ export default function WebCollabPanel({
       }
       const target = findImageSourceAtSelection(text.toString(), start.index);
       if (!target || target.from !== start.index || target.to !== end.index) throw new Error("原 src 已变化，请重新选择图片位置。");
+      if (readExercise(selected.session.doc) && !resolveExerciseRanges(selected.session.doc, "html").some((range) => range && start.index >= range.from && end.index <= range.to)) {
+        throw new Error("图片位置不在老师允许修改的填写区内。");
+      }
       selected.session.doc.transact(() => { text.delete(start.index, end.index - start.index); text.insert(start.index, result.path); });
     } catch (error) { setActionError(error.message || "插入图片失败。"); }
     finally { setImageUploading(false); }
@@ -366,7 +415,7 @@ export default function WebCollabPanel({
     if (!restoreRevision || actionSubmitting) return;
     if (!window.confirm("恢复将替换当前 HTML/CSS，当前作品会先保存为历史版本。")) return;
     setActionSubmitting(true);
-    try { await restorePartyWebWorkspace(roomId, Number(restoreRevision)); setRestoreRevision(""); }
+    try { await restorePartyWebWorkspace(roomId, Number(restoreRevision), sessionRef.current?.documentEpoch); setRestoreRevision(""); }
     catch (error) { setActionError(error.message); }
     finally { setActionSubmitting(false); }
   }
@@ -374,15 +423,17 @@ export default function WebCollabPanel({
   async function refreshPreview({ openPreview = false } = {}) {
     if (actionSubmitting) return;
     if (!readOnlyObserver && !isDriver) { if (openPreview) setPreviewOpen(true); return; }
-    const html = sessionRef.current?.htmlText.toString() || "";
+    const previewSession = sessionRef.current;
+    const html = previewSession?.htmlText.toString() || "";
     const css = sessionRef.current?.cssText.toString() || "";
     const nextDiagnostics = analyzeWebCode(html, css);
     await renderPreview(html, css);
+    if (previewSession !== sessionRef.current || !previewSession?.initialized) return;
     if (openPreview) setPreviewOpen(true);
     if (readOnlyObserver) return;
     setActionSubmitting(true);
     try {
-      const result = await recordPartyWebPreview(roomId, nextDiagnostics);
+      const result = await recordPartyWebPreview(roomId, nextDiagnostics, previewSession.documentEpoch);
       setWorkspace(result?.workspace || workspace);
       setActionError("");
     } catch (error) {
@@ -396,7 +447,7 @@ export default function WebCollabPanel({
     if (actionSubmitting) return;
     setActionSubmitting(true);
     try {
-      const result = await updatePartyCodingSession(roomId, payload);
+      const result = await updatePartyCodingSession(roomId, { ...payload, documentEpoch: sessionRef.current?.documentEpoch });
       setWorkspace(result?.workspace || workspace);
       setActionError("");
     } catch (error) {
@@ -414,7 +465,7 @@ export default function WebCollabPanel({
     const url = URL.createObjectURL(new Blob([source], { type: "text/html;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = "paia-pair-work.html";
+    link.download = workspace?.activeWorkspace === "lesson" ? "本课练习.html" : "长期任务.html";
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -437,6 +488,23 @@ export default function WebCollabPanel({
   }
 
   return <aside className="party-coding-column party-web-coding-column" aria-label="HTML和CSS结对编程区">
+    <div className="party-web-workspace-bar">
+      <div className="party-web-workspace-tabs" role="group" aria-label="编程区域">
+        {[{ value: "project", label: "长期任务" }, { value: "lesson", label: "本课练习" }].map((item) => <button
+          key={item.value} type="button" aria-pressed={(workspace?.activeWorkspace || "project") === item.value}
+          disabled={!ready || !isDriver || readOnlyObserver || actionSubmitting}
+          onClick={() => { if (workspace?.activeWorkspace !== item.value) void saveOrSwitch(item.value); }}
+        >{item.label}</button>)}
+      </div>
+      <div className="party-web-save-actions">
+        <span role="status">{saveStatus}</span>
+        {!readOnlyObserver && isDriver ? <button type="button" disabled={!ready || actionSubmitting} onClick={() => void saveOrSwitch()}>保存进度</button> : null}
+      </div>
+    </div>
+    <div className="party-web-workspace-description">
+      {workspace?.activeWorkspace === "lesson" ? "载入本课模板，练习知识点；进度与长期任务分别保存。" : "持续完善小组作品，进度自动保存，可下次继续。"}
+      {!isDriver ? " 由 Driver 带全组切换区域。" : ""}
+    </div>
     <div className="party-web-session-bar">
       <div className="party-web-task-summary">
         <span>当前任务</span>
@@ -462,14 +530,14 @@ export default function WebCollabPanel({
       </div>
     </div>
 
-    {!readOnlyObserver && lessonTemplate ? <div className="party-web-template-bar">
-      <span>本课模板：{lessonTemplate.lessonName}{workspace?.loadedTemplate?.lessonId === lessonTemplate.lessonId && workspace?.loadedTemplate?.version === lessonTemplate.version ? "（已载入）" : "（可载入新模板）"}</span>
-      <button type="button" disabled={!ready || !isDriver || actionSubmitting} onClick={() => setTemplateConfirmOpen(true)}>载入本课模板</button>
+    {!readOnlyObserver && workspace?.activeWorkspace === "lesson" ? <div className="party-web-template-bar">
+      <span>本课模板：{lessonTemplate?.lessonName || "老师尚未发布模板"}{lessonTemplate && workspace?.loadedTemplate?.lessonId === lessonTemplate.lessonId && workspace?.loadedTemplate?.version === lessonTemplate.version ? "（已载入）" : lessonTemplate ? "（可载入新模板）" : ""}</span>
+      <button type="button" disabled={!ready || !isDriver || !lessonTemplate || actionSubmitting} onClick={() => setTemplateConfirmOpen(true)}>载入本课模板</button>
     </div> : null}
     {templateConfirmOpen ? <div className="party-web-template-confirm" role="alertdialog" aria-label="确认载入模板">
-      <p>载入将替换当前 HTML 和 CSS。原作品会保存为可恢复的版本，所有组员同步切换。</p>
+      <p>载入将替换“本课练习”的 HTML 和 CSS，并保留练习的历史版本。长期任务保持独立保存，全组同步载入。</p>
       <button type="button" disabled={actionSubmitting} onClick={() => setTemplateConfirmOpen(false)}>取消</button>
-      <button type="button" disabled={!isDriver || actionSubmitting} onClick={() => void loadTemplate()}>{actionSubmitting ? "载入中..." : "保存原作品并载入"}</button>
+      <button type="button" disabled={!isDriver || actionSubmitting} onClick={() => void loadTemplate()}>{actionSubmitting ? "载入中..." : "保存练习并载入"}</button>
     </div> : null}
 
     <div className="party-coding-head party-web-coding-head">
@@ -489,7 +557,7 @@ export default function WebCollabPanel({
       <div className="party-coding-head-actions">
         <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={(event) => void insertImage(event)} />
         {activeDocument === "html" && imageTarget && isDriver && !readOnlyObserver ? <button type="button"
-          onClick={selectImage} disabled={imageUploading || !ready}>{imageUploading ? "上传中..." : "为 src 选择图片"}</button> : null}
+          onClick={selectImage} disabled={imageUploading || !ready || !imageTargetWritable} title={imageTargetWritable ? "选择图片后自动插入共享路径" : "这个 src 已被老师锁定"}>{imageUploading ? "上传中..." : "为 src 选择图片"}</button> : null}
         {codingEditors.length > 0 ? <div className="party-coding-editor-avatars" aria-label={`${codingEditors.map((editor) => editor.name).join("、")}正在编辑`}>
           {codingEditors.slice(0, 3).map((editor) => <span className="party-coding-editor-avatar" key={editor.userId} title={`${editor.name}正在编辑`}>{getEditorInitial(editor.name)}</span>)}
         </div> : null}
@@ -506,6 +574,16 @@ export default function WebCollabPanel({
       : isDriver ? <div className="party-web-role-notice is-driver">你当前是 Driver：根据小组讨论输入 HTML/CSS、刷新预览；完成一轮后点击“交棒”。</div>
         : isNavigator ? <div className="party-web-role-notice is-navigator">你当前是 Navigator：暂时不能输入代码，请在群聊中提出建议、发现问题，并和 Driver 一起检查预览。</div>
           : <div className="party-web-role-notice is-observer">你当前未分配结对角色，只能查看本轮过程。请联系老师调整小教室成员。</div>}
+    {ready && readExercise(sessionRef.current.doc) ? <div className="party-exercise-notice">
+      <span>代码填空 · 仅高亮填写区可修改，其余代码已锁定。</span>
+      <button type="button" onClick={() => {
+        const view = editorViewRef.current;
+        const ranges = resolveExerciseRanges(sessionRef.current.doc, activeDocument).filter(Boolean);
+        const next = ranges.find((range) => range.from > (view?.state.selection.main.from ?? -1)) || ranges[0];
+        if (!view || !next) { setActionError("这个文件没有填写区，请切换 HTML / CSS 查看。"); return; }
+        view.dispatch({ selection: { anchor: next.from, head: next.to }, scrollIntoView: true }); view.focus();
+      }}>下一个填写区</button>
+    </div> : null}
     <div className="party-code-editor party-web-code-editor">
       {ready && activeText ? <CodeMirror
         key={`${roomId}:${activeDocument}:${isDriver ? "driver" : isNavigator ? "navigator" : "observer"}`}

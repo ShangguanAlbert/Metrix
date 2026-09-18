@@ -1,3 +1,4 @@
+import { registerAdminClassroomAiRoutes } from "./admin-classroom-ai.js";
 import { normalizeChatBootstrapResponse } from "../../shared/contracts/chat.js";
 import {
   getClassroomFileFallbackName,
@@ -317,6 +318,12 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     teacherScopeKey = SHI_GAOJUN_TEACHER_SCOPE_KEY,
     admin = null,
   ) {
+    if (admin && normalizeFinalTestUsernameKey(admin.username) === TERMINAL_ADMIN_USERNAME_KEY) {
+      const courses = await TeachingCourse.find({}, { classNames: 1 }).lean();
+      return [...new Set(courses.flatMap((course) => course.classNames || [])
+        .map(sanitizeClassroomUserClassName).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
+    }
     const configuredClassNames = Array.from(
       new Set(
         (Array.isArray(admin?.authorizedClassNames)
@@ -2296,6 +2303,8 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     const config = normalizeAdminConfigDoc(doc);
     res.json(buildAdminAgentSettingsResponse(config));
   });
+
+  registerAdminClassroomAiRoutes(app, deps);
 
   app.get("/api/auth/admin/agent-settings", async (req, res) => {
     if (!(await authenticateAdminRequest(req, res))) return;

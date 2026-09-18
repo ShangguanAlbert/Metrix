@@ -300,9 +300,8 @@ export default function TeacherRoomMemoryDialog({
       <section className="teacher-memory-dialog" role="dialog" aria-modal="true" aria-labelledby="teacher-memory-title">
         <header className="teacher-memory-dialog-head">
           <div>
-            <span className="teacher-memory-eyebrow">房间长期记忆</span>
-            <h2 id="teacher-memory-title">{resolvedRoom.name || "协作小教室"}</h2>
-            <p>{resolvedRoom.announcement || "教师尚未发布当前课堂任务。"}</p>
+            <h2 id="teacher-memory-title">记忆档案 <span>· {resolvedRoom.name || "协作小教室"}</span></h2>
+            <p>汇总课堂讨论、代码修改与协作表现，供教师核查，也用于琳琳后续的学习引导。</p>
           </div>
           <div className="teacher-memory-head-actions">
             <button type="button" className="teacher-ghost-btn" onClick={() => void loadMemories()} disabled={loading}>
@@ -316,28 +315,26 @@ export default function TeacherRoomMemoryDialog({
         </header>
 
         <div className="teacher-memory-members">
-          <Users size={15} />
+          <Users size={14} /><span className="teacher-memory-members-label">成员</span>
           {(Array.isArray(resolvedRoom.members) ? resolvedRoom.members : []).map((member) => (
             <span key={member.id}>{member.name || member.username || "学生"}</span>
           ))}
         </div>
 
         <div className="teacher-memory-overview">
-          <article><strong>{memoryCounts.total}</strong><span>活动记忆</span></article>
-          <article><strong>{memoryCounts.pending}</strong><span>待教师确认</span></article>
-          <article><strong>{memoryCounts.confirmed}</strong><span>教师已确认</span></article>
-          <article><strong>{uses.length}</strong><span>近期使用记录</span></article>
-          <article><strong>{memoryCounts.paused}</strong><span>暂停检索</span></article>
+          <span>记录 <strong>{memoryCounts.total}</strong></span>
+          <span>待确认 <strong>{memoryCounts.pending}</strong></span>
+          <span>已确认 <strong>{memoryCounts.confirmed}</strong></span>
+          <span>近期引用 <strong>{uses.length}</strong></span>
+          <span>暂停使用 <strong>{memoryCounts.paused}</strong></span>
         </div>
 
-        <div className="teacher-memory-compiler-status">
-          <div>
-            <strong>凌晨记忆编译</strong>
-            <span>{compilation.lastCompiledAt ? `最近完成：${displayTime(compilation.lastCompiledAt)}` : "尚未完成首次编译"}</span>
-          </div>
-          <span>{`最近生成 ${Number(compilation.lastCandidateCount || 0)} 条候选，待整合 ${Number(compilation.pendingCandidateCount || 0)} 条`}</span>
-          {compilation.lastError ? <p>{compilation.lastError}</p> : null}
-        </div>
+        <details className="teacher-memory-compiler-status">
+          <summary>{compilation.lastCompiledAt ? `最近整理 ${displayTime(compilation.lastCompiledAt)}` : "尚无自动整理记录"}{compilation.lastError ? " · 整理失败" : ""}</summary>
+          <p>系统定期从课堂活动中整理记录。系统观察需要教师结合依据核查，不能直接当作学生的能力结论。</p>
+          <p>{`最近整理出 ${Number(compilation.lastCandidateCount || 0)} 条候选记录，待整合 ${Number(compilation.pendingCandidateCount || 0)} 条。`}</p>
+          {compilation.lastError ? <p className="teacher-memory-error">{compilation.lastError}</p> : null}
+        </details>
 
         <nav className="teacher-memory-filters" aria-label="记忆类型筛选">
           {SUBJECT_FILTERS.map((filter) => (
@@ -345,6 +342,7 @@ export default function TeacherRoomMemoryDialog({
               key={filter.key}
               type="button"
               className={activeFilter === filter.key ? "is-active" : ""}
+              aria-pressed={activeFilter === filter.key}
               onClick={() => setActiveFilter(filter.key)}
             >
               {filter.label}
@@ -356,9 +354,9 @@ export default function TeacherRoomMemoryDialog({
 
         <div className="teacher-memory-content">
           {loading ? (
-            <p className="teacher-memory-empty">正在读取这间房的记忆档案……</p>
+            <p className="teacher-memory-empty">正在读取学习记录…</p>
           ) : memories.length === 0 ? (
-            <p className="teacher-memory-empty">当前筛选下还没有活动记忆。凌晨编译完成后会在这里出现。</p>
+            <p className="teacher-memory-empty">{memoryCounts.total ? "该分类暂无记录，请切换其他分类查看。" : "暂无学习记录。学生参与讨论和编程后，系统会定期整理相关记录，供教师查看依据、确认或纠正。"}</p>
           ) : (
             <div className="teacher-memory-list">
               {memories.map((memory) => {
@@ -382,8 +380,8 @@ export default function TeacherRoomMemoryDialog({
                     <p className="teacher-memory-summary">{memory.summary}</p>
                     <div className="teacher-memory-meta">
                       <span>{`证据 ${Number(memory.evidenceCount || 0)} 条`}</span>
-                      <span>{`置信度 ${confidenceText(memory.confidence)}`}</span>
-                      <span>{`Agent 使用 ${Number(memory.useCount || 0)} 次`}</span>
+                      <span>{`系统置信度 ${confidenceText(memory.confidence)}`}</span>
+                      <span>{`琳琳引用 ${Number(memory.useCount || 0)} 次`}</span>
                       <span>{`更新 ${displayTime(memory.lastBoundaryAt)}`}</span>
                     </div>
                     <div className="teacher-memory-card-actions">
@@ -432,7 +430,7 @@ export default function TeacherRoomMemoryDialog({
                         <div className="teacher-memory-use-controls">
                           <label>
                             <input type="checkbox" checked={draft.retrievalEnabled} onChange={(event) => updateDraft(memory, { retrievalEnabled: event.target.checked })} />
-                            允许 Agent 检索
+                            允许琳琳使用
                           </label>
                           <label>
                             <input type="checkbox" checked={draft.allowedUseTypes.includes("student_reply")} onChange={(event) => updateDraft(memory, {
@@ -476,7 +474,7 @@ export default function TeacherRoomMemoryDialog({
           )}
 
           <details className="teacher-memory-usage-ledger">
-            <summary>{`Agent 逐次使用记录（${uses.length}）`}</summary>
+            <summary>{`琳琳引用记录（${uses.length}）`}</summary>
             {uses.length === 0 ? (
               <p>尚未有活动记忆参与 Agent 回答或主动提醒。</p>
             ) : (

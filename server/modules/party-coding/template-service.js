@@ -10,6 +10,8 @@ export function getPartyTemplateModel(mongoose) {
     teacherScopeKey: String,
     html: String,
     css: String,
+    editMode: String,
+    editableRanges: mongoose.Schema.Types.Mixed,
     version: String,
     publishedAt: Date,
     publishedBy: String,
@@ -36,8 +38,8 @@ export async function readRoomTemplate({ Template, AuthUser, memberUserIds }) {
     || students.some((student) => student.lockedTeacherScopeKey !== "shi-gaojun")) return null;
   const doc = await Template.findOne({ className: classes[0], teacherScopeKey: "shi-gaojun" }).sort({ publishedAt: -1 }).lean();
   if (!doc) return null;
-  const { lessonId, lessonName, version, html, css, publishedAt } = doc;
-  return { lessonId, lessonName, version, html, css, publishedAt };
+  const { lessonId, lessonName, version, publishedAt } = doc;
+  return { lessonId, lessonName, version, publishedAt, ...normalizeProgrammingTemplate(doc) };
 }
 
 export function registerPartyTemplateAdminRoutes(app, deps) {
@@ -58,6 +60,9 @@ export function registerPartyTemplateAdminRoutes(app, deps) {
       const template = buildPublishedTemplate(lesson, admin._id);
       if (!template.html.trim() && !template.css.trim()) {
         res.status(400).json({ error: "请先填写 HTML 或 CSS 模板。" }); return;
+      }
+      if (template.editMode === "fill" && !template.editableRanges.html.length && !template.editableRanges.css.length) {
+        res.status(400).json({ error: "请至少设置一个学生填写区，或切换为自由编程。" }); return;
       }
       await Template.findOneAndUpdate({ lessonId: template.lessonId }, { $set: template }, { upsert: true });
       const students = await AuthUser.find({ lockedTeacherScopeKey: "shi-gaojun", "profile.className": lesson.className }, { _id: 1 }).lean();

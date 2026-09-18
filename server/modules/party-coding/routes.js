@@ -106,10 +106,25 @@ export function registerPartyCodingRoutes(app, deps) {
       const workspace = await collaboration.replaceRoomDocuments({
         roomId: member.roomId, html: template.html, css: template.css, template, requestId,
         expectedEpoch: req.body?.documentEpoch, expectedStateVector: req.body?.stateVector,
+        expectedHtml: req.body?.html, expectedCss: req.body?.css,
         author: { userId: member.userId, name: member.userName },
       });
       res.json({ ok: true, workspace });
     } catch (error) { res.status(error.status || 500).json({ error: error?.message || "载入本课模板失败。" }); }
+  });
+
+  app.post("/api/group-chat/rooms/:roomId/coding/workspace", requireChatAuth, async (req, res) => {
+    try {
+      const member = await requireCodingMember(req, res);
+      if (!member) return;
+      const workspace = await collaboration.saveOrSwitchWorkspace({
+        roomId: member.roomId, target: req.body?.target,
+        expectedEpoch: req.body?.documentEpoch, expectedStateVector: req.body?.stateVector,
+        expectedHtml: req.body?.html, expectedCss: req.body?.css,
+        author: { userId: member.userId, name: member.userName },
+      });
+      res.json({ ok: true, workspace });
+    } catch (error) { res.status(error.status || 500).json({ error: error.message || "保存或切换编程区域失败。" }); }
   });
 
   app.get("/api/group-chat/rooms/:roomId/coding", requireChatAuth, async (req, res) => {
@@ -147,13 +162,14 @@ export function registerPartyCodingRoutes(app, deps) {
       const workspace = await collaboration.replaceRoomDocuments({
         roomId: member.roomId,
         requireDriver: true,
+        expectedEpoch: req.body?.documentEpoch,
         html: sanitizeDocument(req.body?.html),
         css: sanitizeDocument(req.body?.css),
         author: { userId: member.userId, name: member.userName },
       });
       res.json({ ok: true, workspace });
     } catch (error) {
-      res.status(500).json({ error: error?.message || "保存网页代码失败。" });
+      res.status(error.status || 500).json({ error: error?.message || "保存网页代码失败。" });
     }
   });
 
@@ -174,13 +190,15 @@ export function registerPartyCodingRoutes(app, deps) {
       }
       const workspace = await collaboration.replaceRoomDocuments({
         roomId: member.roomId,
+        expectedEpoch: req.body?.documentEpoch,
+        restoreRevision: revisionToRestore,
         html: source.html,
         css: source.css,
         author: { userId: member.userId, name: member.userName },
       });
       res.json({ ok: true, workspace });
     } catch (error) {
-      res.status(500).json({ error: error?.message || "恢复代码版本失败。" });
+      res.status(error.status || 500).json({ error: error?.message || "恢复代码版本失败。" });
     }
   });
 
@@ -190,6 +208,9 @@ export function registerPartyCodingRoutes(app, deps) {
       if (!member) return;
       return await collaboration.withRoomLock(member.roomId, async () => {
       const current = await ensurePairRoles(member);
+      if (Number(req.body?.documentEpoch) !== Number(current?.documentEpoch || 0)) {
+        res.status(409).json({ error: "工作区已变化，请同步后重试。" }); return;
+      }
       const action = String(req.body?.action || "").trim().toLowerCase();
       const nextStage = String(req.body?.taskStage || "").trim().toLowerCase();
       let update = null;
@@ -262,7 +283,11 @@ export function registerPartyCodingRoutes(app, deps) {
     try {
       const member = await requireCodingMember(req, res);
       if (!member) return;
+      return await collaboration.withRoomLock(member.roomId, async () => {
       const current = await ensurePairRoles(member);
+      if (Number(req.body?.documentEpoch) !== Number(current?.documentEpoch || 0)) {
+        res.status(409).json({ error: "工作区已变化，请同步后重新预览。" }); return;
+      }
       if (!sanitizeId(current?.driverUserId, "") || !sanitizeId(current?.navigatorUserId, "")) {
         res.status(409).json({ error: "请等待第二名学生加入，结对角色分配后再刷新预览。" });
         return;
@@ -308,6 +333,7 @@ export function registerPartyCodingRoutes(app, deps) {
         workspace: normalized,
       });
       res.json({ ok: true, workspace: normalized });
+      });
     } catch (error) {
       res.status(500).json({ error: error?.message || "记录网页预览失败。" });
     }

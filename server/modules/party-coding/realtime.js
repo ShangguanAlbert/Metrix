@@ -1,4 +1,5 @@
-import { normalizeWorkspace } from "./workspace-state.js";
+import { exerciseSnapshot, initializeExercise, readExercise, validateExerciseUpdate } from "../../../shared/party-exercise.js";
+import { normalizeWorkspace, snapshotWorkspaceDocument } from "./workspace-state.js";
 import { canDriveParty } from "../../../shared/party-roles.js";
 import * as Y from "yjs";
 import {
@@ -143,7 +144,7 @@ export function createPartyCodingRealtime(deps) {
     if (room.persistTimer) clearTimeout(room.persistTimer);
     room.persistTimer = setTimeout(() => {
       room.persistTimer = 0;
-      void persistRoom(room);
+      void withRoomLock(room.roomId, () => persistRoom(room));
     }, PERSIST_DELAY_MS);
   }
 
@@ -159,7 +160,16 @@ export function createPartyCodingRealtime(deps) {
       const changedHtml = sanitizeDocument(current?.html) !== html;
       const changedCss = sanitizeDocument(current?.css) !== css;
       const changed = changedHtml || changedCss;
-      if (!changed) return current;
+      if (!changed) {
+        // Persist Yjs deletions and identities even when the rendered text is unchanged.
+        const workspace = await Workspace.findOneAndUpdate({ roomId: room.roomId }, { $set: {
+          collaborationState: Buffer.from(Y.encodeStateAsUpdate(room.doc)), savedAt: new Date(),
+        } }, { new: true }).lean();
+        broadcastGroupChatWsPayload(room.roomId, {
+          type: "coding_collab_workspace_updated", roomId: room.roomId, workspace: normalizeWorkspace(workspace),
+        });
+        return workspace;
+      }
       const safeAuthor = {
         userId: sanitizeId(author?.userId, ""),
         name: String(author?.name || "成员").trim().slice(0, 60) || "成员",
@@ -173,6 +183,7 @@ export function createPartyCodingRealtime(deps) {
             css,
             collaborationState: Buffer.from(Y.encodeStateAsUpdate(room.doc)),
             revision,
+            savedAt: new Date(),
           },
           $push: {
             versions: {
@@ -180,6 +191,7 @@ export function createPartyCodingRealtime(deps) {
                 revision,
                 html,
                 css,
+                exercise: exerciseSnapshot(room.doc),
                 savedByUserId: safeAuthor.userId,
                 savedByName: safeAuthor.name,
                 createdAt: new Date(),
@@ -214,6 +226,10 @@ export function createPartyCodingRealtime(deps) {
       return workspace;
     }).catch((error) => {
       console.error("[party-web] failed to persist collaboration state", error);
+      broadcastGroupChatWsPayload(room.roomId, {
+        type: "coding_collab_error", roomId: room.roomId,
+        error: "保存进度失败，请保持页面打开并点击保存进度重试。",
+      });
       return null;
     });
     return room.persistPromise;
@@ -330,6 +346,11 @@ export function createPartyCodingRealtime(deps) {
       }
       const update = decodeUpdate(payload?.update);
       if (!update) return true;
+      if (!validateExerciseUpdate(room.doc, update)) {
+        sendGroupChatWsPayload(socket, { type: "coding_collab_error", roomId, error: "只能修改老师标出的填写区，其余代码已锁定。" });
+        sendGroupChatWsPayload(socket, { type: "coding_collab_reset", roomId, documentEpoch: room.epoch });
+        return true;
+      }
       Y.applyUpdate(room.doc, update, { partyCodingAuthor: getAuthor(meta) });
       broadcastGroupChatWsPayload(roomId, {
         type: "coding_collab_update",
@@ -359,54 +380,119 @@ export function createPartyCodingRealtime(deps) {
 
   async function replaceRoomDocuments(options) {
     return withRoomLock(options.roomId, async () => {
-      const { roomId, html, css, author, expectedStateVector, expectedEpoch, template, requestId, requireDriver = false } = options;
+      const { roomId, html, css, author, expectedStateVector, expectedEpoch, expectedHtml, expectedCss, template, requestId, restoreRevision, requireDriver = false } = options;
       const room = await getRoom(roomId);
       const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
       const current = await Workspace.findOne({ roomId }).lean();
       if (requireDriver && !canDriveParty(current, author.userId)) fail(403, "角色已变化，仅当前 Driver 可以修改代码。");
+      if (template && !canDriveParty(current, author.userId)) fail(403, "角色已变化，仅当前 Driver 可以载入模板。");
+      if (template && current?.loadedTemplate?.requestId === requestId
+        && (current.activeWorkspace || "project") === "lesson") return normalizeWorkspace(current);
+      if (expectedEpoch !== room.epoch) fail(409, "工作区已变化，请同步后重试。");
+      if (template && (current.activeWorkspace || "project") !== "lesson") {
+        fail(409, "请先切换到本课练习，再载入模板；长期任务会独立保留。");
+      }
       if (template) {
-        if (current?.loadedTemplate?.requestId === requestId) return normalizeWorkspace(current);
-        if (!canDriveParty(current, author.userId)) fail(403, "角色已变化，仅当前 Driver 可以载入模板。");
-        if (expectedEpoch !== room.epoch || expectedStateVector !== encodeUpdate(Y.encodeStateVector(room.doc))) {
+        if (expectedEpoch !== room.epoch || expectedStateVector !== encodeUpdate(Y.encodeStateVector(room.doc))
+        || expectedHtml !== room.htmlText.toString() || expectedCss !== room.cssText.toString()) {
           fail(409, "代码已变化，请等待同步完成后重新载入模板。");
         }
+      }
+      const protection = readExercise(room.doc);
+      const restoredVersion = restoreRevision ? (current.versions || []).find((item) => Number(item.revision) === Number(restoreRevision)) : null;
+      if (!template && protection && (!restoredVersion?.exercise || restoredVersion.exercise.version !== protection.version)) {
+        fail(403, "填空练习只能恢复同一模板的填写记录；若要重新开始，请重新载入本课模板。");
       }
       // Flush the original shared document before creating its recovery snapshot.
       const saved = await persistRoom(room);
       if (!saved) fail(500, "保存原作品失败，未载入新内容。");
       if (!(saved.versions || []).some((version) => Number(version.revision) === Number(saved.revision))) await Workspace.updateOne({ roomId }, { $push: { versions: { $each: [{
-        revision: saved.revision, html: saved.html, css: saved.css,
+        revision: saved.revision, html: saved.html, css: saved.css, exercise: exerciseSnapshot(room.doc),
         savedByUserId: author.userId, savedByName: author.name, createdAt: new Date(),
       }], $slice: -VERSION_LIMIT } } });
       const nextDoc = new Y.Doc();
       nextDoc.getText("html").insert(0, sanitizeDocument(html));
       nextDoc.getText("css").insert(0, sanitizeDocument(css));
+      if (template) initializeExercise(nextDoc, template, template.version);
+      else if (protection) initializeExercise(nextDoc, { editMode: "fill", editableRanges: restoredVersion.exercise.editableRanges }, protection.version);
       const documentEpoch = room.epoch + 1;
       const loadedTemplate = template ? { lessonId: template.lessonId, version: template.version, requestId, loadedAt: new Date(), loadedByUserId: author.userId } : current.loadedTemplate;
       const workspace = await Workspace.findOneAndUpdate({ roomId }, {
         $set: { html: sanitizeDocument(html), css: sanitizeDocument(css),
-          collaborationState: Buffer.from(Y.encodeStateAsUpdate(nextDoc)), documentEpoch, loadedTemplate },
+          collaborationState: Buffer.from(Y.encodeStateAsUpdate(nextDoc)), documentEpoch, loadedTemplate, savedAt: new Date() },
         $inc: { revision: 1 },
       }, { new: true }).lean();
       if (!workspace) { nextDoc.destroy(); fail(409, "工作区已变化，未载入新内容。"); }
-      room.doc.destroy();
-      room.awareness.destroy();
-      room.doc = nextDoc;
-      room.htmlText = nextDoc.getText("html");
-      room.cssText = nextDoc.getText("css");
-      room.awareness = new Awareness(nextDoc);
-      room.clientIdsBySocket.clear();
-      room.epoch = documentEpoch;
-      room.lastAuthor = author;
-      nextDoc.on("update", (_update, origin) => {
-        if (origin?.partyCodingAuthor) room.lastAuthor = origin.partyCodingAuthor;
-        schedulePersist(room);
-      });
-      broadcastGroupChatWsPayload(roomId, { type: "coding_collab_reset", roomId, documentEpoch });
+      activateDocument(room, nextDoc, documentEpoch, author);
       await learning.recordEvent({ roomId, userId: author.userId, userName: author.name,
         eventType: template ? "template_load" : "code_edit", workspace,
         metadata: template ? { lessonId: template.lessonId, templateVersion: template.version, previousRevision: saved.revision }
           : { revision: workspace.revision, previousRevision: saved.revision, documents: ["html", "css"] },
+      });
+      return normalizeWorkspace(workspace);
+    });
+  }
+
+  function activateDocument(room, doc, epoch, author) {
+    room.awareness.destroy();
+    room.doc.destroy();
+    room.doc = doc;
+    room.htmlText = doc.getText("html");
+    room.cssText = doc.getText("css");
+    room.awareness = new Awareness(doc);
+    room.clientIdsBySocket.clear();
+    room.epoch = epoch;
+    room.lastAuthor = author;
+    doc.on("update", (_update, origin) => {
+      if (origin?.partyCodingAuthor) room.lastAuthor = origin.partyCodingAuthor;
+      schedulePersist(room);
+    });
+    broadcastGroupChatWsPayload(room.roomId, {
+      type: "coding_collab_reset", roomId: room.roomId, documentEpoch: epoch,
+    });
+  }
+
+  async function saveOrSwitchWorkspace({ roomId, target, expectedEpoch, expectedStateVector, expectedHtml, expectedCss, author }) {
+    return withRoomLock(roomId, async () => {
+      const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
+      if (target !== undefined && !["project", "lesson"].includes(target)) fail(400, "无效的编程区域。");
+      const room = await getRoom(roomId);
+      const current = await Workspace.findOne({ roomId }).lean();
+      if (!canDriveParty(current, author.userId)) fail(403, "只有当前 Driver 可以保存或切换编程区域。");
+      if (expectedEpoch !== room.epoch || expectedStateVector !== encodeUpdate(Y.encodeStateVector(room.doc))
+        || expectedHtml !== room.htmlText.toString() || expectedCss !== room.cssText.toString()) {
+        fail(409, "代码尚未同步完成，请稍后重试保存或切换。");
+      }
+      const saved = await persistRoom(room, author);
+      if (!saved) fail(500, "保存进度失败，当前区域保持不变，请重试。");
+      const previous = saved.activeWorkspace || "project";
+      if (!target || target === previous) {
+        const workspace = await Workspace.findOneAndUpdate({ roomId }, { $set: { savedAt: new Date() } }, { new: true }).lean();
+        broadcastGroupChatWsPayload(roomId, { type: "coding_collab_workspace_updated", roomId, workspace: normalizeWorkspace(workspace) });
+        return normalizeWorkspace(workspace);
+      }
+      const next = snapshotWorkspaceDocument(saved.storedWorkspaces?.[target] || {});
+      const nextDoc = new Y.Doc();
+      if (Buffer.isBuffer(next.collaborationState) && next.collaborationState.length) {
+        Y.applyUpdate(nextDoc, new Uint8Array(next.collaborationState), SERVER_INITIALIZATION_ORIGIN);
+      } else {
+        nextDoc.getText("html").insert(0, next.html);
+        nextDoc.getText("css").insert(0, next.css);
+      }
+      const documentEpoch = room.epoch + 1;
+      let workspace;
+      try {
+        workspace = await Workspace.findOneAndUpdate({ roomId, $or: [{ documentEpoch: room.epoch }, ...(room.epoch === 0 ? [{ documentEpoch: { $exists: false } }] : [])] }, {
+          $set: { ...next, activeWorkspace: target, documentEpoch,
+            [`storedWorkspaces.${previous}`]: { ...snapshotWorkspaceDocument(saved), savedAt: new Date() },
+          },
+          $inc: { revision: 1 },
+        }, { new: true }).lean();
+        if (!workspace) fail(409, "工作区已变化，请同步后重新切换。");
+      } catch (error) { nextDoc.destroy(); throw error; }
+      activateDocument(room, nextDoc, documentEpoch, author);
+      await learning.recordEvent({ roomId, userId: author.userId, userName: author.name,
+        eventType: "task_switch", workspace, metadata: { previousWorkspace: previous, activeWorkspace: target },
       });
       return normalizeWorkspace(workspace);
     });
@@ -431,11 +517,25 @@ export function createPartyCodingRealtime(deps) {
     Array.from(rooms.keys()).forEach((roomId) => handleSocketRoomLeft(socket, roomId));
   }
 
+  async function close() {
+    for (const roomId of rooms.keys()) {
+      await withRoomLock(roomId, async () => {
+        const room = await getRoom(roomId);
+        await persistRoom(room);
+        room.awareness.destroy();
+        room.doc.destroy();
+        rooms.delete(roomId);
+      });
+    }
+  }
+
   return {
+    close,
     withRoomLock,
     handleWsMessage,
     handleSocketRoomLeft,
     handleSocketClosed,
     replaceRoomDocuments,
+    saveOrSwitchWorkspace,
   };
 }

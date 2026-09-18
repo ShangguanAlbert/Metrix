@@ -275,7 +275,7 @@ export function createPartyLearningService(deps) {
       userName: safeText(userName, 60) || "成员",
       role: resolveRole(currentWorkspace, userId),
       eventType,
-      metadata,
+      metadata: { ...metadata, activeWorkspace: currentWorkspace?.activeWorkspace || "project" },
       occurredAt: new Date(),
     });
     await linkLearningEventToRecentMemoryUses({

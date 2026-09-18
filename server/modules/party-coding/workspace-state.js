@@ -1,3 +1,4 @@
+import { PARTY_WEB_DEFAULTS } from "./model.js";
 import { readNavigatorUserIds } from "../../../shared/party-roles.js";
 
 const sanitizeDocument = (value) => String(value || "").replace(/\r\n/g, "\n").slice(0, 200_000);
@@ -7,6 +8,8 @@ export function normalizeWorkspace(doc) {
   if (!doc) return null;
   return {
     roomId: String(doc.roomId || ""),
+    activeWorkspace: doc.activeWorkspace || "project",
+    savedAt: doc.savedAt ? new Date(doc.savedAt).toISOString() : "",
     documentEpoch: Math.max(0, Number(doc.documentEpoch || 0)),
     loadedTemplate: doc.loadedTemplate || null,
     html: sanitizeDocument(doc.html),
@@ -30,5 +33,22 @@ export function normalizeWorkspace(doc) {
       savedByName: String(item?.savedByName || "成员").slice(0, 60),
       createdAt: item?.createdAt ? new Date(item.createdAt).toISOString() : "",
     })),
+  };
+}
+
+// Only document-owned state is parked. Roles and the monotonically increasing
+// revision/epoch remain shared by the room, so delayed messages cannot cross tabs.
+export function snapshotWorkspaceDocument(workspace = {}) {
+  return {
+    html: workspace.html ?? PARTY_WEB_DEFAULTS.html,
+    css: workspace.css ?? PARTY_WEB_DEFAULTS.css,
+    collaborationState: workspace.collaborationState || null,
+    loadedTemplate: workspace.loadedTemplate || null,
+    versions: workspace.versions || [],
+    taskStage: workspace.taskStage || "understand",
+    lastPreviewAt: workspace.lastPreviewAt || null,
+    lastPreviewByUserId: workspace.lastPreviewByUserId || "",
+    lastDiagnostics: workspace.lastDiagnostics || [],
+    savedAt: workspace.savedAt || null,
   };
 }
