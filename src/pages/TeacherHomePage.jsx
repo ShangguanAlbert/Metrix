@@ -1,3 +1,4 @@
+import { lessonHasUnpublishedChanges } from "../../shared/classroomPublication.js";
 import ClassroomAiSettings from "../features/admin/components/ClassroomAiSettings.jsx";
 import ProgrammingTemplateEditor from "../features/admin/components/ProgrammingTemplateEditor.jsx";
 import { readNavigatorUserIds } from "../../shared/party-roles.js";
@@ -114,12 +115,12 @@ import {
   importAdminStudentAccounts,
   mergeAdminUserDirectoryUsers,
   saveAdminClassroomPlans,
+  publishAdminClassroomLesson,
   saveAdminFinalTestConfig,
   saveAdminClassroomSeatLayouts,
   updateAdminUserDirectoryUser,
   uploadAdminClassroomTaskFiles,
   updateAdminCollaborationClassroomMonitoring,
-  updateAdminCollaborationCourseAnnouncement,
   updateAdminCollaborationMonitoringMaster,
   updateAdminTeachingCourse,
   updateAdminPersonalProfile,
@@ -1319,6 +1320,7 @@ export default function TeacherHomePage() {
   const [adminToken, setAdminToken] = useState(() => getAdminToken());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [publishingLesson, setPublishingLesson] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const uploadAbortControllerRef = useRef(null);
   const [downloadingFileId, setDownloadingFileId] = useState("");
@@ -1522,11 +1524,6 @@ export default function TeacherHomePage() {
     useState("");
   const [pairMonitoringMasterSaving, setPairMonitoringMasterSaving] =
     useState(false);
-  const [lessonAnnouncementStatus, setLessonAnnouncementStatus] = useState({
-    lessonId: "",
-    saving: false,
-    error: "",
-  });
   const [memoryDialogRoom, setMemoryDialogRoom] = useState(null);
   const [teachingCourses, setTeachingCourses] = useState([]);
   const [selectedTeachingCourseId, setSelectedTeachingCourseId] = useState("");
@@ -4276,12 +4273,13 @@ export default function TeacherHomePage() {
       if (!silent) setError("");
       if (!silent) setClassroomSaveNotice("");
       setSaving(true);
+      const editableCourseIds = new Set(teachingCourses.map((course) => String(course.id)));
       const plansToSave = normalizeLessonPlans(teacherCoursePlans).map(
         (lesson) => ({
           ...lesson,
           courseId: resolveLessonTeachingCourseId(lesson, teachingCourses),
         }),
-      );
+      ).filter((lesson) => editableCourseIds.has(lesson.courseId));
       try {
         const data = await saveAdminClassroomPlans(adminToken, {
           shangguanClassTaskProductImprovementEnabled: !!productTaskEnabled,
@@ -4317,7 +4315,7 @@ export default function TeacherHomePage() {
           classroomDisciplineConfig: normalizedDisciplineConfig,
         });
         if (!silent) {
-          setClassroomSaveNotice("课堂配置已保存。");
+          setClassroomSaveNotice("课时草稿已保存；点击“发布课时”后同步给学生。");
         }
         void loadHomeworkOverview();
         return true;
@@ -4379,6 +4377,33 @@ export default function TeacherHomePage() {
 
   async function onSaveClassroomConfig() {
     await persistClassroomConfig({ silent: false });
+  }
+
+  async function onPublishLesson() {
+    if (!selectedCourse || saving || publishingLesson || uploadingFiles) return;
+    if (classroomConfigHasUnsavedChanges) {
+      setError("请先保存课时，再发布给学生。");
+      return;
+    }
+    setPublishingLesson(true);
+    setError("");
+    setClassroomSaveNotice("");
+    try {
+      const data = await publishAdminClassroomLesson(adminToken, selectedCourse.id, selectedCourse.updatedAt);
+      const plans = teacherCoursePlans.map((lesson) => lesson.id === data.lessonId
+        ? { ...lesson, publication: data.publication } : lesson);
+      setTeacherCoursePlans(plans);
+      classroomConfigSavedSnapshotRef.current = buildClassroomConfigSnapshot({
+        productTaskEnabled, teacherCoursePlans: plans, classroomDisciplineConfig,
+      });
+      setClassroomSaveNotice(selectedCourse.enabled === false
+        ? "已发布关闭状态，学生端不再展示本课时。"
+        : "课时已发布，学生端将同步名称、任务和附件。");
+    } catch (cause) {
+      if (!handleAuthError(cause)) setError(readErrorMessage(cause));
+    } finally {
+      setPublishingLesson(false);
+    }
   }
 
   async function onSaveFinalTestConfig() {
@@ -4997,55 +5022,6 @@ export default function TeacherHomePage() {
         activeSlot,
       ),
     );
-  }
-
-  async function onSaveCourseAnnouncement(event) {
-    event?.preventDefault?.();
-    const lessonId = String(selectedCourse?.id || "").trim();
-    if (!adminToken || !lessonId || lessonAnnouncementStatus.saving) return;
-    const announcement = String(selectedCourse?.announcement || "").trim();
-    setLessonAnnouncementStatus({
-      lessonId,
-      saving: true,
-      error: "",
-    });
-    try {
-      const lessonSaved = await persistClassroomConfig({ silent: true });
-      if (!lessonSaved) {
-        throw new Error("课时保存失败，公告尚未发布。");
-      }
-      const data = await updateAdminCollaborationCourseAnnouncement(
-        adminToken,
-        lessonId,
-        announcement,
-      );
-      const savedText = String(data?.announcement?.text || announcement);
-      const updatedAt = String(
-        data?.announcement?.updatedAt || new Date().toISOString(),
-      );
-      onUpdateSelectedLesson({
-        announcement: savedText,
-        announcementUpdatedAt: updatedAt,
-      });
-      setLessonAnnouncementStatus({
-        lessonId,
-        saving: false,
-        error: "",
-      });
-      setPartyRoomItems((current) =>
-        current.map((room) => ({
-          ...room,
-          announcement: savedText,
-        })),
-      );
-    } catch (rawError) {
-      if (handleAuthError(rawError)) return;
-      setLessonAnnouncementStatus({
-        lessonId,
-        saving: false,
-        error: readErrorMessage(rawError),
-      });
-    }
   }
 
   async function onTogglePairMonitoringMaster() {
@@ -6739,11 +6715,16 @@ export default function TeacherHomePage() {
                     </button>
                     <button
                       type="button"
-                      className="teacher-primary-btn"
+                      className="teacher-ghost-btn"
                       onClick={onSaveClassroomConfig}
                       disabled={loading || saving || uploadingFiles}
                     >
                       {saving ? "保存中..." : "保存课时"}
+                    </button>
+                    <button type="button" className="teacher-primary-btn" onClick={onPublishLesson}
+                      disabled={loading || saving || publishingLesson || uploadingFiles || !selectedCourse || classroomConfigHasUnsavedChanges}
+                      title={classroomConfigHasUnsavedChanges ? "请先保存课时" : "将已保存课时发布给本班学生"}>
+                      {publishingLesson ? "发布中..." : "发布课时"}
                     </button>
                   </div>
                 </header>
@@ -6926,7 +6907,9 @@ export default function TeacherHomePage() {
                                 <span
                                   className={`teacher-lesson-status${course?.enabled === false ? " closed" : ""}`}
                                 >
-                                  {course?.enabled === false ? "未开放" : "已开放"}
+                                  {Object.hasOwn(course, "publication")
+                                    ? (!course.publication?.snapshot ? "未发布" : lessonHasUnpublishedChanges(course) ? "待重新发布" : course.publication.snapshot.enabled === false ? "已关闭" : "已发布")
+                                    : (course?.enabled === false ? "未开放" : "已发布")}
                                 </span>
                                 <div className="teacher-lesson-row-btns">
                                   <button
@@ -6991,12 +6974,12 @@ export default function TeacherHomePage() {
                             <div>
                               <strong><FileText size={16} />本课任务公告</strong>
                               <span>
-                                公告属于当前课时；发布后会同步到全部结对房间，学生进入协作课堂即可看到。
+                                公告与任务、附件一起保存；点击顶部“发布课时”后，本班学生即可在任务发布栏查看。
                               </span>
                             </div>
                             <div className="teacher-lesson-announcement-header-actions">
-                              {selectedCourse.announcementUpdatedAt ? (
-                                <small>{`最近发布：${formatDisplayTime(selectedCourse.announcementUpdatedAt)}`}</small>
+                              {selectedCourse.publication?.publishedAt ? (
+                                <small>{`最近发布：${formatDisplayTime(selectedCourse.publication.publishedAt)}`}</small>
                               ) : null}
                               <button
                                 type="button"
@@ -7012,7 +6995,7 @@ export default function TeacherHomePage() {
                             </div>
                           </header>
                           {lessonAnnouncementExpanded ? (
-                            <form onSubmit={onSaveCourseAnnouncement}>
+                            <div>
                             <textarea
                               value={selectedCourse.announcement || ""}
                               rows={3}
@@ -7022,35 +7005,13 @@ export default function TeacherHomePage() {
                                 onUpdateSelectedLesson({
                                   announcement: event.target.value,
                                 });
-                                setLessonAnnouncementStatus({
-                                  lessonId: String(selectedCourse.id || ""),
-                                  saving: false,
-                                  error: "",
-                                });
                               }}
                             />
                             <div className="teacher-course-announcement-actions">
                               <span>{`${String(selectedCourse.announcement || "").length}/500`}</span>
-                              {lessonAnnouncementStatus.lessonId === String(selectedCourse.id || "") && lessonAnnouncementStatus.error ? (
-                                <span className="teacher-confirm-error" role="alert">
-                                  {lessonAnnouncementStatus.error}
-                                </span>
-                              ) : null}
-                              <button
-                                type="submit"
-                                className="teacher-primary-btn"
-                                disabled={
-                                  lessonAnnouncementStatus.saving &&
-                                  lessonAnnouncementStatus.lessonId === String(selectedCourse.id || "")
-                                }
-                              >
-                                <Save size={14} />
-                                {lessonAnnouncementStatus.saving && lessonAnnouncementStatus.lessonId === String(selectedCourse.id || "")
-                                  ? "发布中..."
-                                  : "发布本课公告"}
-                              </button>
+                              <span>保存后，使用顶部“发布课时”统一发布。</span>
                             </div>
-                            </form>
+                            </div>
                           ) : null}
                         </section>
 

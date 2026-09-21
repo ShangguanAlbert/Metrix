@@ -34,3 +34,18 @@ test("素材路径仅接受当前素材格式，图片格式按文件内容识�
   assert.equal(detectImageFormat(Buffer.from('<svg onload="alert(1)"></svg>')), null);
   assert.equal(detectImageFormat(Buffer.alloc(7 * 1024 * 1024)), null);
 });
+
+test("published lesson rename updates template label without changing template code or version", async () => {
+  const { readRoomTemplate } = await import("../../server/modules/party-coding/template-service.js");
+  const template = { lessonId: "lesson", lessonName: "第1节课", version: "same-code", html: "<p>模板</p>", css: "", publishedAt: "2026-09-21" };
+  const deps = {
+    Template: { findOne: () => ({ sort() { return this; }, lean: async () => template }) },
+    AuthUser: { find: () => ({ lean: async () => [{ profile: { className: "801班" }, lockedTeacherScopeKey: "shi-gaojun" }] }) },
+    AdminConfig: { findOne: () => ({ lean: async () => ({ teacherCoursePlans: [{ id: "lesson", courseName: "未发布草稿", publication: { snapshot: { courseName: "推荐卡制作" } } }] }) }) },
+    memberUserIds: ["student"],
+  };
+  const result = await readRoomTemplate(deps);
+  assert.equal(result.lessonName, "推荐卡制作");
+  assert.equal(result.version, "same-code");
+  assert.equal(result.html, "<p>模板</p>");
+});

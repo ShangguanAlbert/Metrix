@@ -74,6 +74,7 @@ import {
 } from "../../party/partyRealtimeState.js";
 import { createPartySocketClient } from "../../party/partySocket.js";
 import WebCollabPanel from "./WebCollabPanel.jsx";
+import LessonTaskBoard from "../shared/LessonTaskBoard.jsx";
 import "../../../styles/chat.css";
 import "../../../styles/party-chat.css";
 
@@ -3515,9 +3516,10 @@ export default function PartyChatDesktopPage({
             )}
           </section>
 
-          <section className="party-card party-announcement-card">
+          {isShiGaojunTeacherScope ? <LessonTaskBoard roomId={activeRoomId} subscribeToCollaboration={subscribeCodingCollaboration} /> : null}
+          {!isShiGaojunTeacherScope || activeRoom?.announcement || activeRoom?.announcementAttachments?.length ? <section className="party-card party-announcement-card">
             <div className="party-announcement-head">
-              <h2 className="party-card-title">任务发布栏</h2>
+              <h2 className="party-card-title">{isShiGaojunTeacherScope ? "房间公告" : "任务发布栏"}</h2>
               {activeRoom && canManageActiveRoom ? (
                 <button
                   type="button"
@@ -3581,7 +3583,7 @@ export default function PartyChatDesktopPage({
             {activeRoom ? (
               <div className="party-announcement-attachments">
                 <div className="party-announcement-attachments-head">
-                  <span>任务附件</span>
+                  <span>{isShiGaojunTeacherScope ? "公告附件" : "任务附件"}</span>
                   {canManageActiveRoom ? (
                     <>
                       <input
@@ -3637,7 +3639,7 @@ export default function PartyChatDesktopPage({
                 )}
               </div>
             ) : null}
-          </section>
+          </section> : null}
 
           <section className="party-card party-members-card">
             <div className="party-member-list-head">

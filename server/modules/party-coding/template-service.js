@@ -1,3 +1,4 @@
+import { readPublishedLesson } from "../../../shared/classroomPublication.js";
 import { createHash } from "node:crypto";
 import { normalizeProgrammingTemplate } from "../../../shared/party-template.js";
 
@@ -31,14 +32,17 @@ export function buildPublishedTemplate(lesson, adminId, now = new Date()) {
   };
 }
 
-export async function readRoomTemplate({ Template, AuthUser, memberUserIds }) {
+export async function readRoomTemplate({ Template, AuthUser, AdminConfig, memberUserIds }) {
   const students = await AuthUser.find({ _id: { $in: memberUserIds } }, { profile: 1, lockedTeacherScopeKey: 1 }).lean();
   const classes = [...new Set(students.map((student) => String(student.profile?.className || "")))];
   if (students.length !== memberUserIds.length || classes.length !== 1 || !classes[0]
     || students.some((student) => student.lockedTeacherScopeKey !== "shi-gaojun")) return null;
   const doc = await Template.findOne({ className: classes[0], teacherScopeKey: "shi-gaojun" }).sort({ publishedAt: -1 }).lean();
   if (!doc) return null;
-  const { lessonId, lessonName, version, publishedAt } = doc;
+  const { lessonId, version, publishedAt } = doc;
+  const config = AdminConfig ? await AdminConfig.findOne({ key: "global" }, { teacherCoursePlans: 1 }).lean() : null;
+  const publishedLesson = readPublishedLesson(config?.teacherCoursePlans?.find((lesson) => lesson.id === lessonId));
+  const lessonName = publishedLesson?.courseName || doc.lessonName;
   return { lessonId, lessonName, version, publishedAt, ...normalizeProgrammingTemplate(doc) };
 }
 

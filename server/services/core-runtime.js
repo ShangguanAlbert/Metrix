@@ -1558,6 +1558,7 @@ const adminClassroomTaskSchema = new mongoose.Schema(
 
 const adminClassroomCoursePlanSchema = new mongoose.Schema(
   {
+    publication: { type: mongoose.Schema.Types.Mixed, default: undefined },
     id: { type: String, default: "" },
     courseId: { type: String, default: "", index: true },
     courseName: { type: String, default: "" },
@@ -7656,6 +7657,17 @@ function sanitizeAdminClassroomCoursePlanPayload(input, index = 0) {
     files,
     createdAt: sanitizeIsoDate(source.createdAt) || "",
     updatedAt: sanitizeIsoDate(source.updatedAt) || "",
+    ...(Object.hasOwn(source, "publication") ? {
+      publication: {
+        publishedAt: sanitizeIsoDate(source.publication?.publishedAt) || "",
+        snapshot: source.publication?.snapshot
+          ? sanitizeAdminClassroomCoursePlanPayload(
+              Object.fromEntries(Object.entries(source.publication.snapshot).filter(([key]) => key !== "publication")),
+              index,
+            )
+          : null,
+      },
+    } : {}),
   };
 }
 

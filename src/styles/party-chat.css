@@ -3985,3 +3985,19 @@
 .party-exercise-notice button { border: 0; background: transparent; color: #286b4b; text-decoration: underline; cursor: pointer; padding: 3px; }
 .party-exercise-fill { background: #e1f3e8; border-bottom: 2px solid #3e9470; }
 .party-exercise-empty { color: #528369; background: #e1f3e8; font-size: 12px; padding: 0 4px; }
+
+.party-lesson-board { min-width: 0; }
+.party-lesson-select { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 12px; }
+.party-lesson-select select { min-width: 0; flex: 1; padding: 6px; color: inherit; background: var(--party-surface-soft); border: 1px solid var(--party-border); border-radius: 6px; }
+.party-lesson-task { padding: 10px 0; border-bottom: 1px solid var(--party-border); }
+.party-lesson-task:last-child { border-bottom: 0; }
+.party-lesson-task h3 { margin: 0 0 6px; font-size: 13px; line-height: 1.5; }
+.party-lesson-task p, .party-lesson-notes { margin: 4px 0; font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.party-lesson-task a { display: block; font-size: 12px; overflow-wrap: anywhere; }
+.party-lesson-files { display: grid; gap: 5px; margin-top: 10px; font-size: 12px; }
+.party-lesson-files > span { color: var(--party-muted); }
+.party-lesson-files button { display: flex; gap: 6px; align-items: center; width: 100%; padding: 6px 0; border: 0; background: transparent; color: var(--party-ink); text-align: left; cursor: pointer; }
+.party-lesson-files button span { min-width: 0; overflow-wrap: anywhere; }
+.party-lesson-files button svg { flex-shrink: 0; }
+.party-lesson-files button:disabled { opacity: .6; cursor: wait; }
+.party-lesson-error { color: #ba3434; font-size: 12px; line-height: 1.5; }

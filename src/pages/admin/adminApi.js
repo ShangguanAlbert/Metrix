@@ -372,6 +372,13 @@ export function saveAdminClassroomPlans(adminToken, payload) {
   });
 }
 
+export function publishAdminClassroomLesson(adminToken, lessonId, expectedUpdatedAt) {
+  return request(`/api/auth/admin/classroom-plans/${encodeURIComponent(lessonId)}/publish`, adminToken, {
+    method: "POST",
+    body: JSON.stringify({ expectedUpdatedAt }),
+  });
+}
+
 export function fetchAdminClassroomSeatLayouts(adminToken) {
   return request("/api/auth/admin/classroom-seat-layouts", adminToken);
 }

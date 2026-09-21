@@ -80,7 +80,7 @@ export function registerPartyCodingRoutes(app, deps) {
 
   const Template = getPartyTemplateModel(deps.mongoose);
   async function readTemplate(member) {
-    return readRoomTemplate({ Template, AuthUser: deps.AuthUser, memberUserIds: member.memberUserIds });
+    return readRoomTemplate({ Template, AuthUser: deps.AuthUser, AdminConfig: deps.AdminConfig, memberUserIds: member.memberUserIds });
   }
 
   app.get("/api/group-chat/rooms/:roomId/coding/template", requireChatAuth, async (req, res) => {

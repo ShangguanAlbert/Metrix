@@ -67,6 +67,7 @@ function createClassFilterDeps() {
       array: () => noopMiddleware,
     },
     SHANGGUAN_FUZE_TEACHER_SCOPE_KEY: "shangguan-fuze",
+    SHI_GAOJUN_TEACHER_SCOPE_KEY: "shi-gaojun",
     ADMIN_CONFIG_KEY: "admin-config",
     CLASSROOM_FIRST_LESSON_DATE: "2026-03-11",
     CLASSROOM_QUESTIONNAIRE_URL: "",
@@ -253,3 +254,164 @@ test("homework submissions route only reads lessons from the student's own class
     ],
   );
 });
+
+for (const scope of ["shangguan-fuze", "shi-gaojun"]) {
+  test(`${scope} students receive saved task content and files with the same class and open-lesson permissions`, async () => {
+    const app = createAppDouble();
+    const { deps } = createClassFilterDeps();
+    const readConfig = deps.readAdminAgentConfig;
+    deps.readAdminAgentConfig = async () => {
+      const config = await readConfig();
+      config.teacherCoursePlans[0].tasks = [{ id: "task-1", title: "推荐卡内容收集", content: "收集作品名、推荐语、评分、标签", files: [{ id: "attachment-1", name: "推荐卡.txt" }] }];
+      return config;
+    };
+    registerAuthUserClassroomRoutes(app, deps);
+    const handler = app.routes.find((route) => route.path === "/api/classroom/tasks/settings").handlers.at(-1);
+    const res = createResponseDouble();
+    await handler({ authTeacherScopeKey: scope, authUser: { profile: { className: "810班" } } }, res);
+    assert.equal(res.payload.classroomTaskEnabled, true);
+    assert.deepEqual(res.payload.teacherCoursePlans.map((lesson) => lesson.id), ["lesson-810-open"]);
+    assert.equal(res.payload.teacherCoursePlans[0].tasks[0].title, "推荐卡内容收集");
+    assert.equal(res.payload.teacherCoursePlans[0].tasks[0].files[0].name, "推荐卡.txt");
+    assert.equal(res.payload.teacherHistoryCoursePlans.length, 2);
+    const unassigned = createResponseDouble();
+    await handler({ authTeacherScopeKey: scope, authUser: { profile: {} } }, unassigned);
+    assert.deepEqual(unassigned.payload.teacherCoursePlans, []);
+    assert.deepEqual(unassigned.payload.teacherHistoryCoursePlans, []);
+  });
+}
+
+for (const scope of ["shangguan-fuze", "shi-gaojun"]) {
+  for (const storageType of ["mongo", "oss"]) {
+    test(`${scope} downloads open lesson ${storageType} attachments, but cannot download another class or closed lesson`, async () => {
+      const app = createAppDouble();
+      const { deps } = createClassFilterDeps();
+      const lesson = { id: "lesson-810-open", enabled: true, className: "810班" };
+      let reads = 0;
+      Object.assign(deps, {
+        findAdminClassroomLessonByFileId: (_plans, fileId) => fileId === "file-1" ? {
+          lesson, task: { type: "text" }, file: { name: "推荐卡.txt", mimeType: "text/plain" },
+        } : null,
+        AdminClassroomLessonFile: { findOne: () => {
+          reads += 1;
+          return Promise.resolve({ storageType, ossKey: storageType === "oss" ? "task/file.txt" : "", binary: Buffer.from("推荐卡") });
+        } },
+        sanitizeGroupChatFileName: (value) => value,
+        sanitizeGroupChatFileMimeType: (value) => value,
+        sanitizeGroupChatFileStorageType: (value) => value,
+        sanitizeGroupChatOssObjectKey: (value) => value,
+        buildTeacherLessonFileDownloadUrl: async () => "https://example.com/signed-task-file",
+        buildAttachmentContentDisposition: () => "attachment",
+      });
+      registerAuthUserClassroomRoutes(app, deps);
+      const handler = app.routes.find((route) => route.path === "/api/classroom/lessons/files/:fileId/download").handlers.at(-1);
+      const request = { authTeacherScopeKey: scope, params: { fileId: "file-1" }, authUser: { profile: { className: "810班" } } };
+      const response = () => Object.assign(createResponseDouble(), { setHeader() {}, send(payload) { this.payload = payload; } });
+      const allowed = response();
+      await handler(request, allowed);
+      assert.equal(allowed.statusCode, 200);
+      if (storageType === "oss") assert.equal(allowed.payload.downloadUrl, "https://example.com/signed-task-file");
+      else assert.equal(allowed.payload.toString(), "推荐卡");
+      assert.equal(reads, 1);
+      for (const className of ["811班", ""]) {
+        const denied = response();
+        await handler({ ...request, authUser: { profile: { className } } }, denied);
+        assert.equal(denied.statusCode, 403);
+      }
+      lesson.enabled = false;
+      const closed = response();
+      await handler(request, closed);
+      assert.equal(closed.statusCode, 404);
+      assert.equal(reads, 1, "unauthorized requests must not reach file storage");
+    });
+  }
+}
+
+test("students receive the last publication while teacher saves title/content edits or removes draft attachments", async () => {
+  const app = createAppDouble();
+  const { deps } = createClassFilterDeps();
+  const oldLesson = { id: "published", courseName: "旧名称", className: "810班", enabled: true,
+    tasks: [{ id: "task", content: "已发布内容", files: [{ id: "old-file", name: "推荐卡.txt" }] }] };
+  deps.readAdminAgentConfig = async () => ({ teacherCoursePlans: [
+    { ...oldLesson, courseName: "尚未发布的新名称", tasks: [], publication: { snapshot: oldLesson } },
+    { id: "new", className: "810班", enabled: true, publication: { snapshot: null } },
+  ] });
+  registerAuthUserClassroomRoutes(app, deps);
+  const handler = app.routes.find((route) => route.path === "/api/classroom/tasks/settings").handlers.at(-1);
+  const res = createResponseDouble();
+  await handler({ authTeacherScopeKey: "shi-gaojun", authUser: { profile: { className: "810班" } } }, res);
+  assert.equal(res.payload.teacherCoursePlans.length, 1);
+  assert.equal(res.payload.teacherCoursePlans[0].courseName, "旧名称");
+  assert.equal(res.payload.teacherCoursePlans[0].tasks[0].files[0].id, "old-file");
+});
+
+for (const scenario of ["owner", "other-teacher", "stale", "concurrent"]) {
+  test(`lesson publication checks authorization and saved revision: ${scenario}`, async () => {
+    const app = createAppDouble();
+    const { deps } = createClassFilterDeps();
+    const lesson = { id: "lesson", courseId: "course", courseName: "新名称", className: "810班", enabled: true, updatedAt: "saved-v2", tasks: [] };
+    let stored = null;
+    Object.assign(deps, {
+      authenticateAdminRequest: async () => ({ _id: "teacher", username: "teacher" }),
+      normalizeFinalTestUsernameKey: (value) => value,
+      TERMINAL_ADMIN_USERNAME_KEY: "platform",
+      readAdminAgentConfig: async () => ({ teacherCoursePlans: [lesson] }),
+      TeachingCourse: { findById: () => ({ lean: async () => ({ ownerTeacherId: scenario === "other-teacher" ? "other" : "teacher", classNames: ["810班"] }) }) },
+      AdminConfig: { updateOne: async (query, update) => {
+        assert.equal(query.teacherCoursePlans.$elemMatch.updatedAt, "saved-v2");
+        stored = update.$set["teacherCoursePlans.$.publication"];
+        return { matchedCount: scenario === "concurrent" ? 0 : 1 };
+      } },
+      AuthUser: { find: (query) => {
+        assert.equal(query["profile.className"], "810班");
+        return { lean: async () => [{ _id: "student-810" }] };
+      } },
+      GroupChatRoom: {
+        updateMany: async (query) => {
+          assert.equal(query.teacherScopeKey, "shi-gaojun");
+          assert.deepEqual(query.memberUserIds, { $in: ["student-810"], $not: { $elemMatch: { $nin: ["student-810"] } } });
+        },
+        find: () => ({ lean: async () => [] }),
+      },
+    });
+    registerAuthUserClassroomRoutes(app, deps);
+    const handler = app.routes.find((route) => route.path.endsWith("/:lessonId/publish")).handlers.at(-1);
+    const res = createResponseDouble();
+    await handler({ params: { lessonId: "lesson" }, body: { expectedUpdatedAt: scenario === "stale" ? "old" : "saved-v2" } }, res);
+    assert.equal(res.statusCode, scenario === "owner" ? 200 : scenario === "other-teacher" ? 403 : 409);
+    if (scenario === "owner") assert.equal(stored.snapshot.courseName, "新名称");
+    if (["other-teacher", "stale"].includes(scenario)) assert.equal(stored, null);
+  });
+}
+
+for (const action of ["save", "delete-own", "steal-id"]) {
+  test(`teacher draft save preserves other courses and publication boundaries: ${action}`, async () => {
+    const app = createAppDouble();
+    const { deps } = createClassFilterDeps();
+    const own = { id: "own", courseId: "course-a", courseName: "已发布名称", className: "810班", tasks: [], files: [], updatedAt: "2026-09-21T01:00:00.000Z" };
+    const other = { ...own, id: "other", courseId: "course-b", courseName: "其他教师课时" };
+    let saved;
+    Object.assign(deps, {
+      authenticateAdminRequest: async () => ({ _id: "teacher", username: "teacher", authorizedClassNames: ["810班"] }),
+      normalizeFinalTestUsernameKey: (value) => value,
+      TERMINAL_ADMIN_USERNAME_KEY: "platform",
+      readAdminAgentConfig: async () => ({ teacherCoursePlans: [own, other] }),
+      TeachingCourse: { find: () => ({ lean: async () => [{ _id: "course-a", ownerTeacherId: "teacher", classNames: ["810班"] }] }) },
+      sanitizeAdminClassroomCoursePlansPayload: (value) => value,
+      sanitizeAdminClassroomCourseFilesPayload: (value) => value,
+      sanitizeAdminClassroomDisciplineConfigPayload: () => ({}),
+      collectAdminClassroomFileIdsFromLesson: () => [],
+      normalizeAdminConfigDoc: (value) => value,
+      AdminConfig: { findOneAndUpdate: (_query, update) => ({ lean: async () => { saved = update.$set; return saved; } }) },
+    });
+    registerAuthUserClassroomRoutes(app, deps);
+    const handler = app.routes.find((route) => route.method === "put" && route.path === "/api/auth/admin/classroom-plans").handlers.at(-1);
+    const res = createResponseDouble();
+    await handler({ body: { teacherCoursePlans: action === "delete-own" ? [] : [{ ...own, id: action === "steal-id" ? "other" : "own", courseName: "新草稿名称", publication: { snapshot: { courseName: "伪造发布版本" } } }] } }, res);
+    assert.equal(res.statusCode, action === "steal-id" ? 403 : 200);
+    if (action === "steal-id") { assert.equal(saved, undefined); return; }
+    assert.deepEqual(saved.teacherCoursePlans.find((lesson) => lesson.id === "other"), other);
+    if (action === "save") assert.equal(saved.teacherCoursePlans.find((lesson) => lesson.id === "own").publication.snapshot.courseName, "已发布名称");
+    else assert.deepEqual(saved.teacherCoursePlans.map((lesson) => lesson.id), ["other"]);
+  });
+}

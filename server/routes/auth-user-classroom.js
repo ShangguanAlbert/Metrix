@@ -1,3 +1,4 @@
+import { lessonSnapshot, preserveLessonPublication, publishedLessonFileIds, readPublishedLesson } from "../../shared/classroomPublication.js";
 import { registerAdminClassroomAiRoutes } from "./admin-classroom-ai.js";
 import { normalizeChatBootstrapResponse } from "../../shared/contracts/chat.js";
 import {
@@ -971,48 +972,33 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     let seatLayout = null;
     let finalTestConfig = normalizeFinalTestContentConfig(null);
 
-    if (isShangguanTeacher) {
+    const isPairClassroom = teacherScopeKey === SHI_GAOJUN_TEACHER_SCOPE_KEY;
+    if (isShangguanTeacher || isPairClassroom) {
       const config = await readAdminAgentConfig();
-      productImprovementEnabled = !!config.shangguanClassTaskProductImprovementEnabled;
-      finalTestConfig = normalizeFinalTestContentConfig(config.finalTestConfig);
-      teacherHistoryCoursePlans = sortAdminClassroomCoursePlans(
-        config.teacherCoursePlans
-          .map((lesson) => ({
-            ...lesson,
-            className: resolveClassroomLessonClassName(lesson),
-          }))
-          .filter(
-            (lesson) =>
-              !userClassName ||
-              resolveClassroomLessonClassName(lesson) === userClassName,
-          ),
+      const classLessons = sortAdminClassroomCoursePlans(
+        config.teacherCoursePlans.map(readPublishedLesson).filter(Boolean)
+          .map((lesson) => ({ ...lesson, className: resolveClassroomLessonClassName(lesson) }))
+          .filter((lesson) => userClassName && lesson.className === userClassName),
       );
-      teacherCoursePlans = sortAdminClassroomCoursePlans(
-        config.teacherCoursePlans
-          .filter((lesson) => sanitizeRuntimeBoolean(lesson?.enabled, true))
-          .map((lesson) => ({
-            ...lesson,
-            className: resolveClassroomLessonClassName(lesson),
-          }))
-          .filter(
-            (lesson) =>
-              !userClassName ||
-              resolveClassroomLessonClassName(lesson) === userClassName,
-          ),
-      );
-      seatLayout = buildSeatLayoutResponseForUser(
-        normalizeSeatLayoutsByClassFromConfig(config),
-        seatLayoutClassName,
-        req.authUser,
-        userProfile,
-      );
+      teacherCoursePlans = classLessons.filter((lesson) => sanitizeRuntimeBoolean(lesson?.enabled, true));
+      teacherHistoryCoursePlans = classLessons;
+      if (isShangguanTeacher) {
+        productImprovementEnabled = !!config.shangguanClassTaskProductImprovementEnabled;
+        finalTestConfig = normalizeFinalTestContentConfig(config.finalTestConfig);
+        seatLayout = buildSeatLayoutResponseForUser(
+          normalizeSeatLayoutsByClassFromConfig(config),
+          seatLayoutClassName,
+          req.authUser,
+          userProfile,
+        );
+      }
     }
 
     res.json({
       ok: true,
       teacherScopeKey,
       teacherScopeLabel: getTeacherScopeLabel(teacherScopeKey),
-      classroomTaskEnabled: isShangguanTeacher,
+      classroomTaskEnabled: isShangguanTeacher || isPairClassroom,
       firstLessonDate: CLASSROOM_FIRST_LESSON_DATE,
       questionnaireUrl: CLASSROOM_QUESTIONNAIRE_URL,
       productImprovementEnabled,
@@ -3243,6 +3229,18 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       });
       return;
     }
+    const ownedCourses = isPlatformAdmin ? [] : await TeachingCourse.find(
+      { ownerTeacherId: currentAdminId }, { _id: 1 },
+    ).lean();
+    const ownedCourseIds = new Set(ownedCourses.map((course) => String(course._id)));
+    const protectedLessons = isPlatformAdmin ? [] : previous.teacherCoursePlans.filter(
+      (lesson) => !ownedCourseIds.has(String(lesson.courseId)),
+    );
+    const protectedLessonIds = new Set(protectedLessons.map((lesson) => lesson.id));
+    if (rawPlans.some((lesson) => protectedLessonIds.has(lesson.id))) {
+      res.status(403).json({ error: "不能将其他教师的课时转移到自己的课程。" });
+      return;
+    }
     const previousById = new Map(
       previous.teacherCoursePlans.map((item) => [String(item?.id || ""), item]),
     );
@@ -3252,6 +3250,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       const previousItem = previousById.get(itemId);
       return {
         ...item,
+        publication: preserveLessonPublication(previousItem),
         id: itemId,
         createdAt:
           sanitizeIsoDate(previousItem?.createdAt || item.createdAt) || nowIso,
@@ -3267,6 +3266,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         })),
       };
     });
+    teacherCoursePlans.push(...protectedLessons);
     const hasClassroomToggle = Object.prototype.hasOwnProperty.call(
       req.body || {},
       "shangguanClassTaskProductImprovementEnabled",
@@ -3291,9 +3291,8 @@ export function registerAuthUserClassroomRoutes(app, deps) {
 
     const previousFileIds = new Set();
     previous.teacherCoursePlans.forEach((lesson) => {
-      collectAdminClassroomFileIdsFromLesson(lesson).forEach((fileId) => {
-        previousFileIds.add(fileId);
-      });
+      collectAdminClassroomFileIdsFromLesson(lesson).forEach((fileId) => previousFileIds.add(fileId));
+      publishedLessonFileIds(lesson).forEach((fileId) => previousFileIds.add(fileId));
     });
 
     const nextFileIds = new Set();
@@ -3321,6 +3320,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       });
     });
 
+    teacherCoursePlans.forEach((lesson) => publishedLessonFileIds(lesson).forEach((fileId) => nextFileIds.add(fileId)));
     const staleFileIds = Array.from(previousFileIds).filter((fileId) => !nextFileIds.has(fileId));
     if (staleFileIds.length > 0) {
       const staleDocs = await AdminClassroomLessonFile.find({
@@ -3369,6 +3369,50 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       finalTestConfig: normalizeFinalTestContentConfig(config.finalTestConfig),
       updatedAt: config.updatedAt,
     });
+  });
+
+  app.post("/api/auth/admin/classroom-plans/:lessonId/publish", async (req, res) => {
+    const admin = await authenticateAdminRequest(req, res);
+    if (!admin) return;
+    const lessonId = sanitizeId(req.params.lessonId, "");
+    const config = await readAdminAgentConfig();
+    const lesson = config.teacherCoursePlans.find((item) => item.id === lessonId);
+    if (!lesson) { res.status(404).json({ error: "请先保存课时。" }); return; }
+    const course = await TeachingCourse.findById(lesson.courseId).lean();
+    const platformAdmin = normalizeFinalTestUsernameKey(admin.username) === TERMINAL_ADMIN_USERNAME_KEY;
+    if (!course || (!platformAdmin && String(course.ownerTeacherId) !== String(admin._id))
+      || !course.classNames?.map(sanitizeClassroomUserClassName).includes(resolveClassroomLessonClassName(lesson))) {
+      res.status(403).json({ error: "只能发布自己课程和班级的课时。" }); return;
+    }
+    if (String(req.body?.expectedUpdatedAt || "") !== String(lesson.updatedAt || "")) {
+      res.status(409).json({ error: "课时已变化，请刷新并保存后再发布。" }); return;
+    }
+    const publication = { publishedAt: new Date().toISOString(), snapshot: lessonSnapshot(lesson) };
+    const result = await AdminConfig.updateOne(
+      { key: ADMIN_CONFIG_KEY, teacherCoursePlans: { $elemMatch: { id: lessonId, updatedAt: lesson.updatedAt } } },
+      { $set: { "teacherCoursePlans.$.publication": publication } },
+    );
+    if (!result.matchedCount) { res.status(409).json({ error: "课时已变化，请刷新并保存后再发布。" }); return; }
+    // Names refresh through the template API; student code and template versions are untouched.
+    const students = await AuthUser.find({ lockedTeacherScopeKey: SHI_GAOJUN_TEACHER_SCOPE_KEY, "profile.className": lesson.className }, { _id: 1 }).lean();
+    const studentIds = students.map((student) => String(student._id));
+    const roomQuery = {
+      teacherScopeKey: SHI_GAOJUN_TEACHER_SCOPE_KEY,
+      memberUserIds: { $in: studentIds, $not: { $elemMatch: { $nin: studentIds } } },
+    };
+    // Keep the room's current task (including the AI context) aligned with this publication.
+    // Existing room attachments remain available; lesson attachments use the published snapshot.
+    if (lesson.enabled !== false) {
+      const taskText = lesson.announcement || (lesson.tasks || [])
+        .map((task) => [task.title, task.content].filter(Boolean).join("：")).join("\n");
+      await GroupChatRoom.updateMany(roomQuery, { $set: { announcement: sanitizeText(taskText, "", 500) } });
+    }
+    const rooms = await GroupChatRoom.find(roomQuery).lean();
+    for (const room of rooms) deps.broadcastGroupChatRoomUpdated(String(room._id), room);
+    for (const room of rooms) deps.broadcastGroupChatWsPayload(String(room._id), {
+      type: "coding_collab_template_published", roomId: String(room._id), lessonId,
+    });
+    res.json({ ok: true, lessonId, publication });
   });
 
   app.post(
@@ -3469,6 +3513,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         if (index !== lessonIndex) return lesson;
         return {
           ...lesson,
+          publication: preserveLessonPublication(lesson),
           files: nextLessonFiles,
           updatedAt: nowIso,
         };
@@ -3615,6 +3660,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         });
         return {
           ...lesson,
+          publication: preserveLessonPublication(lesson),
           tasks: nextTasks,
           updatedAt: nowIso,
         };
@@ -3679,12 +3725,13 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         if (index !== lessonIndex) return lesson;
         return {
           ...lesson,
+          publication: preserveLessonPublication(lesson),
           files: nextFiles,
           updatedAt: nowIso,
         };
       });
 
-      const removedDoc = await AdminClassroomLessonFile.findOneAndDelete({
+      const removedDoc = publishedLessonFileIds(targetLesson).has(fileId) ? null : await AdminClassroomLessonFile.findOneAndDelete({
         key: ADMIN_CONFIG_KEY,
         lessonId,
         fileId,
@@ -3767,12 +3814,13 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         });
         return {
           ...lesson,
+          publication: preserveLessonPublication(lesson),
           tasks: nextTasks,
           updatedAt: nowIso,
         };
       });
 
-      const removedDoc = await AdminClassroomLessonFile.findOneAndDelete({
+      const removedDoc = publishedLessonFileIds(targetLesson).has(fileId) ? null : await AdminClassroomLessonFile.findOneAndDelete({
         key: ADMIN_CONFIG_KEY,
         lessonId,
         taskId,
@@ -3882,7 +3930,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
 
   app.get("/api/classroom/lessons/files/:fileId/download", requireChatAuth, async (req, res) => {
     const teacherScopeKey = sanitizeTeacherScopeKey(req.authTeacherScopeKey);
-    if (teacherScopeKey !== SHANGGUAN_FUZE_TEACHER_SCOPE_KEY) {
+    if (![SHANGGUAN_FUZE_TEACHER_SCOPE_KEY, SHI_GAOJUN_TEACHER_SCOPE_KEY].includes(teacherScopeKey)) {
       res.status(403).json({ error: "当前班级暂不支持下载该课程文件。" });
       return;
     }
@@ -3894,9 +3942,15 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     }
 
     const config = await readAdminAgentConfig();
-    const lessonMatch = findAdminClassroomLessonByFileId(config.teacherCoursePlans, fileId);
+    const lessonMatch = findAdminClassroomLessonByFileId(config.teacherCoursePlans.map(readPublishedLesson).filter(Boolean), fileId);
     if (!lessonMatch || !sanitizeRuntimeBoolean(lessonMatch.lesson?.enabled, true)) {
       res.status(404).json({ error: "课程文件不存在或暂未开放下载。" });
+      return;
+    }
+
+    const userClassName = sanitizeClassroomUserClassName(sanitizeUserProfile(req.authUser?.profile).className);
+    if (!userClassName || resolveClassroomLessonClassName(lessonMatch.lesson) !== userClassName) {
+      res.status(403).json({ error: "只能下载本班已开放课时的任务附件。" });
       return;
     }
 
@@ -3905,7 +3959,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       key: ADMIN_CONFIG_KEY,
       lessonId,
       fileId,
-    }).lean();
+    });
     if (!fileDoc) {
       res.status(404).json({ error: "课程文件不存在或已失效。" });
       return;
