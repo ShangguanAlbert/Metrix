@@ -327,7 +327,7 @@ export default function LoginPage() {
           <p>
             开源协议：本项目遵循{" "}
             <Link className="login-license-link" to={withAuthSlot("/license")}>
-              MIT License
+              AGPL-3.0-only
             </Link>
             。
           </p>

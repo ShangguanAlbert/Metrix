@@ -17,7 +17,21 @@ export default function LicensePage() {
             <span>返回登录</span>
           </Link>
           <h1 className="license-title">开源协议 License</h1>
-          <p className="license-subtitle">本项目采用 MIT License。</p>
+          <p className="license-subtitle">
+            本项目采用 GNU Affero General Public License v3.0（仅第 3 版，AGPL-3.0-only）。
+          </p>
+          <p className="license-subtitle">Copyright © 2026 Fuze Shangguan（上官福泽）</p>
+          <p className="license-subtitle">
+            你可以依照本许可证修改和再分发本项目；本项目不提供任何担保。
+          </p>
+          <a
+            className="license-back-link"
+            href="https://github.com/ShangguanAlbert/Metrix"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            获取项目源码
+          </a>
         </header>
         <pre className="license-content">{LICENSE_CONTENT || LICENSE_FALLBACK_TEXT}</pre>
       </section>

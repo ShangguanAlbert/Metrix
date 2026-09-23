@@ -121,6 +121,12 @@
 
 ## 许可证
 
-本项目采用 MIT License 发布，详见 [LICENSE](./LICENSE) 文件。
+Copyright (c) 2026 Fuze Shangguan（上官福泽）。
+
+本项目采用 GNU Affero General Public License v3.0（仅第 3 版，SPDX：`AGPL-3.0-only`）发布，完整条款见 [LICENSE](./LICENSE)。你可以依照该许可证使用、修改和再分发本项目，包括商业用途；本项目不提供任何担保。
+
+如果你修改本项目并通过网络向用户提供交互服务，须依照 AGPL 第 13 条，向这些用户显著提供免费获取该运行版本完整对应源码的方式。部署修改版本时，应将协议页的源码链接更新为实际运行版本对应的源码地址。
+
+项目源码：[ShangguanAlbert/Metrix](https://github.com/ShangguanAlbert/Metrix)。第三方依赖及单独标注的资源仍遵循各自的许可证。
 
 教师工作台的“AI 教学配置”只配置协作课堂中的琳琳，使用独立的 `/api/auth/admin/classroom-ai-settings` 接口保存群聊模型与教学提示词。
