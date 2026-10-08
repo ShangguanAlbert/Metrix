@@ -4398,7 +4398,7 @@ export default function TeacherHomePage() {
       });
       setClassroomSaveNotice(selectedCourse.enabled === false
         ? "已发布关闭状态，学生端不再展示本课时。"
-        : "课时已发布，学生端将同步名称、任务和附件。");
+        : "课时已发布，学生端将同步名称、任务、附件及本课编程模板；代码由 Driver 确认载入。");
     } catch (cause) {
       if (!handleAuthError(cause)) setError(readErrorMessage(cause));
     } finally {

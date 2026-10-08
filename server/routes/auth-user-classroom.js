@@ -1,4 +1,5 @@
 import { lessonSnapshot, preserveLessonPublication, publishedLessonFileIds, readPublishedLesson } from "../../shared/classroomPublication.js";
+import { getProgrammingTemplatePublicationError } from "../modules/party-coding/template-service.js";
 import { registerAdminClassroomAiRoutes } from "./admin-classroom-ai.js";
 import { normalizeChatBootstrapResponse } from "../../shared/contracts/chat.js";
 import {
@@ -3387,13 +3388,16 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     if (String(req.body?.expectedUpdatedAt || "") !== String(lesson.updatedAt || "")) {
       res.status(409).json({ error: "课时已变化，请刷新并保存后再发布。" }); return;
     }
+    const templateError = lesson.enabled === false ? ""
+      : getProgrammingTemplatePublicationError(lesson.programmingTemplate, { allowEmpty: true });
+    if (templateError) { res.status(400).json({ error: templateError }); return; }
     const publication = { publishedAt: new Date().toISOString(), snapshot: lessonSnapshot(lesson) };
     const result = await AdminConfig.updateOne(
       { key: ADMIN_CONFIG_KEY, teacherCoursePlans: { $elemMatch: { id: lessonId, updatedAt: lesson.updatedAt } } },
       { $set: { "teacherCoursePlans.$.publication": publication } },
     );
     if (!result.matchedCount) { res.status(409).json({ error: "课时已变化，请刷新并保存后再发布。" }); return; }
-    // Names refresh through the template API; student code and template versions are untouched.
+    // The template API reads the published snapshot; students confirm before loading its code.
     const students = await AuthUser.find({ lockedTeacherScopeKey: SHI_GAOJUN_TEACHER_SCOPE_KEY, "profile.className": lesson.className }, { _id: 1 }).lean();
     const studentIds = students.map((student) => String(student._id));
     const roomQuery = {

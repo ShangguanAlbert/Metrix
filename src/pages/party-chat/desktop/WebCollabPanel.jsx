@@ -30,6 +30,7 @@ import {
 
 const REMOTE_DOCUMENT_ORIGIN = { type: "party-web-remote-document" };
 const REMOTE_AWARENESS_ORIGIN = { type: "party-web-remote-awareness" };
+const TEMPLATE_REFRESH_MS = 15000;
 const TASK_STAGE_OPTIONS = [
   { value: "understand", label: "理解任务" },
   { value: "plan", label: "设计方案" },
@@ -221,6 +222,7 @@ export default function WebCollabPanel({
             return;
           }
           session.documentEpoch = Number(payload.documentEpoch || 0);
+          if (!readOnlyObserver) setTemplateRefresh((value) => value + 1);
         }
         if (type === "coding_collab_update" && (!session.initialized || Number(payload.documentEpoch || 0) !== session.documentEpoch)) return;
         const update = decodeBase64(payload?.update);
@@ -288,10 +290,29 @@ export default function WebCollabPanel({
   useEffect(() => {
     if (readOnlyObserver || !ready) return;
     let active = true;
-    fetchPartyProgrammingTemplate(roomId).then((data) => {
-      if (active) setLessonTemplate(data.template || null);
-    }).catch((error) => { if (active) setActionError(error.message); });
-    return () => { active = false; };
+    let requestId = 0;
+    async function refresh() {
+      const request = ++requestId;
+      try {
+        const data = await fetchPartyProgrammingTemplate(roomId);
+        if (active && request === requestId) setLessonTemplate(data.template || null);
+      } catch (error) {
+        if (active && request === requestId) setActionError(error.message);
+      }
+    }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    void refresh();
+    const timer = window.setInterval(refreshWhenVisible, TEMPLATE_REFRESH_MS);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, [roomId, ready, readOnlyObserver, templateRefresh]);
 
   async function saveOrSwitch(target) {
@@ -531,7 +552,7 @@ export default function WebCollabPanel({
     </div>
 
     {!readOnlyObserver && workspace?.activeWorkspace === "lesson" ? <div className="party-web-template-bar">
-      <span>本课模板：{lessonTemplate?.lessonName || "老师尚未发布模板"}{lessonTemplate && workspace?.loadedTemplate?.lessonId === lessonTemplate.lessonId && workspace?.loadedTemplate?.version === lessonTemplate.version ? "（已载入）" : lessonTemplate ? "（可载入新模板）" : ""}</span>
+      <span>本课模板：{lessonTemplate?.lessonName || "老师尚未发布模板"}{lessonTemplate && workspace?.loadedTemplate?.lessonId === lessonTemplate.lessonId && workspace?.loadedTemplate?.version === lessonTemplate.version ? "（已载入）" : lessonTemplate ? "（可载入新模板）" : ""}{ready && lessonTemplate && !isDriver ? ` · 由 Driver（${driverName}）载入，全组同步` : ""}</span>
       <button type="button" disabled={!ready || !isDriver || !lessonTemplate || actionSubmitting} onClick={() => setTemplateConfirmOpen(true)}>载入本课模板</button>
     </div> : null}
     {templateConfirmOpen ? <div className="party-web-template-confirm" role="alertdialog" aria-label="确认载入模板">

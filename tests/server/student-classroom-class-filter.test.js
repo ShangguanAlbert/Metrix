@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { registerAuthUserClassroomRoutes } from "../../server/routes/auth-user-classroom.js";
+import { readRoomTemplate } from "../../server/modules/party-coding/template-service.js";
 
 function createAppDouble() {
   const routes = [];
@@ -413,5 +414,64 @@ for (const action of ["save", "delete-own", "steal-id"]) {
     assert.deepEqual(saved.teacherCoursePlans.find((lesson) => lesson.id === "other"), other);
     if (action === "save") assert.equal(saved.teacherCoursePlans.find((lesson) => lesson.id === "own").publication.snapshot.courseName, "已发布名称");
     else assert.deepEqual(saved.teacherCoursePlans.map((lesson) => lesson.id), ["other"]);
+  });
+}
+
+for (const mode of ["free", "fill", "fill-without-ranges"]) {
+  test(`发布课时路由同步编程快照并校验填写区：${mode}`, async () => {
+    const app = createAppDouble();
+    const { deps } = createClassFilterDeps();
+    const lesson = { id: "today", courseId: "course", className: "810班", courseName: "本节课", updatedAt: "saved",
+      tasks: [{ id: "task", content: "今天的文字任务" }], publication: { snapshot: null },
+      programmingTemplate: { html: "<p>____</p>", css: "p { color: red; }", editMode: mode === "free" ? "free" : "fill",
+        editableRanges: { html: mode === "fill-without-ranges" ? [] : [{ id: "answer", from: 3, to: 7 }], css: [] } },
+    };
+    const broadcasts = [];
+    let writes = 0;
+    Object.assign(deps, {
+      authenticateAdminRequest: async () => ({ _id: "teacher", username: "teacher" }),
+      normalizeFinalTestUsernameKey: (value) => value,
+      TERMINAL_ADMIN_USERNAME_KEY: "platform",
+      readAdminAgentConfig: async () => ({ teacherCoursePlans: [lesson] }),
+      TeachingCourse: { findById: () => ({ lean: async () => ({ ownerTeacherId: "teacher", classNames: ["810班"] }) }) },
+      AdminConfig: {
+        updateOne: async (_query, update) => {
+          writes += 1;
+          lesson.publication = update.$set["teacherCoursePlans.$.publication"];
+          return { matchedCount: 1 };
+        },
+        findOne: () => ({ lean: async () => ({ teacherCoursePlans: [lesson] }) }),
+      },
+      AuthUser: { find: () => ({ lean: async () => [{ _id: "student", profile: { className: "810班" }, lockedTeacherScopeKey: "shi-gaojun" }] }) },
+      GroupChatRoom: {
+        updateMany: async () => {},
+        find: () => ({ lean: async () => [{ _id: "room" }] }),
+      },
+      broadcastGroupChatRoomUpdated: () => {},
+      broadcastGroupChatWsPayload: (_roomId, payload) => broadcasts.push(payload),
+    });
+    registerAuthUserClassroomRoutes(app, deps);
+    const handler = app.routes.find((route) => route.path === "/api/auth/admin/classroom-plans/:lessonId/publish").handlers.at(-1);
+    const res = createResponseDouble();
+    await handler({ params: { lessonId: "today" }, body: { expectedUpdatedAt: "saved" } }, res);
+    if (mode === "fill-without-ranges") {
+      assert.equal(res.statusCode, 400);
+      assert.match(res.payload.error, /填写区/);
+      assert.equal(writes, 0);
+      assert.equal(broadcasts.length, 0);
+      return;
+    }
+    assert.equal(res.statusCode, 200);
+    assert.equal(lesson.publication.snapshot.tasks[0].content, "今天的文字任务");
+    const template = await readRoomTemplate({ ...deps, memberUserIds: ["student"],
+      Template: { findOne: () => ({ sort() { return this; }, lean: async () => null }) },
+    });
+    assert.equal(template.lessonId, "today");
+    assert.equal(template.html, lesson.programmingTemplate.html);
+    assert.equal(template.css, lesson.programmingTemplate.css);
+    assert.equal(template.editMode, mode);
+    assert.deepEqual(template.editableRanges, lesson.programmingTemplate.editableRanges);
+    assert.equal(broadcasts[0].type, "coding_collab_template_published");
+    assert.equal(broadcasts[0].roomId, "room");
   });
 }
