@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Download, RefreshCw } from "lucide-react";
 import { downloadClassroomLessonFile, fetchClassroomTaskSettings } from "../../classroom/classroomApi.js";
+import { reconcileStudentLessons } from "../../../features/classroom/studentLessonSelection.js";
 
 const REFRESH_MS = 15000;
 
@@ -9,8 +10,8 @@ function taskLinks(content) {
 }
 
 export default function LessonTaskBoard({ roomId, subscribeToCollaboration }) {
-  const [lessons, setLessons] = useState([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [lessonState, setLessonState] = useState({ lessons: [], selectedId: "", publicationKey: "" });
+  const { lessons, selectedId } = lessonState;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -35,9 +36,7 @@ export default function LessonTaskBoard({ roomId, subscribeToCollaboration }) {
         const data = await fetchClassroomTaskSettings();
         if (cancelled) return;
         const plans = Array.isArray(data.teacherCoursePlans) ? data.teacherCoursePlans : [];
-        setLessons([...plans].reverse().sort((a, b) =>
-          (Date.parse(b.courseStartAt || b.createdAt) || 0) - (Date.parse(a.courseStartAt || a.createdAt) || 0),
-        ));
+        setLessonState((previous) => reconcileStudentLessons(previous, plans));
         setError("");
       } catch (cause) {
         if (!cancelled) setError(cause.message || "课时任务加载失败，请刷新重试。");
@@ -113,7 +112,7 @@ export default function LessonTaskBoard({ roomId, subscribeToCollaboration }) {
     {selectedLesson ? <>
       <label className="party-lesson-select">课时
         <select aria-label="选择课时任务" value={selectedLesson.id} onChange={(event) => {
-          setSelectedId(event.target.value); setDownloadError("");
+          setLessonState((previous) => ({ ...previous, selectedId: event.target.value })); setDownloadError("");
         }}>
           {lessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.courseName}</option>)}
         </select>

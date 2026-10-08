@@ -13,6 +13,35 @@ export function readPublishedLesson(lesson) {
   return lesson;
 }
 
+export function readStudentLesson(lesson) {
+  const published = readPublishedLesson(lesson);
+  return published ? {
+    ...published,
+    publishedAt: lesson.publication?.publishedAt || "",
+  } : null;
+}
+
+export function compareStudentLessons(a, b) {
+  const timestamp = (lesson) => new Date(
+    lesson.publishedAt || lesson.courseStartAt || lesson.createdAt || "",
+  ).getTime() || 0;
+  return timestamp(b) - timestamp(a) || String(a.id).localeCompare(String(b.id));
+}
+
+export function latestPublishedClassroomLesson(lessons, className) {
+  if (!className) return null;
+  return (lessons || []).map(readStudentLesson).filter((lesson) =>
+    lesson && lesson.enabled !== false && lesson.className === className,
+  ).sort(compareStudentLessons)[0] || null;
+}
+
+export function publishedClassroomTaskText(lesson) {
+  if (!lesson) return "";
+  return [lesson.announcement, ...(lesson.tasks || []).map((task) =>
+    [task.title, task.content].filter(Boolean).join("："),
+  )].filter(Boolean).join("\n").trim().slice(0, 500);
+}
+
 export function preserveLessonPublication(previous) {
   if (previous && Object.hasOwn(previous, "publication")) return previous.publication;
   return {

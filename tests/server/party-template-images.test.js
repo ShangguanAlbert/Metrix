@@ -35,24 +35,21 @@ test("素材路径仅接受当前素材格式，图片格式按文件内容识�
   assert.equal(detectImageFormat(Buffer.alloc(7 * 1024 * 1024)), null);
 });
 
-test("published lesson rename updates template label without changing template code or version", async () => {
+test("published lesson rename updates template label without changing code or version", async () => {
   const { readRoomTemplate } = await import("../../server/modules/party-coding/template-service.js");
-  const template = { lessonId: "lesson", lessonName: "第1节课", version: "same-code", html: "<p>模板</p>", css: "", publishedAt: "2026-09-21" };
-  const deps = {
-    Template: { findOne: () => ({ sort() { return this; }, lean: async () => template }) },
-    AuthUser: { find: () => ({ lean: async () => [{ profile: { className: "801班" }, lockedTeacherScopeKey: "shi-gaojun" }] }) },
-    AdminConfig: { findOne: () => ({ lean: async () => ({ teacherCoursePlans: [{ id: "lesson", courseName: "未发布草稿", publication: { snapshot: { courseName: "推荐卡制作" } } }] }) }) },
-    memberUserIds: ["student"],
-  };
-  const result = await readRoomTemplate(deps);
+  const lesson = { id: "lesson", courseName: "第1节课", className: "测试班", programmingTemplate: { html: "<p>模板</p>" } };
+  const template = buildPublishedTemplate(lesson, "teacher", new Date("2026-09-21T01:00:00Z"));
+  const result = await readRoomTemplate(roomTemplateFixture({ template, lessons: [
+    { ...lesson, courseName: "未发布草稿", publication: { publishedAt: "2026-09-22T01:00:00Z", snapshot: { ...lesson, courseName: "推荐卡制作" } } },
+  ] }));
   assert.equal(result.lessonName, "推荐卡制作");
-  assert.equal(result.version, "same-code");
+  assert.equal(result.version, template.version);
   assert.equal(result.html, "<p>模板</p>");
 });
 
 function roomTemplateFixture({ template = null, lessons = [], className = "测试班" } = {}) {
   return {
-    Template: { findOne: () => ({ sort() { return this; }, lean: async () => template }) },
+    Template: { find: () => ({ lean: async () => template ? [template] : [] }) },
     AuthUser: { find: () => ({ lean: async () => [
       { profile: { className }, lockedTeacherScopeKey: "shi-gaojun" },
     ] }) },
@@ -69,7 +66,7 @@ for (const editMode of ["free", "fill"]) {
     const published = { id: "today", courseId: "course", className: "测试班", courseName: "今日练习", programmingTemplate };
     const result = await readRoomTemplate(roomTemplateFixture({
       template: { lessonId: "previous", lessonName: "上节课", html: "旧代码", version: "old", publishedAt: "2026-10-07T01:00:00.000Z" },
-      lessons: [{ ...published, programmingTemplate: { html: "未发布的新草稿" },
+      lessons: [{ id: "previous" }, { ...published, programmingTemplate: { html: "未发布的新草稿" },
         publication: { publishedAt: "2026-10-08T01:00:00.000Z", snapshot: published } }],
     }));
     assert.equal(result.lessonId, "today");
@@ -96,6 +93,7 @@ test("未发布草稿、其他班级、关闭或没有代码的课时不能替�
   const { readRoomTemplate } = await import("../../server/modules/party-coding/template-service.js");
   const template = { lessonId: "old", html: "已发布代码", version: "old-v1", publishedAt: "2026-10-07T01:00:00.000Z" };
   const result = await readRoomTemplate(roomTemplateFixture({ template, lessons: [
+    { id: "old" },
     { id: "draft", className: "测试班", programmingTemplate: { html: "草稿代码" }, publication: { snapshot: null } },
     { id: "legacy", className: "测试班", programmingTemplate: { html: "旧课时未单独发布的代码" } },
     { id: "other", publication: { publishedAt: "2026-10-08T01:00:00.000Z", snapshot: { id: "other", className: "其他班", programmingTemplate: { html: "其他班代码" } } } },
@@ -110,10 +108,59 @@ test("单独重新发布的练习优先于较早的课时发布版本", async ()
   const { readRoomTemplate } = await import("../../server/modules/party-coding/template-service.js");
   const snapshot = { id: "lesson", className: "测试班", courseName: "今日课时", programmingTemplate: { html: "之前发布的代码" } };
   const result = await readRoomTemplate(roomTemplateFixture({
-    template: { lessonId: "lesson", html: "单独重新发布的代码", version: "new-v2", publishedAt: "2026-10-08T02:00:00.000Z" },
+    template: { lessonId: "lesson", lessonName: "独立发布练习", html: "单独重新发布的代码", version: "new-v2", publishedAt: "2026-10-08T02:00:00.000Z" },
     lessons: [{ ...snapshot, publication: { publishedAt: "2026-10-08T01:00:00.000Z", snapshot } }],
   }));
   assert.equal(result.html, "单独重新发布的代码");
   assert.equal(result.version, "new-v2");
-  assert.equal(result.lessonName, "今日课时");
+  assert.equal(result.lessonName, "独立发布练习");
+});
+
+for (const action of ["close", "delete", "move-class", "remove-code"]) {
+  test(`课时${action}后不再提供该课时的旧独立模板`, async () => {
+    const { readRoomTemplate } = await import("../../server/modules/party-coding/template-service.js");
+    const snapshot = { id: "lesson", className: "测试班", enabled: true, programmingTemplate: { html: "新代码" } };
+    if (action === "close") snapshot.enabled = false;
+    if (action === "move-class") snapshot.className = "其他班";
+    if (action === "remove-code") snapshot.programmingTemplate = { html: "", css: "" };
+    const result = await readRoomTemplate(roomTemplateFixture({
+      template: { lessonId: "lesson", html: "旧独立代码", publishedAt: "2026-10-08T01:00:00Z" },
+      lessons: action === "delete" ? [] : [{ id: "lesson", publication: { publishedAt: "2026-10-08T02:00:00Z", snapshot } }],
+    }));
+    assert.equal(result, null);
+  });
+}
+
+test("关闭最新练习后仍可读取其他开放课时的独立模板", async () => {
+  const { readRoomTemplate } = await import("../../server/modules/party-coding/template-service.js");
+  const deps = roomTemplateFixture({ lessons: [
+    { id: "older" },
+    { id: "newer", publication: { publishedAt: "2026-10-08T03:00:00Z", snapshot: { enabled: false, className: "测试班" } } },
+  ] });
+  deps.Template.find = () => ({ lean: async () => [
+    { lessonId: "newer", html: "已关闭", publishedAt: "2026-10-08T02:00:00Z" },
+    { lessonId: "older", html: "仍开放", publishedAt: "2026-10-08T01:00:00Z" },
+  ] });
+  assert.equal((await readRoomTemplate(deps)).html, "仍开放");
+});
+
+test("只保存关闭草稿不会撤回已发布练习", async () => {
+  const { readRoomTemplate } = await import("../../server/modules/party-coding/template-service.js");
+  const result = await readRoomTemplate(roomTemplateFixture({
+    template: { lessonId: "lesson", html: "学生仍可读取", publishedAt: "2026-10-08T02:00:00Z" },
+    lessons: [{ id: "lesson", enabled: false, publication: { publishedAt: "2026-10-08T01:00:00Z", snapshot: { enabled: true, className: "测试班" } } }],
+  }));
+  assert.equal(result.html, "学生仍可读取");
+});
+
+test("MongoDB Date 保留毫秒，同一秒内较晚发布的独立练习优先", async () => {
+  const { readRoomTemplate } = await import("../../server/modules/party-coding/template-service.js");
+  const result = await readRoomTemplate(roomTemplateFixture({
+    template: { lessonId: "lesson", lessonName: "刚发布练习", html: "新代码", publishedAt: new Date("2026-10-08T01:00:00.900Z") },
+    lessons: [{ id: "lesson", publication: { publishedAt: "2026-10-08T01:00:00.100Z", snapshot: {
+      id: "lesson", className: "测试班", courseName: "较早课时", programmingTemplate: { html: "旧代码" },
+    } } }],
+  }));
+  assert.equal(result.html, "新代码");
+  assert.equal(result.lessonName, "刚发布练习");
 });

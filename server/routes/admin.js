@@ -1,4 +1,5 @@
 import { registerPartyTemplateAdminRoutes } from "../modules/party-coding/template-service.js";
+import { latestPublishedClassroomLesson, publishedClassroomTaskText } from "../../shared/classroomPublication.js";
 import { readNavigatorUserIds } from "../../shared/party-roles.js";
 import { registerPartyMemberRoutes } from "../modules/party-coding/member-routes.js";
 import {
@@ -3359,17 +3360,10 @@ export function registerAdminRoutes(app, deps) {
         participationMonitoringConfig?.paiaParticipationMonitoringEnabled ===
         true;
       const monitoringUpdatedAt = new Date();
-      const latestLessonAnnouncement = (
-        Array.isArray(participationMonitoringConfig?.teacherCoursePlans)
-          ? participationMonitoringConfig.teacherCoursePlans
-          : []
-      )
-        .filter((lesson) => sanitizeText(lesson?.announcement, "", 500))
-        .sort(
-          (a, b) =>
-            (Date.parse(String(b?.announcementUpdatedAt || "")) || 0) -
-            (Date.parse(String(a?.announcementUpdatedAt || "")) || 0),
-        )[0];
+      const latestLesson = latestPublishedClassroomLesson(
+        participationMonitoringConfig?.teacherCoursePlans,
+        String(selectedStudents[0].profile?.className || "").trim(),
+      );
       const finalStudentUserIds = sanitizeGroupChatMemberUserIds(studentUserIds);
       const roomCode = await generateUniqueGroupChatRoomCode();
       const roomDoc = await GroupChatRoom.create({
@@ -3380,11 +3374,7 @@ export function registerAdminRoutes(app, deps) {
         memberUserIds: finalStudentUserIds,
         memberCount: finalStudentUserIds.length,
         membershipHistory: [{ memberUserIds: finalStudentUserIds, effectiveAt: monitoringUpdatedAt, changedByAdminId: String(admin._id) }],
-        announcement: sanitizeText(
-          latestLessonAnnouncement?.announcement,
-          "",
-          500,
-        ),
+        announcement: publishedClassroomTaskText(latestLesson),
         ...buildPairClassroomMonitoringFields(participationMonitoringEnabled, {
           now: monitoringUpdatedAt,
           adminId: sanitizeId(admin?._id, ""),

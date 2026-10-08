@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { lessonHasUnpublishedChanges, lessonSnapshot, preserveLessonPublication, publishedLessonFileIds, readPublishedLesson } from "../../shared/classroomPublication.js";
+import { latestPublishedClassroomLesson, publishedClassroomTaskText, readStudentLesson, lessonHasUnpublishedChanges, lessonSnapshot, preserveLessonPublication, publishedLessonFileIds, readPublishedLesson } from "../../shared/classroomPublication.js";
 
 const original = { id: "lesson", courseName: "第1节课", enabled: true, tasks: [{ id: "task", content: "原任务", files: [{ id: "file-old" }] }], files: [], updatedAt: "2026-09-21T01:00:00.000Z" };
 
@@ -39,4 +39,32 @@ test("publication status detects renamed drafts and ignores save timestamps and 
   assert.equal(lessonHasUnpublishedChanges({ ...lesson, updatedAt: "new timestamp" }), false);
   assert.equal(lessonHasUnpublishedChanges({ ...lesson, courseName: "新名称" }), true);
   assert.equal(lessonHasUnpublishedChanges({ ...original, publication: { snapshot: null } }), true);
+});
+
+test("新小组与学生任务栏只读取本班最近发布内容，排除别班、未发布和关闭课时", () => {
+  const snapshot = { ...original, className: "801班", announcement: "本班公告" };
+  const lesson = { ...snapshot, announcement: "尚未发布的草稿", publication: { publishedAt: "2026-10-08", snapshot } };
+  const selected = latestPublishedClassroomLesson([
+    { ...snapshot, id: "other", className: "802班", createdAt: "2026-10-10" },
+    { ...snapshot, id: "draft", publication: { snapshot: null } },
+    { ...snapshot, id: "closed", enabled: false, createdAt: "2026-10-11" },
+    lesson,
+  ], "801班");
+  assert.equal(selected.id, original.id);
+  assert.equal(selected.publishedAt, "2026-10-08");
+  assert.equal(publishedClassroomTaskText(selected), "本班公告\n原任务");
+  assert.equal(readStudentLesson({ publication: { snapshot: null } }), null);
+  assert.equal(latestPublishedClassroomLesson([lesson], "803班"), null);
+  assert.equal(publishedClassroomTaskText(null), "");
+});
+
+test("同一秒内的 Mongo Date 发布时间保留毫秒精度", () => {
+  const lessons = [100, 900].map((milliseconds, index) => ({
+    id: String(index),
+    publication: {
+      publishedAt: new Date(Date.UTC(2026, 9, 8, 1, 0, 0, milliseconds)),
+      snapshot: { id: String(index), className: "801班", enabled: true },
+    },
+  }));
+  assert.equal(latestPublishedClassroomLesson(lessons, "801班").id, "1");
 });

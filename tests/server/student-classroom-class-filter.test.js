@@ -397,6 +397,8 @@ for (const action of ["save", "delete-own", "steal-id"]) {
       normalizeFinalTestUsernameKey: (value) => value,
       TERMINAL_ADMIN_USERNAME_KEY: "platform",
       readAdminAgentConfig: async () => ({ teacherCoursePlans: [own, other] }),
+      AuthUser: { find: () => ({ lean: async () => [] }) },
+      GroupChatRoom: { updateMany: async () => {}, find: () => ({ lean: async () => [] }) },
       TeachingCourse: { find: () => ({ lean: async () => [{ _id: "course-a", ownerTeacherId: "teacher", classNames: ["810班"] }] }) },
       sanitizeAdminClassroomCoursePlansPayload: (value) => value,
       sanitizeAdminClassroomCourseFilesPayload: (value) => value,
@@ -464,7 +466,7 @@ for (const mode of ["free", "fill", "fill-without-ranges"]) {
     assert.equal(res.statusCode, 200);
     assert.equal(lesson.publication.snapshot.tasks[0].content, "今天的文字任务");
     const template = await readRoomTemplate({ ...deps, memberUserIds: ["student"],
-      Template: { findOne: () => ({ sort() { return this; }, lean: async () => null }) },
+      Template: { find: () => ({ lean: async () => [] }) },
     });
     assert.equal(template.lessonId, "today");
     assert.equal(template.html, lesson.programmingTemplate.html);
@@ -473,5 +475,73 @@ for (const mode of ["free", "fill", "fill-without-ranges"]) {
     assert.deepEqual(template.editableRanges, lesson.programmingTemplate.editableRanges);
     assert.equal(broadcasts[0].type, "coding_collab_template_published");
     assert.equal(broadcasts[0].roomId, "room");
+  });
+}
+
+test("保存草稿期间发生发布时拒绝覆盖，不删除原附件或损坏新发布版本", async () => {
+  const app = createAppDouble();
+  const { deps } = createClassFilterDeps();
+  const oldTime = "2026-10-08T01:00:00.000Z";
+  const oldLesson = { id: "own", courseId: "course", className: "810班", courseName: "旧课时", tasks: [], files: [{ id: "file" }] };
+  let stored = { updatedAt: oldTime, teacherCoursePlans: [oldLesson] };
+  let deletionCount = 0;
+  Object.assign(deps, {
+    authenticateAdminRequest: async () => ({ _id: "teacher", username: "teacher", authorizedClassNames: ["810班"] }),
+    normalizeFinalTestUsernameKey: (value) => value,
+    TERMINAL_ADMIN_USERNAME_KEY: "platform",
+    readAdminAgentConfig: async () => {
+      const snapshot = structuredClone(stored);
+      stored = { updatedAt: "2026-10-08T02:00:00.000Z", teacherCoursePlans: [{ ...oldLesson, publication: { snapshot: { ...oldLesson, courseName: "刚发布的新课时" } } }] };
+      return snapshot;
+    },
+    TeachingCourse: { find: () => ({ lean: async () => [{ _id: "course", ownerTeacherId: "teacher", classNames: ["810班"] }] }) },
+    sanitizeAdminClassroomCoursePlansPayload: (value) => value,
+    sanitizeAdminClassroomCourseFilesPayload: (value) => value,
+    sanitizeAdminClassroomDisciplineConfigPayload: () => ({}),
+    collectAdminClassroomFileIdsFromLesson: (lesson) => lesson.files.map((file) => file.id),
+    AdminConfig: { findOneAndUpdate: (query, update) => ({ lean: async () => {
+      if (query.updatedAt?.toISOString() !== stored.updatedAt) return null;
+      stored = { ...stored, ...update.$set };
+      return stored;
+    } }) },
+    AdminClassroomLessonFile: {
+      find: () => ({ lean: async () => [] }),
+      deleteMany: async () => { deletionCount += 1; },
+    },
+    normalizeAdminConfigDoc: (value) => value,
+  });
+  registerAuthUserClassroomRoutes(app, deps);
+  const handler = app.routes.find((route) => route.method === "put" && route.path === "/api/auth/admin/classroom-plans").handlers.at(-1);
+  const res = createResponseDouble();
+  await handler({ body: { teacherCoursePlans: [] } }, res);
+  assert.equal(res.statusCode, 409);
+  assert.equal(stored.teacherCoursePlans[0].publication.snapshot.courseName, "刚发布的新课时");
+  assert.equal(deletionCount, 0);
+});
+
+for (const kind of ["lesson", "task"]) {
+  test(`删除${kind}附件遇到并发发布时保留文件及发布版本`, async () => {
+    const app = createAppDouble();
+    const { deps } = createClassFilterDeps();
+    const file = { id: "file" };
+    const lesson = { id: "lesson", files: [file], tasks: [{ id: "task", files: [file] }], publication: { snapshot: null } };
+    let deletions = 0;
+    Object.assign(deps, {
+      readAdminAgentConfig: async () => ({ updatedAt: "2026-10-08T01:00:00.000Z", teacherCoursePlans: [lesson] }),
+      findAdminClassroomLessonTaskById: (item, id) => ({ task: item.tasks.find((task) => task.id === id) }),
+      AdminConfig: { findOneAndUpdate: () => ({ lean: async () => null }) },
+      AdminClassroomLessonFile: { findOneAndDelete: () => { deletions += 1; throw new Error("必须保留附件"); } },
+    });
+    registerAuthUserClassroomRoutes(app, deps);
+    const path = kind === "lesson"
+      ? "/api/auth/admin/classroom-plans/:lessonId/files/:fileId"
+      : "/api/auth/admin/classroom-plans/:lessonId/tasks/:taskId/files/:fileId";
+    const handler = app.routes.find((route) => route.method === "delete" && route.path === path).handlers.at(-1);
+    const res = createResponseDouble();
+    await handler({ params: { lessonId: "lesson", taskId: "task", fileId: "file" } }, res);
+    assert.equal(res.statusCode, 409);
+    assert.equal(deletions, 0);
+    assert.deepEqual(lesson.files, [file]);
+    assert.deepEqual(lesson.tasks[0].files, [file]);
   });
 }

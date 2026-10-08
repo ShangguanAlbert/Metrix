@@ -49,6 +49,7 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import PortalSelect from "../components/PortalSelect.jsx";
 import TeacherRoomMemoryDialog from "../features/admin/components/TeacherRoomMemoryDialog.jsx";
+import { buildCollaborationClassroomItems } from "../features/admin/services/collaborationClassroomList.js";
 import {
   CLASSROOM_FILE_KIND_TASK,
   getClassroomFileDownloadErrorText,
@@ -198,6 +199,10 @@ const USER_CREATE_DEFAULT_TEACHER_SCOPE_KEY =
       DEFAULT_TEACHER_SCOPE_KEY,
   ).trim() || DEFAULT_TEACHER_SCOPE_KEY;
 const PAIR_CLASSROOM_STUDENT_LIMIT = 3;
+const COLLABORATION_CLASSROOM_SORT_OPTIONS = Object.freeze([
+  { value: "class", label: "排序：班级 → 组名" },
+  { value: "name", label: "排序：组名 A–Z" },
+]);
 
 function formatCourseKnowledgePointLines(points) {
   const safePoints = Array.isArray(points) ? points : [];
@@ -1508,6 +1513,8 @@ export default function TeacherHomePage() {
   const [partyRoomManageLoading, setPartyRoomManageLoading] = useState(false);
   const [partyRoomManageUpdatedAt, setPartyRoomManageUpdatedAt] = useState("");
   const [partyRoomItems, setPartyRoomItems] = useState([]);
+  const [collaborationClassroomSortBy, setCollaborationClassroomSortBy] =
+    useState("class");
   const [partyRoomManageUsers, setPartyRoomManageUsers] = useState([]);
   const [pairClassroomCreateDialog, setPairClassroomCreateDialog] = useState({
     open: false,
@@ -3243,8 +3250,8 @@ export default function TeacherHomePage() {
   }, [imageLibraryClassFilter, imageLibraryGroups, imageLibrarySortBy]);
 
   const collaborationClassroomItems = useMemo(
-    () => (Array.isArray(partyRoomItems) ? partyRoomItems : []),
-    [partyRoomItems],
+    () => buildCollaborationClassroomItems(partyRoomItems, collaborationClassroomSortBy),
+    [partyRoomItems, collaborationClassroomSortBy],
   );
   const pairClassroomUserOptions = useMemo(
     () =>
@@ -9788,6 +9795,14 @@ export default function TeacherHomePage() {
                   <div className="teacher-party-manage-summary">
                     <span>{`小教室：${collaborationClassroomItems.length}`}</span>
                     <span>{`参与度感知中：${collaborationClassroomItems.filter((room) => room?.paiaMonitoringEnabled === true).length}`}</span>
+                    <PortalSelect
+                      value={collaborationClassroomSortBy}
+                      options={COLLABORATION_CLASSROOM_SORT_OPTIONS}
+                      onChange={setCollaborationClassroomSortBy}
+                      ariaLabel="小组排序"
+                      className="teacher-collab-sort-select"
+                      compact
+                    />
                   </div>
 
                   <div className="teacher-party-room-list">
@@ -9831,7 +9846,7 @@ export default function TeacherHomePage() {
                             <header className="teacher-party-room-head">
                               <div>
                                 <h3>{room?.name || "未命名小教室"}</h3>
-                                <p>{`学生 ${students.length} 人 · 最近更新 ${formatDisplayTime(room?.updatedAt)}`}</p>
+                                <p>{`${room.classLabel} · 学生 ${students.length} 人 · 最近更新 ${formatDisplayTime(room?.updatedAt)}`}</p>
                               </div>
                               <div className="teacher-collab-room-head-actions">
                                 {students.length === 2 ? <button type="button" className="teacher-ghost-btn"

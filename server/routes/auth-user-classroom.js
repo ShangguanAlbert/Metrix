@@ -1,4 +1,5 @@
-import { lessonSnapshot, preserveLessonPublication, publishedLessonFileIds, readPublishedLesson } from "../../shared/classroomPublication.js";
+import { lessonSnapshot, preserveLessonPublication, publishedLessonFileIds, readPublishedLesson, readStudentLesson } from "../../shared/classroomPublication.js";
+import { syncPublishedClassroomRooms } from "../modules/party-coding/classroom-publication.js";
 import { getProgrammingTemplatePublicationError } from "../modules/party-coding/template-service.js";
 import { registerAdminClassroomAiRoutes } from "./admin-classroom-ai.js";
 import { normalizeChatBootstrapResponse } from "../../shared/contracts/chat.js";
@@ -29,6 +30,23 @@ import {
 } from "../modules/auth/registration.js";
 
 export function registerAuthUserClassroomRoutes(app, deps) {
+  async function writeClassroomPlans(previous, fields) {
+    try {
+      return await deps.AdminConfig.findOneAndUpdate(
+        { key: deps.ADMIN_CONFIG_KEY, updatedAt: previous.updatedAt ? new Date(previous.updatedAt) : { $exists: false } },
+        { $set: { key: deps.ADMIN_CONFIG_KEY, ...fields } },
+        { upsert: !previous.updatedAt, new: true, setDefaultsOnInsert: true },
+      ).lean();
+    } catch (error) {
+      if (error.code === 11000) return null;
+      throw error;
+    }
+  }
+
+  function classroomWriteConflict(res) {
+    res.status(409).json({ error: "课时已被其他保存或发布操作更新，请刷新后重试，本次修改尚未保存。" });
+  }
+
   function readSignedUrlExpiryText(url) {
     const safeUrl = String(url || "").trim();
     if (!safeUrl) return "";
@@ -983,7 +1001,7 @@ export function registerAuthUserClassroomRoutes(app, deps) {
     if (isShangguanTeacher || isPairClassroom) {
       const config = await readAdminAgentConfig();
       const classLessons = sortAdminClassroomCoursePlans(
-        config.teacherCoursePlans.map(readPublishedLesson).filter(Boolean)
+        config.teacherCoursePlans.map(readStudentLesson).filter(Boolean)
           .map((lesson) => ({ ...lesson, className: resolveClassroomLessonClassName(lesson) }))
           .filter((lesson) => userClassName && lesson.className === userClassName),
       );
@@ -3329,6 +3347,14 @@ export function registerAuthUserClassroomRoutes(app, deps) {
 
     teacherCoursePlans.forEach((lesson) => publishedLessonFileIds(lesson).forEach((fileId) => nextFileIds.add(fileId)));
     const staleFileIds = Array.from(previousFileIds).filter((fileId) => !nextFileIds.has(fileId));
+
+    const doc = await writeClassroomPlans(previous, {
+      teacherCoursePlans,
+      shangguanClassTaskProductImprovementEnabled,
+      classroomDisciplineConfig,
+      seatLayoutsByClass,
+    });
+    if (!doc) { classroomWriteConflict(res); return; }
     if (staleFileIds.length > 0) {
       const staleDocs = await AdminClassroomLessonFile.find({
         key: ADMIN_CONFIG_KEY,
@@ -3345,24 +3371,14 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       }
     }
 
-    const doc = await AdminConfig.findOneAndUpdate(
-      { key: ADMIN_CONFIG_KEY },
-      {
-        $set: {
-          key: ADMIN_CONFIG_KEY,
-          teacherCoursePlans,
-          shangguanClassTaskProductImprovementEnabled,
-          classroomDisciplineConfig,
-          seatLayoutsByClass,
-        },
-      },
-      {
-        upsert: true,
-        new: true,
-        setDefaultsOnInsert: true,
-      },
-    ).lean();
     const config = normalizeAdminConfigDoc(doc);
+    const remainingIds = new Set(teacherCoursePlans.map((lesson) => lesson.id));
+    const removedClassNames = previous.teacherCoursePlans
+      .filter((lesson) => !remainingIds.has(lesson.id))
+      .map((lesson) => readPublishedLesson(lesson)?.className);
+    if (removedClassNames.some(Boolean)) {
+      await syncPublishedClassroomRooms({ lessons: config.teacherCoursePlans, classNames: removedClassNames, deps });
+    }
 
     res.json({
       ok: true,
@@ -3403,24 +3419,10 @@ export function registerAuthUserClassroomRoutes(app, deps) {
       { $set: { "teacherCoursePlans.$.publication": publication } },
     );
     if (!result.matchedCount) { res.status(409).json({ error: "课时已变化，请刷新并保存后再发布。" }); return; }
-    // The template API reads the published snapshot; students confirm before loading its code.
-    const students = await AuthUser.find({ lockedTeacherScopeKey: SHI_GAOJUN_TEACHER_SCOPE_KEY, "profile.className": lesson.className }, { _id: 1 }).lean();
-    const studentIds = students.map((student) => String(student._id));
-    const roomQuery = {
-      teacherScopeKey: SHI_GAOJUN_TEACHER_SCOPE_KEY,
-      memberUserIds: { $in: studentIds, $not: { $elemMatch: { $nin: studentIds } } },
-    };
-    // Keep the room's current task (including the AI context) aligned with this publication.
-    // Existing room attachments remain available; lesson attachments use the published snapshot.
-    if (lesson.enabled !== false) {
-      const taskText = lesson.announcement || (lesson.tasks || [])
-        .map((task) => [task.title, task.content].filter(Boolean).join("：")).join("\n");
-      await GroupChatRoom.updateMany(roomQuery, { $set: { announcement: sanitizeText(taskText, "", 500) } });
-    }
-    const rooms = await GroupChatRoom.find(roomQuery).lean();
-    for (const room of rooms) deps.broadcastGroupChatRoomUpdated(String(room._id), room);
-    for (const room of rooms) deps.broadcastGroupChatWsPayload(String(room._id), {
-      type: "coding_collab_template_published", roomId: String(room._id), lessonId,
+    await syncPublishedClassroomRooms({
+      lessons: config.teacherCoursePlans.map((item) => item.id === lessonId ? { ...lesson, publication } : item),
+      classNames: [readPublishedLesson(lesson)?.className, lesson.className],
+      deps,
     });
     res.json({ ok: true, lessonId, publication });
   });
@@ -3529,20 +3531,15 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         };
       });
 
-      const doc = await AdminConfig.findOneAndUpdate(
-        { key: ADMIN_CONFIG_KEY },
-        {
-          $set: {
-            key: ADMIN_CONFIG_KEY,
-            teacherCoursePlans,
-          },
-        },
-        {
-          upsert: true,
-          new: true,
-          setDefaultsOnInsert: true,
-        },
-      ).lean();
+      const doc = await writeClassroomPlans(previous, { teacherCoursePlans });
+      if (!doc) {
+        await AdminClassroomLessonFile.deleteMany({ key: ADMIN_CONFIG_KEY, fileId: { $in: newFileDocs.map((file) => file.fileId) } });
+        for (const file of newFileDocs) {
+          await deleteGroupChatOssObject(file.ossKey).catch(() => {});
+        }
+        classroomWriteConflict(res);
+        return;
+      }
       const config = normalizeAdminConfigDoc(doc);
 
       res.json({
@@ -3676,20 +3673,15 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         };
       });
 
-      const doc = await AdminConfig.findOneAndUpdate(
-        { key: ADMIN_CONFIG_KEY },
-        {
-          $set: {
-            key: ADMIN_CONFIG_KEY,
-            teacherCoursePlans,
-          },
-        },
-        {
-          upsert: true,
-          new: true,
-          setDefaultsOnInsert: true,
-        },
-      ).lean();
+      const doc = await writeClassroomPlans(previous, { teacherCoursePlans });
+      if (!doc) {
+        await AdminClassroomLessonFile.deleteMany({ key: ADMIN_CONFIG_KEY, fileId: { $in: newFileDocs.map((file) => file.fileId) } });
+        for (const file of newFileDocs) {
+          await deleteGroupChatOssObject(file.ossKey).catch(() => {});
+        }
+        classroomWriteConflict(res);
+        return;
+      }
       const config = normalizeAdminConfigDoc(doc);
 
       res.json({
@@ -3741,6 +3733,8 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         };
       });
 
+      const doc = await writeClassroomPlans(previous, { teacherCoursePlans });
+      if (!doc) { classroomWriteConflict(res); return; }
       const removedDoc = publishedLessonFileIds(targetLesson).has(fileId) ? null : await AdminClassroomLessonFile.findOneAndDelete({
         key: ADMIN_CONFIG_KEY,
         lessonId,
@@ -3751,20 +3745,6 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         await deleteGroupChatOssObject(removedOssKey).catch(() => {});
       }
 
-      const doc = await AdminConfig.findOneAndUpdate(
-        { key: ADMIN_CONFIG_KEY },
-        {
-          $set: {
-            key: ADMIN_CONFIG_KEY,
-            teacherCoursePlans,
-          },
-        },
-        {
-          upsert: true,
-          new: true,
-          setDefaultsOnInsert: true,
-        },
-      ).lean();
       const config = normalizeAdminConfigDoc(doc);
       res.json({
         ok: true,
@@ -3830,6 +3810,8 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         };
       });
 
+      const doc = await writeClassroomPlans(previous, { teacherCoursePlans });
+      if (!doc) { classroomWriteConflict(res); return; }
       const removedDoc = publishedLessonFileIds(targetLesson).has(fileId) ? null : await AdminClassroomLessonFile.findOneAndDelete({
         key: ADMIN_CONFIG_KEY,
         lessonId,
@@ -3841,20 +3823,6 @@ export function registerAuthUserClassroomRoutes(app, deps) {
         await deleteGroupChatOssObject(removedOssKey).catch(() => {});
       }
 
-      const doc = await AdminConfig.findOneAndUpdate(
-        { key: ADMIN_CONFIG_KEY },
-        {
-          $set: {
-            key: ADMIN_CONFIG_KEY,
-            teacherCoursePlans,
-          },
-        },
-        {
-          upsert: true,
-          new: true,
-          setDefaultsOnInsert: true,
-        },
-      ).lean();
       const config = normalizeAdminConfigDoc(doc);
 
       res.json({
