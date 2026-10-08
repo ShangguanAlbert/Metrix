@@ -428,21 +428,6 @@ export function updateAdminCollaborationMonitoringMaster(
   );
 }
 
-export function updateAdminCollaborationCourseAnnouncement(
-  adminToken,
-  lessonId,
-  announcement,
-) {
-  return request(
-    "/api/auth/admin/collaboration-classrooms/announcement",
-    adminToken,
-    {
-      method: "PUT",
-      body: JSON.stringify({ lessonId, announcement }),
-    },
-  );
-}
-
 export function addAdminCollaborationMember(adminToken, roomId, studentUserId) {
   return request(`/api/auth/admin/collaboration-classrooms/${encodeURIComponent(roomId)}/members`, adminToken, {
     method: "POST", body: JSON.stringify({ studentUserId }),

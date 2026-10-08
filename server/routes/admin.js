@@ -3049,61 +3049,11 @@ export function registerAdminRoutes(app, deps) {
         return;
       }
 
-      const announcement = sanitizeText(req.body?.announcement, "", 500);
-      const lessonId = sanitizeId(req.body?.lessonId, "");
-      if (!lessonId) {
-        res.status(400).json({ error: "请先选择要发布公告的课时。" });
-        return;
-      }
-      const now = new Date();
-      try {
-        const updatedConfig = await AdminConfig.findOneAndUpdate(
-          {
-            key: ADMIN_CONFIG_KEY,
-            "teacherCoursePlans.id": lessonId,
-          },
-          {
-            $set: {
-              "teacherCoursePlans.$.announcement": announcement,
-              "teacherCoursePlans.$.announcementUpdatedAt": now.toISOString(),
-              updatedAt: now,
-            },
-          },
-          { new: true },
-        ).lean();
-        if (!updatedConfig) {
-          res.status(404).json({ error: "未找到要发布公告的课时，请刷新后重试。" });
-          return;
-        }
-        await GroupChatRoom.updateMany(
-          { teacherScopeKey: SHI_GAOJUN_TEACHER_SCOPE_KEY },
-          { $set: { announcement } },
-        );
-
-        const updatedRooms = await GroupChatRoom.find({
-          teacherScopeKey: SHI_GAOJUN_TEACHER_SCOPE_KEY,
-        }).lean();
-        updatedRooms.forEach((roomDoc) => {
-          const room = normalizeGroupChatRoomDoc(roomDoc);
-          const roomId = sanitizeId(room?.id, "");
-          if (!roomId || !room) return;
-          broadcastGroupChatRoomUpdated(roomId, room);
-        });
-
-        res.json({
-          ok: true,
-          announcement: {
-            lessonId,
-            text: announcement,
-            updatedAt: now.toISOString(),
-            classroomCount: updatedRooms.length,
-          },
-        });
-      } catch (error) {
-        res.status(500).json({
-          error: error?.message || "发布课程公告失败，请稍后重试。",
-        });
-      }
+      // The former endpoint broadcast a draft announcement to every class and
+      // bypassed published snapshots. Older clients must use lesson publishing.
+      res.status(410).json({
+        error: "旧公告发布入口已停用，请刷新页面，保存课时后点击“发布课时”。",
+      });
     },
   );
 

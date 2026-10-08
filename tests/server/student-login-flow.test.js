@@ -237,3 +237,14 @@ test("successful login clears previous failed attempts for the same account", as
     assert.equal((await f.login("retry-student", "Student-123")).status, 200);
   }
 });
+
+test("旧公告入口不能绕过课时快照或覆盖其他班级任务", async (t) => {
+  const f = await createFixture(t);
+  t.mock.method(core.AdminConfig, "findOneAndUpdate", () => { throw new Error("不能修改课时"); });
+  t.mock.method(core.GroupChatRoom, "updateMany", () => { throw new Error("不能广播全班级公告"); });
+  const result = await f.request("/api/auth/admin/collaboration-classrooms/announcement", {
+    method: "PUT", token: f.teacherToken, body: { lessonId: "lesson", announcement: "旧客户端公告" },
+  });
+  assert.equal(result.status, 410);
+  assert.match(result.data.error, /发布课时/);
+});
