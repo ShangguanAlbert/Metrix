@@ -186,3 +186,54 @@ test("scope resolution preserves explicit default and special class routing", ()
   assert.equal(core.resolveLoginLockedTeacherScopeKey({ profile: { className: "810班" } }), "");
   assert.equal(core.resolveLoginLockedTeacherScopeKey({ profile: { className: core.CLASS_NAME_JIAOJI_231 } }), "yang-junfeng");
 });
+
+test("a whole classroom can log in concurrently through the same IP", async (t) => {
+  const f = await createFixture(t);
+  const passwordHash = await core.hashPassword("Classroom-123");
+  const students = Array.from({ length: 45 }, (_, index) => f.makeUser({
+    username: `class-student-${index}`, usernameKey: `class-student-${index}`,
+    role: "user", passwordHash, lockedTeacherScopeKey: "shi-gaojun",
+    profile: { className: "810班" },
+  }));
+  const results = await Promise.all(students.map((student) => f.login(student.username, "Classroom-123")));
+  assert.deepEqual(results.map((result) => result.status), Array(45).fill(200));
+  const teacher = await f.request("/api/auth/admin/login", {
+    body: { username: "test-teacher", password: "Teacher-Test-123" },
+  });
+  assert.equal(teacher.status, 200);
+});
+
+test("one account's failed attempts do not block other students or teacher login", async (t) => {
+  const f = await createFixture(t);
+  for (let index = 0; index < 20; index += 1) {
+    const username = index % 2 === 0 ? " TEST-TEACHER " : "test-teacher";
+    assert.equal((await f.login(username, "Wrong-123")).status, 401);
+  }
+  const blocked = await f.login("test-teacher", "Wrong-123");
+  assert.equal(blocked.status, 429);
+  assert.match(blocked.data.error, /请 \d+ 秒后再试/);
+  const alternatePath = await f.request("/api/AUTH/login/", {
+    body: { username: "test-teacher", password: "Wrong-123" },
+  });
+  assert.equal(alternatePath.status, 429);
+  assert.equal((await f.login("another-student", "Wrong-123")).status, 401);
+  const teacher = await f.request("/api/auth/admin/login", {
+    body: { username: "test-teacher", password: "Teacher-Test-123" },
+  });
+  assert.equal(teacher.status, 200);
+});
+
+test("successful login clears previous failed attempts for the same account", async (t) => {
+  const f = await createFixture(t);
+  f.makeUser({
+    username: "retry-student", usernameKey: "retry-student", role: "user",
+    passwordHash: await core.hashPassword("Student-123"),
+    lockedTeacherScopeKey: "shi-gaojun", profile: { className: "810班" },
+  });
+  for (let round = 0; round < 2; round += 1) {
+    for (let index = 0; index < 19; index += 1) {
+      assert.equal((await f.login("retry-student", "Wrong-123")).status, 401);
+    }
+    assert.equal((await f.login("retry-student", "Student-123")).status, 200);
+  }
+});

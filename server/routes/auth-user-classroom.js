@@ -283,7 +283,13 @@ export function registerAuthUserClassroomRoutes(app, deps) {
   const loginRateLimiter = createAuthRateLimiter({
     windowMs: 10 * 60 * 1000,
     maxAttempts: 20,
-    errorMessage: "登录尝试次数过多，请 10 分钟后再试。",
+    keyGenerator: (req) => JSON.stringify([
+      req.route.path,
+      req.ip || req.socket?.remoteAddress || "unknown",
+      toUsernameKey(normalizeUsername(req.body?.username)),
+    ]),
+    resetOnSuccess: true,
+    errorMessage: (seconds) => `该账号登录尝试次数过多，请 ${seconds} 秒后再试。`,
   });
   const registrationRateLimiter = createAuthRateLimiter({
     windowMs: 30 * 60 * 1000,
