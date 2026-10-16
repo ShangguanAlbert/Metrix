@@ -258,12 +258,14 @@ export function createPartyLearningService(deps) {
   }
 
   async function recordEvent({ roomId, userId = "", userName = "成员", eventType, metadata = {}, workspace = null }) {
+    if (deps.partyActivity) {
+      deps.partyActivity.record({ roomId, userId, userName, eventType, metadata, workspace });
+      return null;
+    }
     const safeRoomId = safeText(roomId, 100);
     if (!safeRoomId || !eventType) return null;
     const [monitoringState, currentWorkspace] = await Promise.all([
-      eventType === "template_load"
-        ? GroupChatRoom.findOne({ _id: safeRoomId, teacherScopeKey: "shi-gaojun" }, { _id: 1 }).lean()
-        : readMonitoringState(safeRoomId),
+      GroupChatRoom.findOne({ _id: safeRoomId, teacherScopeKey: "shi-gaojun" }, { _id: 1 }).lean(),
       workspace ? Promise.resolve(workspace) : readWorkspace(safeRoomId),
     ]);
     if (!monitoringState) return null;

@@ -705,7 +705,7 @@ async function readLearningEventsWindow({
           ],
         }
       : { occurredAt: { $gt: cursorAt, $lte: through } };
-    const page = await LearningEvent.find({ roomId, ...cursorFilter })
+    const page = await LearningEvent.find({ roomId, ...cursorFilter, eventType: { $in: ["chat_message", "code_edit", "preview", "diagnostic_error", "task_switch", "template_load", "task_stage_change", "role_rotation", "paia_intervention", "paia_feedback"] } })
       .sort({ occurredAt: 1, _id: 1 })
       .limit(pageSize)
       .lean();

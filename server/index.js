@@ -1,3 +1,6 @@
+import { partyActivityMiddleware } from "./modules/party-coding/activity-middleware.js";
+import { createPartyActivityRecorder } from "./modules/party-coding/activity-recorder.js";
+import { registerPartyActivityRoutes } from "./modules/party-coding/activity-routes.js";
 import express from "express";
 import multer from "multer";
 import http from "node:http";
@@ -19,6 +22,7 @@ import { subscribeGroupChatAiEvents } from "./runtime/group-chat-ai-events.js";
 const app = express();
 const APP_BASE_PATH = resolveConfiguredBasePath();
 const deps = createAppContext();
+deps.partyActivity = createPartyActivityRecorder(deps);
 const startupTasks = createStartupTasks(deps);
 const groupChatRealtimeHub = createGroupChatRealtimeHub(deps);
 const uploadsDir = path.resolve(process.cwd(), "uploads");
@@ -33,8 +37,10 @@ if (APP_BASE_PATH !== "/") {
   });
 }
 
+app.use(partyActivityMiddleware(deps));
 registerAuthUserClassroomRoutes(app, deps);
 registerAdminRoutes(app, deps);
+registerPartyActivityRoutes(app, deps);
 registerChatRoutes(app, createChatDeps(deps));
 registerGroupChatRoutes(app, deps);
 const partyCodingRealtime = registerPartyCodingRoutes(app, deps);
@@ -72,6 +78,7 @@ app.use((error, _req, res, next) => {
 async function startServer() {
   await deps.mongoose.connect(deps.mongoUri, { serverSelectionTimeoutMS: 6000 });
   console.log("Mongo connected.");
+  await deps.partyActivity.start();
   await deps.ensurePlatformAdminAccount();
   await deps.removeLegacyPlaintextPasswords();
 
@@ -117,6 +124,8 @@ async function startServer() {
       // ignore
     }
     server.close();
+    await partyCodingRealtime.close();
+    await deps.partyActivity.close();
     try {
       await deps.mongoose.disconnect();
     } catch {

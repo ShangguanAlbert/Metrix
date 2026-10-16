@@ -1,3 +1,4 @@
+import { PARTY_CLIENT_EVENTS, PARTY_EVENT_LABELS } from "../../../shared/party-activity.js";
 const DEFAULT_HTML = `<main class="page-card">
   <h1>我们的网页作品</h1>
   <p>请和同伴一起修改 HTML 与 CSS，然后刷新预览。</p>
@@ -30,6 +31,7 @@ export const PARTY_WEB_DEFAULTS = Object.freeze({
 
 const TASK_STAGES = ["understand", "plan", "build", "debug", "reflect"];
 const LEARNING_EVENT_TYPES = [
+  ...PARTY_CLIENT_EVENTS, ...Object.keys(PARTY_EVENT_LABELS),
   "chat_message",
   "code_edit",
   "preview",
@@ -101,6 +103,10 @@ export function getPartyLearningEventModel(mongoose) {
       userName: { type: String, default: "成员" },
       role: { type: String, enum: ["driver", "navigator", "observer", "paia"], default: "observer" },
       eventType: { type: String, enum: LEARNING_EVENT_TYPES, required: true, index: true },
+      eventId: { type: String },
+      source: { type: String, default: "server" },
+      sessionId: { type: String, default: "" },
+      sequence: Number, processId: String, receivedAt: Date,
       metadata: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
       occurredAt: { type: Date, default: Date.now, required: true, index: true },
     },
@@ -108,6 +114,7 @@ export function getPartyLearningEventModel(mongoose) {
   );
   schema.index({ roomId: 1, occurredAt: -1 });
   schema.index({ roomId: 1, eventType: 1, occurredAt: -1 });
+  schema.index({ eventId: 1 }, { unique: true, partialFilterExpression: { eventId: { $type: "string" } } });
   return mongoose.models.PartyLearningEvent || mongoose.model("PartyLearningEvent", schema);
 }
 

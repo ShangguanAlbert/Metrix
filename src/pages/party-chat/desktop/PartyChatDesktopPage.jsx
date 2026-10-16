@@ -1,3 +1,4 @@
+import { usePartyActivity } from "../../../features/party/usePartyActivity.js";
 import {
   AtSign,
   ArrowLeft,
@@ -287,6 +288,7 @@ export default function PartyChatDesktopPage({
   const [usersById, setUsersById] = useState({});
   const [rooms, setRooms] = useState([]);
   const [activeRoomId, setActiveRoomId] = useState("");
+  const captureActivity = usePartyActivity({ roomId: activeRoomId, userId: me.id, enabled: isShiGaojunTeacherScope });
 
   const [messagesByRoom, setMessagesByRoom] = useState({});
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -1975,6 +1977,7 @@ export default function PartyChatDesktopPage({
     if (!token) return undefined;
 
     const socketClient = createPartySocketClient({
+      onStatus: ({ status }) => captureActivity("connection_status", { status }),
       token,
       onAuthed: () => {
         joinedRoomIdsRef.current = joinAllPartyRooms(socketClient, roomsRef.current);
@@ -2066,6 +2069,7 @@ export default function PartyChatDesktopPage({
       socketRef.current = null;
     };
   }, [
+    captureActivity,
     applyMemberJoined,
     applyMessageDeleted,
     applyMessageUpdated,
@@ -3516,7 +3520,7 @@ export default function PartyChatDesktopPage({
             )}
           </section>
 
-          {isShiGaojunTeacherScope ? <LessonTaskBoard roomId={activeRoomId} subscribeToCollaboration={subscribeCodingCollaboration} /> : null}
+          {isShiGaojunTeacherScope ? <LessonTaskBoard captureActivity={captureActivity} roomId={activeRoomId} subscribeToCollaboration={subscribeCodingCollaboration} /> : null}
           {!isShiGaojunTeacherScope || activeRoom?.announcement || activeRoom?.announcementAttachments?.length ? <section className="party-card party-announcement-card">
             <div className="party-announcement-head">
               <h2 className="party-card-title">{isShiGaojunTeacherScope ? "房间公告" : "任务发布栏"}</h2>
@@ -3791,6 +3795,9 @@ export default function PartyChatDesktopPage({
                           return (
                             <article
                               key={message.id}
+                              data-activity-message={message.id}
+                              data-activity-sender={isAiMessage ? "ai" : "student"}
+                              data-activity-version={message.aiMeta?.status || "done"}
                               className={`party-message type-${message.type} ${isMine ? "mine" : ""} ${
                                 message.type === "system" ? "system" : ""
                               }${isAiMessage ? " ai" : ""}`}
@@ -3859,7 +3866,7 @@ export default function PartyChatDesktopPage({
                                           <button
                                             type="button"
                                             className="party-image-thumb-btn"
-                                            onClick={() => setPreviewImage(message.image)}
+                                            onClick={() => { captureActivity("image_view", { messageId: message.id }); setPreviewImage(message.image); }}
                                           >
                                             <img
                                               src={message.image?.dataUrl}
@@ -4335,6 +4342,7 @@ export default function PartyChatDesktopPage({
 
         {String(getStoredAuthUser()?.teacherScopeKey || "").trim().toLowerCase() === SHI_GAOJUN_TEACHER_SCOPE_KEY ? (
           activeRoom ? <WebCollabPanel
+            captureActivity={captureActivity}
             roomId={activeRoom.id}
             ownerUserId={activeRoom.ownerUserId}
             me={me}

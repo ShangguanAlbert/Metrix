@@ -32,3 +32,4 @@ dist-ssr
 ref/
 uploads/
 .codex-audit
+.runtime/

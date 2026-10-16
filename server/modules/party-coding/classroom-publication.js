@@ -14,6 +14,8 @@ export async function syncPublishedClassroomRooms({ lessons, classNames, deps })
     await GroupChatRoom.updateMany(roomQuery, { $set: { announcement: publishedClassroomTaskText(lesson) } });
     const rooms = await GroupChatRoom.find(roomQuery).lean();
     for (const room of rooms) {
+      deps.partyActivity?.record({ roomId: String(room._id), eventType: "task_published",
+        metadata: { lessonId: lesson?.id || "", lessonSnapshot: lesson || null }, authorized: true });
       broadcastGroupChatRoomUpdated(String(room._id), room);
       broadcastGroupChatWsPayload(String(room._id), {
         type: "coding_collab_template_published", roomId: String(room._id), lessonId: lesson?.id || "",

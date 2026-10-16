@@ -1,3 +1,6 @@
+import { buildPartyActivityExportFiles } from "../modules/party-coding/activity-export.js";
+import { canReadActivityRoom } from "../modules/party-coding/activity-routes.js";
+import { getPartyRoomArchiveModel } from "../modules/party-coding/activity-model.js";
 import { registerPartyTemplateAdminRoutes } from "../modules/party-coding/template-service.js";
 import { latestPublishedClassroomLesson, publishedClassroomTaskText } from "../../shared/classroomPublication.js";
 import { readNavigatorUserIds } from "../../shared/party-roles.js";
@@ -1516,7 +1519,7 @@ export function registerAdminRoutes(app, deps) {
               : [],
             GroupChatStoredFile.find(
               { uploaderUserId: userId },
-              { _id: 1, ossKey: 1, ossBucket: 1, ossRegion: 1 },
+              { _id: 1, roomId: 1, ossKey: 1, ossBucket: 1, ossRegion: 1 },
             ).lean(),
             GroupChatRoom.find(
               {
@@ -1533,12 +1536,23 @@ export function registerAdminRoutes(app, deps) {
                 memberUserIds: 1,
                 mutedMemberUserIds: 1,
                 readStates: 1,
+                teacherScopeKey: 1,
+                historicalMembers: 1,
+                archivedAt: 1,
               },
-            ).lean(),
+            ).setOptions({ includeArchived: true }).lean(),
           ]);
 
         await deleteGeneratedImageHistoryOssObjects(generatedImages);
-        await deleteGroupChatStoredFileObjects(groupChatFilesByUploader);
+        // Retain PAIA evidence even after the originating account is removed.
+        const evidenceRooms = await GroupChatRoom.find(
+          { teacherScopeKey: "shi-gaojun" }, { _id: 1 },
+        ).setOptions({ includeArchived: true }).lean();
+        const evidenceRoomIds = evidenceRooms.map((room) => String(room._id));
+        const evidenceRoomSet = new Set(evidenceRoomIds);
+        await deleteGroupChatStoredFileObjects(
+          groupChatFilesByUploader.filter((file) => !evidenceRoomSet.has(String(file.roomId))),
+        );
 
         const roomIdsToDelete = [];
         const roomUpdateOps = [];
@@ -1551,7 +1565,26 @@ export function registerAdminRoutes(app, deps) {
               userId,
               "",
             );
-            if (!nextRoomState || !nextRoomState.ownerUserId) {
+            const preserveEvidence = room.teacherScopeKey === "shi-gaojun";
+            const noMembers = !nextRoomState?.ownerUserId;
+            if (preserveEvidence) {
+              const historicalMembers = (room.historicalMembers || []).filter((member) => member.userId !== userId);
+              historicalMembers.push({ userId, name: user.profile?.name || user.username, className: user.profile?.className || "" });
+              roomUpdateOps.push({ updateOne: { filter: { _id: roomId }, update: { $set: {
+                historicalMembers,
+                ...(noMembers ? { archivedAt: room.archivedAt || new Date(), archivedByUserId: currentAdminId } : {
+                  ownerUserId: nextRoomState.ownerUserId, memberUserIds: nextRoomState.memberUserIds,
+                  mutedMemberUserIds: nextRoomState.mutedMemberUserIds, readStates: nextRoomState.readStates,
+                  memberCount: nextRoomState.memberCount,
+                }),
+              } } } });
+              deps.partyActivity?.record({ roomId, userId: currentAdminId,
+                eventType: noMembers ? "room_archived" : "member_account_deleted",
+                metadata: { removedUserId: userId, memberUserIds: room.memberUserIds, reason: "account_deleted" },
+              });
+              return;
+            }
+            if (noMembers) {
               roomIdsToDelete.push(roomId);
               return;
             }
@@ -1594,7 +1627,7 @@ export function registerAdminRoutes(app, deps) {
         }
 
         const reactionDocs = await GroupChatMessage.find(
-          { "reactions.userId": userId },
+          { "reactions.userId": userId, roomId: { $nin: evidenceRoomIds } },
           { _id: 1, reactions: 1 },
         ).lean();
         if (reactionDocs.length > 0) {
@@ -1632,10 +1665,10 @@ export function registerAdminRoutes(app, deps) {
             scopedRegex ? { userId: scopedRegex } : { _id: null },
           ),
           GroupChatMessage.updateMany(
-            { senderUserId: userId },
+            { senderUserId: userId, roomId: { $nin: evidenceRoomIds } },
             { $set: { senderUserId: "" } },
           ),
-          GroupChatStoredFile.deleteMany({ uploaderUserId: userId }),
+          GroupChatStoredFile.deleteMany({ uploaderUserId: userId, roomId: { $nin: evidenceRoomIds } }),
         ]);
 
         await AuthUser.deleteOne({ _id: sourceObjectId });
@@ -4940,7 +4973,8 @@ export function registerAdminRoutes(app, deps) {
   });
 
   app.get("/api/auth/admin/export/all-records-zip", async (req, res) => {
-    if (!(await authenticateAdminRequest(req, res))) return;
+    const exportingAdmin = await authenticateAdminRequest(req, res);
+    if (!exportingAdmin) return;
     const teacherScopeKey = sanitizeTeacherScopeKey(req.query?.teacherScopeKey);
 
     try {
@@ -4998,7 +5032,18 @@ export function registerAdminRoutes(app, deps) {
         groupRoomCount: groupChatData.rooms.length,
         imageCount: imageData.docs.length,
       });
+      const processFiles = [];
+      if (teacherScopeKey === "shi-gaojun") {
+        const activeRooms = await GroupChatRoom.find({ teacherScopeKey }).setOptions({ includeArchived: true }).lean();
+        const archivedRooms = await getPartyRoomArchiveModel(mongoose).find({ teacherScopeKey }).lean();
+        const allowedRoomIds = [];
+        for (const room of [...activeRooms, ...archivedRooms]) {
+          if (await canReadActivityRoom(deps, exportingAdmin, room)) allowedRoomIds.push(String(room.roomId || room._id));
+        }
+        processFiles.push(...await buildPartyActivityExportFiles(deps, allowedRoomIds, { prefix: "learning-process/" }));
+      }
       const zipBuffer = buildZipBuffer([
+        ...processFiles,
         { name: "README.txt", content: readme },
         { name: "users.txt", content: usersTxt },
         { name: "chats.txt", content: chatsTxt },

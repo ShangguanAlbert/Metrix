@@ -976,6 +976,11 @@ export function registerGroupChatRoutes(app, deps) {
         return;
       }
 
+      if (normalizedRoom.teacherScopeKey === PAIA_TEACHER_SCOPE_KEY) {
+        // Soft deletion replaces the existing delete write; archival capture stays asynchronous.
+        await GroupChatRoom.updateOne({ _id: roomId }, { $set: { archivedAt: new Date(), archivedByUserId: userId } });
+        deps.partyActivity?.record({ roomId, userId, authorized: true, eventType: "room_archived", metadata: {} });
+      } else {
       const storedFileDocs = await GroupChatStoredFile.find(
         { roomId },
         { _id: 1, ossKey: 1 },
@@ -989,6 +994,8 @@ export function registerGroupChatRoutes(app, deps) {
         PartyLearningEvent.deleteMany({ roomId }),
         PartyPaiaIntervention.deleteMany({ roomId }),
       ]);
+
+      }
 
       broadcastGroupChatRoomDissolved(roomId, {
         id: userId,
@@ -1211,6 +1218,10 @@ export function registerGroupChatRoutes(app, deps) {
         userId,
         messageId: sanitizeId(messageDoc?._id, ""),
       });
+      if (req.authTeacherScopeKey === PAIA_TEACHER_SCOPE_KEY && messageDoc?._id) {
+        deps.partyActivity?.source({ roomId, sourceCollection: "group_chat_messages", sourceId: String(messageDoc._id),
+          document: messageDoc.toObject ? messageDoc.toObject() : messageDoc });
+      }
       const normalizedMessage = normalizeGroupChatMessageDoc(messageDoc);
       if (!normalizedMessage) {
         throw new Error("消息格式化失败");
@@ -1223,7 +1234,7 @@ export function registerGroupChatRoutes(app, deps) {
           userId,
           userName: senderName,
           eventType: "chat_message",
-          metadata: { content },
+          metadata: { content, messageId: String(messageDoc._id), replyToMessageId: replyMeta.replyToMessageId, mentionNames },
         }).catch((error) => {
           console.error("[party-web] failed to record chat learning event", error);
         });
@@ -1515,7 +1526,11 @@ export function registerGroupChatRoutes(app, deps) {
           userId,
           messageId: sanitizeId(messageDoc?._id, ""),
         });
-        const normalizedMessage = normalizeGroupChatMessageDoc(messageDoc);
+        if (req.authTeacherScopeKey === PAIA_TEACHER_SCOPE_KEY && messageDoc?._id) {
+        deps.partyActivity?.source({ roomId, sourceCollection: "group_chat_messages", sourceId: String(messageDoc._id),
+          document: messageDoc.toObject ? messageDoc.toObject() : messageDoc });
+      }
+      const normalizedMessage = normalizeGroupChatMessageDoc(messageDoc);
         if (!normalizedMessage) {
           throw new Error("消息格式化失败");
         }
@@ -1669,6 +1684,10 @@ export function registerGroupChatRoutes(app, deps) {
           replyType: replyMeta.replyType,
         });
         createdMessageId = sanitizeId(messageDoc?._id, "");
+        if (req.authTeacherScopeKey === PAIA_TEACHER_SCOPE_KEY) {
+          deps.partyActivity?.source({ roomId, sourceCollection: "group_chat_files", sourceId: String(storedFileDoc._id),
+            document: storedFileDoc.toObject() });
+        }
 
         await Promise.all([
           GroupChatStoredFile.findByIdAndUpdate(fileId, {
@@ -1683,7 +1702,11 @@ export function registerGroupChatRoutes(app, deps) {
           userId,
           messageId: createdMessageId,
         });
-        const normalizedMessage = normalizeGroupChatMessageDoc(messageDoc);
+        if (req.authTeacherScopeKey === PAIA_TEACHER_SCOPE_KEY && messageDoc?._id) {
+        deps.partyActivity?.source({ roomId, sourceCollection: "group_chat_messages", sourceId: String(messageDoc._id),
+          document: messageDoc.toObject ? messageDoc.toObject() : messageDoc });
+      }
+      const normalizedMessage = normalizeGroupChatMessageDoc(messageDoc);
         if (!normalizedMessage) {
           throw new Error("消息格式化失败");
         }
@@ -1857,26 +1880,31 @@ export function registerGroupChatRoutes(app, deps) {
           return;
         }
 
+        if (isPaiaClassroom) deps.partyActivity?.source({ roomId, sourceCollection: "group_chat_messages", sourceId: String(messageDoc._id), document: messageDoc });
         const fileId = sanitizeId(messageDoc?.file?.fileId, "");
         if (fileId && isMongoObjectIdLike(fileId)) {
           const storedFileDoc = await findGroupChatStoredFileByRoomAndId({
             roomId,
             fileId,
-            projection: { _id: 1, ossKey: 1 },
+            projection: {},
           });
+          if (isPaiaClassroom && storedFileDoc?._id) deps.partyActivity?.source({ roomId, sourceCollection: "group_chat_files", sourceId: String(storedFileDoc._id), document: storedFileDoc });
           if (storedFileDoc?._id) {
             await Promise.all([
-              deleteGroupChatStoredFileObjects([storedFileDoc]),
+              isPaiaClassroom ? Promise.resolve() : deleteGroupChatStoredFileObjects([storedFileDoc]),
               GroupChatStoredFile.deleteOne({ _id: storedFileDoc._id }),
             ]);
           }
         } else {
           const storedFileDocs = await GroupChatStoredFile.find(
             { roomId, messageId },
-            { _id: 1, ossKey: 1 },
+            isPaiaClassroom ? {} : { _id: 1, ossKey: 1 },
           ).lean();
+          if (isPaiaClassroom) storedFileDocs.forEach((file) => deps.partyActivity?.source({
+            roomId, sourceCollection: "group_chat_files", sourceId: String(file._id), document: file,
+          }));
           await Promise.all([
-            deleteGroupChatStoredFileObjects(storedFileDocs),
+            isPaiaClassroom ? Promise.resolve() : deleteGroupChatStoredFileObjects(storedFileDocs),
             GroupChatStoredFile.deleteMany({ roomId, messageId }),
           ]);
         }
@@ -1960,7 +1988,11 @@ export function registerGroupChatRoutes(app, deps) {
         }));
         await messageDoc.save();
 
-        const normalizedMessage = normalizeGroupChatMessageDoc(messageDoc);
+        if (req.authTeacherScopeKey === PAIA_TEACHER_SCOPE_KEY && messageDoc?._id) {
+        deps.partyActivity?.source({ roomId, sourceCollection: "group_chat_messages", sourceId: String(messageDoc._id),
+          document: messageDoc.toObject ? messageDoc.toObject() : messageDoc });
+      }
+      const normalizedMessage = normalizeGroupChatMessageDoc(messageDoc);
         if (!normalizedMessage) {
           throw new Error("消息格式化失败");
         }

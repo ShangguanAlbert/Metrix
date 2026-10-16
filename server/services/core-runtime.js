@@ -1147,6 +1147,9 @@ const groupChatAnnouncementAttachmentSchema = new mongoose.Schema(
 
 const groupChatRoomSchema = new mongoose.Schema(
   {
+    archivedAt: { type: Date, default: null, index: true },
+    archivedByUserId: String,
+    historicalMembers: { type: [{ userId: String, name: String, className: String }], default: () => [] },
     roomCode: { type: String, required: true, unique: true, index: true },
     name: { type: String, required: true, trim: true },
     teacherScopeKey: { type: String, default: "", index: true },
@@ -1184,6 +1187,10 @@ const groupChatRoomSchema = new mongoose.Schema(
     collection: "group_chat_rooms",
   },
 );
+// Archived classrooms stay available to authorized research exports, but disappear from live flows.
+groupChatRoomSchema.pre(["find", "findOne", "findOneAndUpdate", "countDocuments", "distinct"], function () {
+  if (!this.getOptions().includeArchived) this.where({ archivedAt: null });
+});
 groupChatRoomSchema.index(
   { memberUserIds: 1, updatedAt: -1 },
   { name: "ix_group_chat_rooms_member_updated_desc" },

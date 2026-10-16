@@ -6883,6 +6883,45 @@
   overflow-y: auto;
 }
 
+.teacher-activity-dialog > p {
+  margin: 8px 20px;
+  color: var(--teacher-text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.teacher-activity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 20px 12px;
+  border-bottom: 1px solid var(--teacher-border-soft);
+}
+
+.teacher-activity-filters select,
+.teacher-activity-filters input {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid var(--teacher-border-soft);
+  border-radius: 4px;
+  color: var(--teacher-text);
+  background: var(--teacher-surface);
+  font: inherit;
+  font-size: 13px;
+}
+
+.teacher-activity-dialog .teacher-memory-event-list {
+  max-height: none;
+  overflow: visible;
+}
+
+@media (max-width: 600px) {
+  .teacher-activity-filters select,
+  .teacher-activity-filters input { flex: 1 1 130px; }
+}
+
 .teacher-memory-error,
 .teacher-memory-empty {
   margin: 0;

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { exerciseSnapshot, initializeExercise, readExercise, validateExerciseUpdate } from "../../../shared/party-exercise.js";
 import { normalizeWorkspace, snapshotWorkspaceDocument } from "./workspace-state.js";
 import { canDriveParty } from "../../../shared/party-roles.js";
@@ -106,6 +107,15 @@ export function createPartyCodingRealtime(deps) {
       { $setOnInsert: { roomId } },
       { new: true, upsert: true, setDefaultsOnInsert: true },
     ).lean();
+    for (const [activeWorkspace, document] of Object.entries({
+      ...(workspace.storedWorkspaces || {}), [workspace.activeWorkspace || "project"]: workspace,
+    })) {
+      for (const version of document?.versions || []) deps.partyActivity?.code({
+        eventId: `legacy-${roomId}-${activeWorkspace}-${version.revision}`, roomId, codeKind: "checkpoint",
+        userId: version.savedByUserId, activeWorkspace, revision: version.revision,
+        occurredAt: version.createdAt, html: version.html, css: version.css,
+      });
+    }
     const doc = new Y.Doc();
     const htmlText = doc.getText(DOCUMENT_NAMES.html);
     const cssText = doc.getText(DOCUMENT_NAMES.css);
@@ -131,7 +141,12 @@ export function createPartyCodingRealtime(deps) {
       persistTimer: 0,
       persistPromise: Promise.resolve(),
       lastAuthor: { userId: "", name: "成员" },
+      activeWorkspace: workspace.activeWorkspace || "project",
+      taskRevision: workspace.taskRevision || 1,
     };
+    deps.partyActivity?.code({ roomId, codeKind: "checkpoint", eventId: randomUUID(),
+      documentEpoch: room.epoch, activeWorkspace: room.activeWorkspace, revision: workspace.revision,
+      html: room.htmlText.toString(), css: room.cssText.toString(), update: encodeUpdate(Y.encodeStateAsUpdate(doc)) });
     doc.on("update", (_update, origin) => {
       if (origin === SERVER_INITIALIZATION_ORIGIN) return;
       if (origin?.partyCodingAuthor) room.lastAuthor = origin.partyCodingAuthor;
@@ -202,6 +217,10 @@ export function createPartyCodingRealtime(deps) {
         },
         { new: true, upsert: true, setDefaultsOnInsert: true },
       ).lean();
+      const archiveEventId = randomUUID();
+      deps.partyActivity?.code({ roomId: room.roomId, eventId: archiveEventId, codeKind: "checkpoint",
+        userId: safeAuthor.userId, documentEpoch: room.epoch, activeWorkspace: workspace.activeWorkspace || "project",
+        revision, html, css, update: encodeUpdate(Y.encodeStateAsUpdate(room.doc)) });
       const changedCharacters = estimateChangedCharacters(current?.html, html)
         + estimateChangedCharacters(current?.css, css);
       await learning.recordEvent({
@@ -210,7 +229,7 @@ export function createPartyCodingRealtime(deps) {
         userName: safeAuthor.name,
         eventType: "code_edit",
         metadata: {
-          revision,
+          revision, archiveEventId,
           documents: [changedHtml ? "html" : "", changedCss ? "css" : ""].filter(Boolean),
           changedCharacters,
           htmlLength: html.length,
@@ -352,6 +371,12 @@ export function createPartyCodingRealtime(deps) {
         return true;
       }
       Y.applyUpdate(room.doc, update, { partyCodingAuthor: getAuthor(meta) });
+      const eventId = randomUUID();
+      deps.partyActivity?.code({ roomId, eventId, codeKind: "update", userId: meta.userId,
+        documentEpoch: room.epoch, activeWorkspace: room.activeWorkspace, update: encodeUpdate(update) });
+      deps.partyActivity?.record({ roomId, userId: meta.userId, userName: meta.userName,
+        authorized: true, role: "driver", eventType: "code_transaction",
+        metadata: { archiveEventId: eventId, documentEpoch: room.epoch, activeWorkspace: room.activeWorkspace } });
       broadcastGroupChatWsPayload(roomId, {
         type: "coding_collab_update",
         roomId,
@@ -423,11 +448,12 @@ export function createPartyCodingRealtime(deps) {
         $inc: { revision: 1 },
       }, { new: true }).lean();
       if (!workspace) { nextDoc.destroy(); fail(409, "工作区已变化，未载入新内容。"); }
+      room.activeWorkspace = workspace.activeWorkspace || "project";
       activateDocument(room, nextDoc, documentEpoch, author);
       await learning.recordEvent({ roomId, userId: author.userId, userName: author.name,
         eventType: template ? "template_load" : "code_edit", workspace,
-        metadata: template ? { lessonId: template.lessonId, templateVersion: template.version, previousRevision: saved.revision }
-          : { revision: workspace.revision, previousRevision: saved.revision, documents: ["html", "css"] },
+        metadata: template ? { documentEpoch, lessonId: template.lessonId, templateVersion: template.version, previousRevision: saved.revision }
+          : { revision: workspace.revision, documentEpoch, action: restoreRevision ? "restore" : "replace", restoredRevision: restoreRevision || null, previousRevision: saved.revision, documents: ["html", "css"] },
       });
       return normalizeWorkspace(workspace);
     });
@@ -443,6 +469,9 @@ export function createPartyCodingRealtime(deps) {
     room.clientIdsBySocket.clear();
     room.epoch = epoch;
     room.lastAuthor = author;
+    deps.partyActivity?.code({ roomId: room.roomId, codeKind: "checkpoint", userId: author.userId,
+      documentEpoch: epoch, activeWorkspace: room.activeWorkspace,
+      html: room.htmlText.toString(), css: room.cssText.toString(), update: encodeUpdate(Y.encodeStateAsUpdate(doc)) });
     doc.on("update", (_update, origin) => {
       if (origin?.partyCodingAuthor) room.lastAuthor = origin.partyCodingAuthor;
       schedulePersist(room);
@@ -490,6 +519,7 @@ export function createPartyCodingRealtime(deps) {
         }, { new: true }).lean();
         if (!workspace) fail(409, "工作区已变化，请同步后重新切换。");
       } catch (error) { nextDoc.destroy(); throw error; }
+      room.activeWorkspace = workspace.activeWorkspace || "project";
       activateDocument(room, nextDoc, documentEpoch, author);
       await learning.recordEvent({ roomId, userId: author.userId, userName: author.name,
         eventType: "task_switch", workspace, metadata: { previousWorkspace: previous, activeWorkspace: target },

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, RefreshCw } from "lucide-react";
 import { downloadClassroomLessonFile, fetchClassroomTaskSettings } from "../../classroom/classroomApi.js";
 import { reconcileStudentLessons } from "../../../features/classroom/studentLessonSelection.js";
@@ -9,7 +9,8 @@ function taskLinks(content) {
   return String(content || "").split(/\s+/).filter((value) => /^https?:\/\//i.test(value));
 }
 
-export default function LessonTaskBoard({ roomId, subscribeToCollaboration }) {
+export default function LessonTaskBoard({ roomId, subscribeToCollaboration, captureActivity }) {
+  const boardRef = useRef(null);
   const [lessonState, setLessonState] = useState({ lessons: [], selectedId: "", publicationKey: "" });
   const { lessons, selectedId } = lessonState;
   const [loading, setLoading] = useState(true);
@@ -18,6 +19,18 @@ export default function LessonTaskBoard({ roomId, subscribeToCollaboration }) {
   const [downloadingId, setDownloadingId] = useState("");
   const [downloadError, setDownloadError] = useState("");
   const selectedLesson = lessons.find((lesson) => lesson.id === selectedId) || lessons[0];
+
+  useEffect(() => {
+    if (!selectedLesson?.id || !boardRef.current || !captureActivity) return undefined;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && document.visibilityState === "visible") {
+        captureActivity("task_view", { lessonId: selectedLesson.id, publicationKey: lessonState.publicationKey });
+        observer.disconnect();
+      }
+    });
+    observer.observe(boardRef.current);
+    return () => observer.disconnect();
+  }, [selectedLesson?.id, lessonState.publicationKey, captureActivity, roomId]);
 
   useEffect(() => {
     if (!roomId || !subscribeToCollaboration) return undefined;
@@ -78,8 +91,10 @@ export default function LessonTaskBoard({ roomId, subscribeToCollaboration }) {
         anchor.rel = "noopener noreferrer";
       }
       anchor.click();
+      captureActivity?.("material_download", { lessonId: selectedLesson?.id, fileId: file.id, fileName: file.name });
       if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     } catch (cause) {
+      captureActivity?.("material_download_failed", { lessonId: selectedLesson?.id, fileId: file.id, error: cause.message });
       setDownloadError(cause.message || "任务附件下载失败，请重试。");
     } finally {
       setDownloadingId("");
@@ -98,7 +113,7 @@ export default function LessonTaskBoard({ roomId, subscribeToCollaboration }) {
     </div>;
   }
 
-  return <section className="party-card party-lesson-board" aria-label="课时任务发布栏">
+  return <section ref={boardRef} className="party-card party-lesson-board" aria-label="课时任务发布栏">
     <div className="party-announcement-head">
       <h2 className="party-card-title">任务发布栏</h2>
       <button type="button" className="party-announcement-edit-btn" disabled={loading}
@@ -127,7 +142,7 @@ export default function LessonTaskBoard({ roomId, subscribeToCollaboration }) {
           <h3>{index + 1}. {task.title || "课堂任务"}</h3>
           {task.type === "link" ? <>
             {task.description ? <p>{task.description}</p> : null}
-            {taskLinks(task.content).map((url, linkIndex) => <a key={`${url}-${linkIndex}`} href={url} target="_blank" rel="noopener noreferrer">{url}</a>)}
+            {taskLinks(task.content).map((url, linkIndex) => <a key={`${url}-${linkIndex}`} href={url} onClick={() => captureActivity?.("material_open", { lessonId: selectedLesson.id, url })} target="_blank" rel="noopener noreferrer">{url}</a>)}
           </> : <p>{task.content}</p>}
           {renderFiles(task.files)}
         </article>) : <p className="party-tip">本节课暂无任务内容。</p>}

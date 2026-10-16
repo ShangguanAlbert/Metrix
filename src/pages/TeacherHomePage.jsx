@@ -1,3 +1,4 @@
+import TeacherActivityDialog from "../features/admin/components/TeacherActivityDialog.jsx";
 import { lessonHasUnpublishedChanges } from "../../shared/classroomPublication.js";
 import ClassroomAiSettings from "../features/admin/components/ClassroomAiSettings.jsx";
 import ProgrammingTemplateEditor from "../features/admin/components/ProgrammingTemplateEditor.jsx";
@@ -1532,6 +1533,7 @@ export default function TeacherHomePage() {
   const [pairMonitoringMasterSaving, setPairMonitoringMasterSaving] =
     useState(false);
   const [memoryDialogRoom, setMemoryDialogRoom] = useState(null);
+  const [activityDialogRoom, setActivityDialogRoom] = useState(null);
   const [teachingCourses, setTeachingCourses] = useState([]);
   const [selectedTeachingCourseId, setSelectedTeachingCourseId] = useState("");
   const [selectedTeachingClassName, setSelectedTeachingClassName] = useState("");
@@ -9793,6 +9795,7 @@ export default function TeacherHomePage() {
 
                 <section className="teacher-party-manage-card">
                   <div className="teacher-party-manage-summary">
+                    <button type="button" className="teacher-ghost-btn" onClick={() => setActivityDialogRoom({})}>学习过程记录</button>
                     <span>{`小教室：${collaborationClassroomItems.length}`}</span>
                     <span>{`参与度感知中：${collaborationClassroomItems.filter((room) => room?.paiaMonitoringEnabled === true).length}`}</span>
                     <PortalSelect
@@ -10140,6 +10143,7 @@ export default function TeacherHomePage() {
               </div>
             </div>
           ) : null}
+          {activityDialogRoom ? <TeacherActivityDialog adminToken={adminToken} room={activityDialogRoom} onClose={() => setActivityDialogRoom(null)} /> : null}
           {memoryDialogRoom ? (
             <TeacherRoomMemoryDialog
               adminToken={adminToken}

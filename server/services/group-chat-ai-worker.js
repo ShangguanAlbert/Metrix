@@ -689,6 +689,7 @@ async function createAiMessage({
 }
 
 export function createGroupChatAiWorker({
+  partyActivity,
   redis,
   redisPrefix,
   logger = console,
@@ -701,6 +702,7 @@ export function createGroupChatAiWorker({
     ? redis.duplicate()
     : redis;
   const ownsQueueRedis = queueRedis !== redis;
+  const recordLearningEvent = (event) => partyActivity ? Promise.resolve(partyActivity.record(event)) : PartyLearningEvent.create(event);
   let stopping = false;
   let recoveryTimer = null;
   let memoryConsolidationTimer = null;
@@ -1010,32 +1012,7 @@ export function createGroupChatAiWorker({
           longitudinalMemoryIds: proactiveCodingContext?.longitudinalMemoryIds || [],
         },
       });
-      await PartyLearningEvent.create({
-        roomId: context.roomId,
-        taskId: `${context.roomId}:${Math.max(1, Number(workspace?.taskRevision || 1))}`,
-        taskStage: safeWorkerText(workspace?.taskStage, 30) || "understand",
-        userId: "",
-        userName: "琳琳",
-        role: "paia",
-        eventType: "paia_intervention",
-        metadata: {
-          interventionId: String(intervention._id),
-          triggerType: "participation_imbalance",
-          evidenceSummary: decision.evidenceSummary,
-          source: "recent_group_chat_dialogue",
-          supportNeed,
-          strategyKey: supportPlan.strategyKey,
-          memoryPolicy: supportPlan.memoryPolicy,
-          memoryIds: supportPlan.memoryIds,
-          longitudinalMemoryIds: proactiveCodingContext?.longitudinalMemoryIds || [],
-        },
-        occurredAt: new Date(),
-      }).catch((error) => {
-        logger.warn?.(
-          `[participation-analysis-worker] failed to record learning event roomId=${context.roomId}`,
-          error,
-        );
-      });
+
 
       let messageDoc = null;
       try {
@@ -1059,6 +1036,33 @@ export function createGroupChatAiWorker({
         ]);
         throw error;
       }
+      await recordLearningEvent({
+        roomId: context.roomId,
+        taskId: `${context.roomId}:${Math.max(1, Number(workspace?.taskRevision || 1))}`,
+        taskStage: safeWorkerText(workspace?.taskStage, 30) || "understand",
+        userId: "",
+        userName: "琳琳",
+        role: "paia",
+        eventType: "paia_intervention",
+        metadata: {
+          interventionId: String(intervention._id),
+          messageId: String(messageDoc._id),
+          triggerType: "participation_imbalance",
+          evidenceSummary: decision.evidenceSummary,
+          source: "recent_group_chat_dialogue",
+          supportNeed,
+          strategyKey: supportPlan.strategyKey,
+          memoryPolicy: supportPlan.memoryPolicy,
+          memoryIds: supportPlan.memoryIds,
+          longitudinalMemoryIds: proactiveCodingContext?.longitudinalMemoryIds || [],
+        },
+        occurredAt: new Date(),
+      }).catch((error) => {
+        logger.warn?.(
+          `[participation-analysis-worker] failed to record learning event roomId=${context.roomId}`,
+          error,
+        );
+      });
       await markCollaborationMemoriesUsed({
         Memory: PartyCollaborationMemory,
         memoryIds: supportPlan.memoryIds,
@@ -1430,6 +1434,10 @@ export function createGroupChatAiWorker({
           dequeuedAt: null,
         },
       });
+      partyActivity?.record({ roomId: String(runningTask.roomId), userId: "", userName: "琳琳",
+        role: "paia", eventType: "ai_response", metadata: { taskId: String(runningTask._id),
+          triggerMessageId: runningTask.triggerMessageId, messageIds: deliveredMessageIds, status: "done",
+          provider: groupChatAiConfig.provider, model: groupChatAiConfig.model, memoryIds: codingContext?.longitudinalMemoryIds || [] } });
       await markLongitudinalMemoriesUsed({
         Memory: PartyLongitudinalMemory,
         memoryIds: codingContext?.longitudinalMemoryIds,
@@ -1470,6 +1478,8 @@ export function createGroupChatAiWorker({
           lastError: message,
         },
       });
+      partyActivity?.record({ roomId: String(failedTask.roomId), role: "paia", userName: "琳琳",
+        eventType: "ai_response", metadata: { taskId, triggerMessageId: failedTask.triggerMessageId, status: "failed", error: message } });
       const failedAiMeta = buildTaskAiMeta(failedTask, "failed", {
         streaming: false,
         error: message,

@@ -137,7 +137,7 @@ function MemoryEvidence({ evidence }) {
         <p>这条记忆尚未保留可展开的原始事件，仍可查看其历史摘要。</p>
       ) : (
         <div className="teacher-memory-event-list">
-          {events.slice(0, 40).map((event) => (
+          {events.map((event) => (
             <article key={event.id}>
               <div>
                 <strong>{EVENT_LABELS[event.eventType] || event.eventType}</strong>

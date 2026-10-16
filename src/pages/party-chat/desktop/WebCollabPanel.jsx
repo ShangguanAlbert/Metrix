@@ -1,3 +1,4 @@
+import { Transaction } from "@codemirror/state";
 import { createExerciseEditor } from "../../../features/classroom/coding/exerciseEditor.js";
 import { readExercise, resolveExerciseRanges } from "../../../../shared/party-exercise.js";
 import { findImageSourceAtSelection } from "../../../../shared/party-images.js";
@@ -100,6 +101,7 @@ export default function WebCollabPanel({
   onCollaborationUpdate,
   onCollaborationAwareness,
   subscribeToCollaboration,
+  captureActivity,
   readOnlyObserver = false,
   ownerUserId = "",
   imageAccessToken = "",
@@ -123,6 +125,12 @@ export default function WebCollabPanel({
   const [actionSubmitting, setActionSubmitting] = useState(false);
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [actionError, setActionError] = useState("");
+  useEffect(() => {
+    if (!readOnlyObserver) captureActivity?.("document_view", { document: activeDocument });
+  }, [activeDocument, captureActivity, readOnlyObserver]);
+  useEffect(() => {
+    if (!readOnlyObserver) captureActivity?.(previewOpen ? "preview_open" : "preview_close", {});
+  }, [previewOpen, captureActivity, readOnlyObserver]);
   const editingRef = useRef(false);
   const sessionRef = useRef(null);
   const callbacksRef = useRef({});
@@ -610,6 +618,19 @@ export default function WebCollabPanel({
         key={`${roomId}:${activeDocument}:${isDriver ? "driver" : isNavigator ? "navigator" : "observer"}`}
         value={activeText.toString()}
         height="100%"
+        onUpdate={(update) => {
+          if (readOnlyObserver) return;
+          update.transactions.forEach((transaction) => {
+            const inputType = transaction.annotation(Transaction.userEvent);
+            if (!inputType) return;
+            if (transaction.docChanged) {
+              let changedCharacters = 0;
+              transaction.changes.iterChanges((from, to, _a, _b, inserted) => { changedCharacters += to - from + inserted.length; });
+              captureActivity?.("editor_action", { document: activeDocument, inputType, changedCharacters,
+                documentEpoch: sessionRef.current?.documentEpoch, activeWorkspace: workspace?.activeWorkspace });
+            }
+          });
+        }}
         onCreateEditor={(view) => { editorViewRef.current = view; }}
         extensions={editorExtensions}
         onFocus={() => !readOnlyObserver && pairReady && isDriver && setEditingPresence(true)}
