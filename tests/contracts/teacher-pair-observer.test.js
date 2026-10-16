@@ -33,7 +33,7 @@ test("pair classrooms expose the teacher observer entry and route", () => {
 test("teacher home uses the focused pair-programming navigation for every teacher", () => {
   assert.match(
     teacherHomePageSource,
-    /label: "结对编程教学"/,
+    /label: "教学准备"/,
   );
   assert.match(
     teacherHomePageSource,
@@ -41,17 +41,17 @@ test("teacher home uses the focused pair-programming navigation for every teache
   );
   assert.match(
     teacherHomePageSource,
-    /\{ key: "classroom", label: "课时任务", icon: ClipboardList \}/,
+    /\{ key: "classroom", label: "课时管理", icon: ClipboardList \}/,
   );
   assert.match(
     teacherHomePageSource,
-    /\{ key: "course", label: "课程", icon: BookCheck \}/,
+    /\{ key: "course", label: "课程管理", icon: BookCheck \}/,
   );
   assert.doesNotMatch(teacherHomePageSource, /label: "课程与任务"/);
   assert.doesNotMatch(teacherHomePageSource, />作业要求说明</);
-  assert.match(teacherHomePageSource, />开放课时</);
-  assert.match(teacherHomePageSource, />提交作业</);
-  assert.match(teacherHomePageSource, />允许补交</);
+  assert.match(teacherHomePageSource, /key: "enabled", label: "开放课时"/);
+  assert.match(teacherHomePageSource, /key: "homeworkUploadEnabled", label: "提交作业"/);
+  assert.match(teacherHomePageSource, /key: "lateSubmissionEnabled", label: "允许补交"/);
   assert.match(teacherHomePageSource, /requestedTeacherPanel \|\| "party-manage"/);
   assert.doesNotMatch(
     teacherHomePageSource,

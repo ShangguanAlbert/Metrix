@@ -14,7 +14,7 @@ test("teacher pair classroom cards expose the room memory audit dialog", () => {
   assert.match(teacherHomeSource, /TeacherRoomMemoryDialog/);
   assert.match(memoryDialogSource, /查看判断依据/);
   assert.match(memoryDialogSource, /教师确认后的判断/);
-  assert.match(memoryDialogSource, /Agent 逐次使用记录/);
+  assert.match(memoryDialogSource, /琳琳引用记录/);
 });
 
 test("teacher memory audit API includes evidence and use controls", () => {
